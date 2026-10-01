@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { BottomSheet } from '@/shared/ui/BottomSheet'
 import MCareLogo from '@/shared/layout/MCareLogo'
-import { AuthDivider, AuthIcon, AuthRights, OWNER } from './authKit'
+import { AuthDivider, AuthIcon, AuthRights, AuthSwitch, OWNER } from './authKit'
 import { SocialButtons } from './SocialAuth'
 
 const SUPPORT_EMAIL = 'support@matendocare.com'
@@ -170,18 +170,7 @@ export function WelcomeScreen({ onGetStarted, onSignIn, onDemo }: {
 
         <GetStartedButton onClick={onGetStarted} />
 
-        <p className="mt-5 text-[13px] text-gray-600">
-          Already have an account?{' '}
-          {/* The words carry the brand shimmer; on hover the underline redraws and an arrow slides out. */}
-          <button type="button" onClick={onSignIn}
-            className="group relative inline-flex items-center pb-0.5 font-bold transition-transform active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 rounded">
-            <span className="auth-shimmer">Sign in</span>
-            <span className="flex w-0 overflow-hidden text-teal-700 opacity-0 transition-all duration-300 group-hover:ml-1 group-hover:w-3.5 group-hover:opacity-100 group-focus-visible:ml-1 group-focus-visible:w-3.5 group-focus-visible:opacity-100">
-              <AuthIcon name="arrow" className="w-3.5 h-3.5 shrink-0" />
-            </span>
-            <span aria-hidden className="absolute inset-x-0 bottom-0 h-[1.5px] origin-left rounded-full bg-teal-700 group-hover:animate-[auth-underline_.45s_ease-out] motion-reduce:animate-none" />
-          </button>
-        </p>
+        <AuthSwitch className="mt-5" prompt="Already have an account?" action="Sign in" onClick={onSignIn} />
       </section>
 
       <AuthDivider>Or continue with</AuthDivider>

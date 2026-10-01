@@ -6,7 +6,7 @@ import type { AuthProvider } from '@/shared/lib/types'
 
 /* ─── Password policy ───────────────────────────────────────────────── */
 
-export const MIN_PASSWORD_LEN = 8
+export const MIN_PASSWORD_LEN = 5
 
 /** Rejected outright — these are the passwords attackers try first. */
 const COMMON_PASSWORDS = [
@@ -155,6 +155,37 @@ export const isEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim()
 
 /** Accepts +254712345678, 0712 345 678, etc. */
 export const isPhone = (v: string) => /^\+?\d[\d\s-]{6,}$/.test(v.trim())
+
+/**
+ * The countries a phone number can be registered from: the East African
+ * Community, for now. `min`/`max` is how many digits the number has after the
+ * country code. The first one is the default.
+ */
+export const PHONE_COUNTRIES = [
+  { iso: 'KE', name: 'Kenya', dial: '+254', flag: '🇰🇪', min: 9, max: 9 },
+  { iso: 'UG', name: 'Uganda', dial: '+256', flag: '🇺🇬', min: 9, max: 9 },
+  { iso: 'TZ', name: 'Tanzania', dial: '+255', flag: '🇹🇿', min: 9, max: 9 },
+  { iso: 'RW', name: 'Rwanda', dial: '+250', flag: '🇷🇼', min: 9, max: 9 },
+  { iso: 'BI', name: 'Burundi', dial: '+257', flag: '🇧🇮', min: 8, max: 8 },
+  { iso: 'SS', name: 'South Sudan', dial: '+211', flag: '🇸🇸', min: 9, max: 9 },
+  { iso: 'CD', name: 'DR Congo', dial: '+243', flag: '🇨🇩', min: 9, max: 9 },
+  { iso: 'SO', name: 'Somalia', dial: '+252', flag: '🇸🇴', min: 7, max: 9 },
+] as const
+export type PhoneCountry = typeof PHONE_COUNTRIES[number]
+
+/**
+ * The full number for what was typed beside a country code, e.g. "0712 345 678"
+ * with Kenya → "+254 712 345 678". Null when it is not a number of that country.
+ * A leading 0, or the country code typed again, is dropped.
+ */
+export function fullPhone(country: PhoneCountry, typed: string): string | null {
+  let n = typed.replace(/\D/g, '')
+  const code = country.dial.slice(1)
+  if (n.startsWith(code) && n.length > country.max) n = n.slice(code.length)
+  n = n.replace(/^0+/, '')
+  if (n.length < country.min || n.length > country.max) return null
+  return `${country.dial} ${n.replace(/(\d{3})(?=\d)/g, '$1 ')}`
+}
 
 /** Formats remaining milliseconds as m:ss for the OTP countdown. */
 export function countdown(ms: number): string {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import type { EmailKind, SentEmail, SentSms } from '@/shared/lib/types'
 import { BottomSheet, SheetButton } from '@/shared/ui/BottomSheet'
@@ -9,16 +9,41 @@ const KIND_ICON: Record<EmailKind, string> = {
   verification: '🔐', invitation: '✉️', password_reset: '🔑', password_changed: '🛡️', welcome: '👋', notification: '🔔',
 }
 
-/** One email exactly as the recipient's mail app shows it. Sandboxed: no scripts, links can't leave the frame. */
-export function EmailPreview({ email }: { email: SentEmail }) {
+/**
+ * One email exactly as the recipient's mail app shows it. Sandboxed: no scripts
+ * run inside and links can't leave the frame; a tap on a link is handed to
+ * `onLink` instead. The frame grows to the email's height, so it never scrolls
+ * on its own.
+ */
+export function EmailPreview({ email, onLink }: { email: SentEmail; onLink?: (url: string) => void }) {
   const { html, subject } = useMemo(() => renderEmail(email.content), [email])
+  const frame = useRef<HTMLIFrameElement>(null)
+  const linkRef = useRef(onLink)
+  linkRef.current = onLink
+  const [height, setHeight] = useState(520)
+
+  const wire = () => {
+    const doc = frame.current?.contentDocument
+    if (!doc?.body) return
+    const fit = () => setHeight(doc.body.scrollHeight)
+    fit()
+    new ResizeObserver(fit).observe(doc.body)
+    doc.addEventListener('click', e => {
+      const a = (e.target as Element | null)?.closest?.('a')
+      if (!a) return
+      e.preventDefault()
+      linkRef.current?.(a.getAttribute('href') ?? '')
+    })
+  }
+
   return (
     <div className="rounded-2xl border border-gray-200 overflow-hidden bg-white">
       <div className="px-3 py-2 border-b border-gray-100">
         <p className="text-xs font-bold text-gray-900 truncate">{subject}</p>
         <p className="text-[10px] text-gray-400 truncate">{EMAIL_FROM} · to {email.content.to}</p>
       </div>
-      <iframe title={subject} sandbox="" srcDoc={html} className="w-full block" style={{ height: 520, border: 0 }} />
+      <iframe ref={frame} title={subject} sandbox="allow-same-origin" srcDoc={html} onLoad={wire} scrolling="no"
+        className="w-full block" style={{ height, border: 0 }} />
     </div>
   )
 }
@@ -49,7 +74,7 @@ export function MailboxSheet({ address, phone, open, onClose, openLatest, onLink
   onClose: () => void
   /** Jump straight to the newest email (e.g. the code just sent). */
   openLatest?: boolean
-  /** Lets the reader "tap" the button in the email. Return false if the link is no longer valid. */
+  /** Called when the reader taps the button or link inside the email. Return false if the link is no longer valid. */
   onLink?: (email: SentEmail) => boolean
 }) {
   const { emailsFor, textsFor, now } = useApp()
@@ -61,8 +86,13 @@ export function MailboxSheet({ address, phone, open, onClose, openLatest, onLink
   const [linkError, setLinkError] = useState('')
   const shown = items.find(e => e.id === picked) ?? (openLatest && picked === null ? items.find(i => i.email) : undefined)
   const close = () => { setPicked(null); setLinkError(''); onClose() }
-  const action = shown?.email?.content.action
-  const canTap = !!onLink && !!action && (shown!.email!.content.kind === 'verification' || shown!.email!.content.kind === 'invitation' || shown!.email!.content.kind === 'password_reset')
+  // The button (and the spelled-out link) inside the email works like it does in a real inbox.
+  const follow = (url: string) => {
+    const email = shown?.email
+    if (!onLink || !email || url !== email.content.action?.url) return
+    if (!['verification', 'invitation', 'password_reset'].includes(email.content.kind)) return
+    if (onLink(email)) close(); else setLinkError('That link has expired. Use the newest email.')
+  }
 
   return (
     <BottomSheet open={open} onClose={close}
@@ -70,11 +100,9 @@ export function MailboxSheet({ address, phone, open, onClose, openLatest, onLink
       subtitle={shown ? undefined : [address, phone].filter(Boolean).join(' · ')}
       footer={shown
         ? <>{items.length > 1 && <SheetButton tone="ghost" onClick={() => { setPicked(''); setLinkError('') }}>All ({items.length})</SheetButton>}
-            {canTap
-              ? <SheetButton onClick={() => { if (onLink!(shown.email!)) close(); else setLinkError('That link has expired. Use the newest email.') }}>Tap “{action!.label}”</SheetButton>
-              : <SheetButton tone={items.length > 1 ? undefined : 'ghost'} onClick={close}>Done</SheetButton>}</>
+            <SheetButton tone={items.length > 1 ? undefined : 'ghost'} onClick={close}>Done</SheetButton></>
         : <SheetButton tone="ghost" onClick={close}>Close</SheetButton>}>
-      {shown?.email ? <EmailPreview email={shown.email} /> : shown?.sms ? <SmsPreview sms={shown.sms} /> : items.length === 0 ? (
+      {shown?.email ? <EmailPreview key={shown.id} email={shown.email} onLink={follow} /> : shown?.sms ? <SmsPreview sms={shown.sms} /> : items.length === 0 ? (
         <p className="text-xs text-gray-400 text-center py-6">Nothing yet. Codes, links and notifications sent to you appear here.</p>
       ) : (
         <div className="rounded-2xl border border-gray-100 divide-y divide-gray-50">

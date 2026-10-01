@@ -7,16 +7,17 @@ import {
 import type { PatientUser } from '@/shared/lib/types'
 import {
   evaluate, alertIsFor, latestValid, targetRange, effectiveCriticalRange, validateReading, vitalTrend, generateInsights,
-  checkInStatus, shortDuration, readingTime, unitView, ago, dateLabel, stamp, type Range, type TimeWindow,
+  checkInStatus, shortDuration, readingTime, unitView, ago, dateLabel, stamp, parseValue, groupOf, VITAL_GROUPS,
+  type Range, type TimeWindow,
 } from '@/shared/lib/vitals'
 import { SelfClearBanner } from './VitalLogSheets'
 import { usePatient } from './usePatient'
 
 /* ─── One vital, in full ──────────────────────────────────────────────
    The page behind every tapped vital, read top to bottom: how am I now
-   (latest reading on its target scale), what my doctor said about it,
-   then my readings — as a trend or a list, both driven by one period
-   and one set of filters.
+   (latest reading on its target scale), the vitals measured with it (the
+   rest of its group), what my doctor said about it, then my readings — as
+   a trend or a list, both driven by one period and one set of filters.
    The chips along the top switch vital without leaving the page. */
 
 type Preset = '7d' | '30d' | '90d' | 'all' | 'custom'
@@ -32,12 +33,14 @@ const round1 = (n: number) => Math.round(n * 10) / 10
 /** "72.5", or "126/81" when there is a diastolic number. */
 const pair = (v: number, s?: number) => (s === undefined ? String(round1(v)) : `${Math.round(v)}/${Math.round(s)}`)
 
-export function VitalDetail({ vitalId, onSelect, onBack, onLog }: {
+export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
   vitalId: string
   /** Switch to another vital's page. */
   onSelect: (vitalId: string) => void
   onBack: () => void
   onLog: (vitalId: string) => void
+  /** Log this vital's whole group together. */
+  onLogGroup: (groupId: string) => void
 }) {
   const { currentUser, vitalDefs, alerts, now, canCorrect, correctReading, setUnitPref } = useApp()
   const { doctor } = usePatient()
@@ -81,6 +84,17 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog }: {
   const latest = latestValid(patient, def.id)
   const st = levelStyle(latest ? evaluate(patient, def, latest.value) : null)
   const checkIn = checkInStatus(def.id, latest?.at, now)
+  // Where the latest reading sits against the target, in words. Blood pressure can be out on either number.
+  const latestP = latest ? parseValue(def, latest.value) : null
+  const latestLvl = latest ? evaluate(patient, def, latest.value) : null
+  const standing = !latestP || !latestLvl ? null
+    : latestLvl === 'normal' ? 'Inside your target'
+    : latestP.primary > target.max ? 'Above your target'
+    : latestP.primary < target.min ? 'Below your target'
+    : 'Outside your target'
+  // The vitals measured together with this one: the rest of its group that the patient tracks.
+  const group = VITAL_GROUPS.find(g => g.id === groupOf(def.id))
+  const related = vitalDefs.filter(v => v.active && v.id !== def.id && patient.trackedVitalIds.includes(v.id) && groupOf(v.id) === group?.id)
 
   // The period on show. Presets are open-ended at the top so a reading logged this second is never cut off.
   const preset = PRESETS.find(p => p.key === range.preset)
@@ -171,6 +185,8 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog }: {
       <div className="contents @5xl:flex @5xl:flex-col @5xl:gap-4 @5xl:min-w-0">
       {/* ── 1 · Now: the latest reading, placed on its target scale ── */}
       <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
+        {/* the status colour runs along the top, as it does down the side of the card on the Vitals list */}
+        <div className="h-1" style={{ background: st.accent }} />
         <div className="p-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -180,6 +196,7 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog }: {
                 <span className="text-sm text-gray-400">{u.unit}</span>
               </div>
               <p className="text-[11px] text-gray-400 mt-1.5 truncate">
+                {standing && <span className={`font-bold ${st.value}`}>{standing} · </span>}
                 {latest ? `${latest.at ? ago(latest.at, now) : latest.loggedAt}${latest.note ? ` · “${latest.note}”` : ''}` : 'No reading yet'}
               </p>
             </div>
@@ -210,7 +227,44 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog }: {
         <SelfClearBanner def={def} onLog={() => onLog(def.id)} />
       </div>
 
-      {/* ── 2 · From your doctor: everything the care team has said about this vital ── */}
+      {/* ── 2 · Measured together: the rest of this vital's group, one tap away ── */}
+      {group && related.length > 0 && (
+        <div className="bg-white rounded-2xl p-3.5 shadow-sm">
+          <div className="flex items-center gap-2">
+            <span className="text-base" aria-hidden="true">{group.icon}</span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-bold text-gray-900 leading-tight">{group.label}</p>
+              <p className="text-[10px] text-gray-400 truncate">Measured together · {group.hint.toLowerCase()}</p>
+            </div>
+            <button onClick={() => onLogGroup(group.id)}
+              className="flex-shrink-0 rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold text-teal-700 transition-all hover:bg-teal-100 active:scale-95">
+              + Log group
+            </button>
+          </div>
+          <div className="mt-2 flex flex-col">
+            {related.map(v => {
+              const r = latestValid(patient, v.id)
+              const ru = unitView(v, patient)
+              const rs = levelStyle(r ? evaluate(patient, v, r.value) : null)
+              const at = r ? readingTime(r) : null
+              return (
+                <button key={v.id} onClick={() => onSelect(v.id)} className="flex items-center gap-2.5 border-t border-gray-50 py-2 text-left first:border-0">
+                  <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-base ${rs.tile}`} aria-hidden="true">{v.icon}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-semibold text-gray-900">{v.name}</span>
+                    <span className="block truncate text-[10px] text-gray-400">{at ? ago(at, now) : 'No reading yet'}</span>
+                  </span>
+                  <span className={`font-mono text-sm font-black ${rs.value}`}>{r ? ru.value(r.value) : '—'}</span>
+                  <span className="w-9 text-[10px] text-gray-400">{ru.unit}</span>
+                  <span className="text-gray-300" aria-hidden="true">›</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── 3 · From your doctor: everything the care team has said about this vital ── */}
       {hasGuidance && (
         <div className="bg-white rounded-2xl p-3.5 shadow-sm border border-blue-100">
           <div className="flex items-center gap-2 mb-2">
@@ -259,7 +313,7 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog }: {
       </div>
 
       <div className="contents @5xl:flex @5xl:flex-col @5xl:gap-4 @5xl:min-w-0">
-      {/* ── 3 · Trend & history: one period and one set of filters drive both views ── */}
+      {/* ── 4 · Trend & history: one period and one set of filters drive both views ── */}
       <div className="bg-white rounded-2xl p-3.5 shadow-sm overflow-hidden">
         <div className="flex items-center justify-between gap-2">
           <p className="text-sm font-bold text-gray-900">Readings</p>

@@ -5,6 +5,7 @@ import type { BiologicalSex, BloodType } from '@/shared/lib/types'
 import { calcAge } from '@/shared/lib/vitals'
 import { healthOf, sexLabel, suggestedVitals } from '@/shared/lib/health'
 import { readSquarePhoto } from '@/shared/lib/photo'
+import { AuthButton, AuthSkip } from '@/shared/auth/authKit'
 import { usePatient } from './usePatient'
 import {
   AboutFields, AllergiesFields, ConditionsFields, NextOfKinFields, kinComplete,
@@ -27,10 +28,12 @@ const today = () => new Date().toISOString().slice(0, 10)
  * First-run health-profile setup for new patients (profileSetup === 'pending').
  * Each step is saved as the patient moves on, so nothing is lost if they
  * leave half-way; the router sends them back here until they finish.
+ * Nothing is forced: any step can be skipped, and "Finish later" leaves for
+ * the dashboard, where Home keeps a reminder to come back.
  */
 export default function HealthSetup() {
   const { vitalDefs } = useApp()
-  const { patient, saveHealth: saveHealthProfile, saveAbout, saveEmergencyContact, setTrackedVitals, completeSetup, signOut } = usePatient()
+  const { patient, saveHealth: saveHealthProfile, saveAbout, saveEmergencyContact, setTrackedVitals, completeSetup, skipSetup, signOut } = usePatient()
   const h = healthOf(patient)
   const contacts = patient.emergencyContacts ?? []
   const existingKin = contacts.find(c => c.nextOfKin) ?? contacts[0]
@@ -46,7 +49,8 @@ export default function HealthSetup() {
   const [cond, setCond] = useState<ConditionsValue>({ conditions: h.conditions, noConditions: h.noConditions, otherMedicines: h.otherMedicines })
   const [allergy, setAllergy] = useState<AllergiesValue>({ allergies: h.allergies, noKnownAllergies: h.noKnownAllergies })
   const [kin, setKin] = useState<KinValue>({ name: existingKin?.name ?? '', relationship: existingKin?.relationship ?? '', phone: existingKin?.phone ?? '' })
-  const [kinSkipped, setKinSkipped] = useState(false)
+  /** Steps passed over with "Skip this step": nothing was saved for them, and the summary says so. */
+  const [skipped, setSkipped] = useState<StepId[]>([])
   const [tracked, setTracked] = useState<string[]>(patient.trackedVitalIds)
   // Suggestions already applied, so going back and forth doesn't re-add ones the patient turned off.
   const applied = useRef(new Set<string>())
@@ -91,11 +95,18 @@ export default function HealthSetup() {
   const next = () => {
     if (!valid[current.id]) return
     save(current.id)
-    if (current.id === 'kin') setKinSkipped(false)
+    setSkipped(s => s.filter(id => id !== current.id))
+    advance()
+  }
+  const advance = () => {
     if (step === STEPS.length - 1) setFinished(true)
     else setStep(step + 1)
   }
-  const skip = () => { setKinSkipped(true); setStep(step + 1) }
+  /** Moves on without saving this step. Tracking has nothing to leave blank: it keeps the vitals already chosen. */
+  const skip = () => {
+    if (current.id !== 'tracking') setSkipped(s => [...new Set([...s, current.id])])
+    advance()
+  }
 
   const pickPhoto = (file?: File) => {
     if (!file) return
@@ -107,6 +118,7 @@ export default function HealthSetup() {
   if (finished) {
     const chip = 'rounded-full bg-white border border-gray-200 px-2.5 py-1 text-[11px] font-semibold text-gray-800'
     const none = (text: string) => <p className="text-xs text-gray-500">{text}</p>
+    const notAdded = <p className="text-xs font-semibold text-amber-700">Not added yet. You can add it later in Profile.</p>
     const trackedDefs = activeVitals.filter(v => tracked.includes(v.id))
     const born = dob ? new Date(`${dob}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : ''
     const facts = [
@@ -153,8 +165,8 @@ export default function HealthSetup() {
           ))}
         </ul>
       ) : none('No known allergies.') },
-      { id: 'kin', body: kinSkipped || !kinComplete(kin)
-        ? <p className="text-xs font-semibold text-amber-700">Not added yet. You can add one later in Profile.</p>
+      { id: 'kin', body: !kinComplete(kin)
+        ? notAdded
         : (
           <>
             <p className="text-xs font-bold text-gray-900">{kin.name.trim()}{kin.relationship && <span className="font-semibold text-gray-500"> · {kin.relationship}</span>}</p>
@@ -188,17 +200,14 @@ export default function HealthSetup() {
                     <button onClick={() => { setFinished(false); setStep(i) }} aria-label={`Edit ${HEADINGS[s.id]}`}
                       className="text-[11px] font-bold text-teal-700 underline-offset-4 hover:underline">Edit</button>
                   </div>
-                  {s.body}
+                  {skipped.includes(s.id) ? notAdded : s.body}
                 </section>
               )
             })}
           </div>
         </div>
         <footer className="sticky bottom-0 bg-white/95 backdrop-blur px-5 pt-3 pb-6 border-t border-gray-100">
-          <button onClick={completeSetup}
-            className="block w-full max-w-2xl mx-auto py-3.5 rounded-2xl bg-teal-700 text-white text-sm font-bold shadow-lg shadow-teal-700/25 active:scale-[.98] transition-transform">
-            Go to my dashboard
-          </button>
+          <AuthButton onClick={completeSetup}>Go to my dashboard</AuthButton>
         </footer>
       </div>
     )
@@ -214,9 +223,14 @@ export default function HealthSetup() {
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" /></svg>
                 Back
               </button>
-            : <span />}
-          <p className="text-[11px] font-semibold text-gray-400">Step {step + 1} of {STEPS.length}</p>
-          <button onClick={signOut} className="text-[11px] font-semibold text-gray-400">Sign out</button>
+            : <button onClick={signOut} className="text-[11px] font-semibold text-gray-400">Sign out</button>}
+          <p className="text-[11px] font-semibold text-gray-400">Step <span className="font-mono">{step + 1}</span> of <span className="font-mono">{STEPS.length}</span></p>
+          {/* Leaves the whole setup for the dashboard; what was entered so far is already saved. */}
+          <button onClick={skipSetup}
+            className="group flex items-center gap-1 rounded-full bg-teal-50 py-1 pl-2.5 pr-2 text-[11px] font-bold text-teal-700 transition-all hover:bg-teal-100 active:scale-95">
+            Finish later
+            <svg className="w-3 h-3 transition-transform group-hover:translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
+          </button>
         </div>
         <div className="mt-2 flex gap-1" aria-hidden>
           {STEPS.map((s, i) => (
@@ -280,13 +294,8 @@ export default function HealthSetup() {
       </main>
 
       <footer className="sticky bottom-0 bg-white/95 backdrop-blur px-5 pt-3 pb-6 border-t border-gray-100 flex flex-col gap-2">
-        <button onClick={next} disabled={!valid[current.id]}
-          className={`w-full py-3.5 rounded-2xl text-sm font-bold transition-colors ${valid[current.id] ? 'bg-teal-700 text-white shadow-lg shadow-teal-700/25' : 'bg-gray-200 text-gray-400'}`}>
-          {step === STEPS.length - 1 ? 'Finish' : 'Continue'}
-        </button>
-        {current.optional && (
-          <button onClick={skip} className="text-xs font-semibold text-gray-500 py-1">Skip for now</button>
-        )}
+        <AuthButton onClick={next} disabled={!valid[current.id]}>{step === STEPS.length - 1 ? 'Finish' : 'Continue'}</AuthButton>
+        <AuthSkip onClick={skip}>Skip this step</AuthSkip>
       </footer>
     </div>
   )

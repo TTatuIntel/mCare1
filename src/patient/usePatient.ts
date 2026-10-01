@@ -100,6 +100,10 @@ export function usePatient() {
 
     /** POST /me/setup/complete */
     completeSetup: () => patchSelf({ profileSetup: 'done' }),
+    /** POST /me/setup/skip — into the portal now; Home keeps a reminder to finish. What was already entered stays saved. */
+    skipSetup: () => patchSelf({ profileSetup: 'skipped' }),
+    /** POST /me/setup/resume — back to the setup steps from the Home reminder. */
+    resumeSetup: () => patchSelf({ profileSetup: 'pending' }),
 
     /** POST /me/doctor-request — admins who can approve are told. */
     requestDoctor: (doctorId: string) => {
@@ -126,6 +130,12 @@ export function usePatient() {
       app.addAppointment(appt)
       return true
     },
+
+    /** GET /me/report-requests — newest first. `ready` once the signed report can be opened in Documents. */
+    reportRequests: app.reportRequests.filter(r => r.patientId === patient.id)
+      .map(r => ({ ...r, ready: !!r.docId && !!app.getDocument(r.docId) })),
+    /** POST /me/report-requests — asks the care team for a signed vitals report. False without a doctor. */
+    requestReport: (periodDays: number, reason: string) => app.requestReport(patient.id, periodDays, reason),
 
     /** POST /auth/logout */
     signOut: () => app.setCurrentUser(null),

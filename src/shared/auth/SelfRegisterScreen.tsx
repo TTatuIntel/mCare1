@@ -1,9 +1,8 @@
 import { useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import type { PatientUser } from '@/shared/lib/types'
-import { calcAge } from '@/shared/lib/vitals'
-import { MIN_PASSWORD_LEN, isEmail, passwordIssue } from '@/shared/state/auth'
-import { AuthButton, AuthField, AuthHeading, IconInput, PasswordInput, PasswordMeter, authInputCls, AuthDivider } from './authKit'
+import { MIN_PASSWORD_LEN, PHONE_COUNTRIES, fullPhone, isEmail, passwordIssue, type PhoneCountry } from '@/shared/state/auth'
+import { AuthButton, AuthField, AuthHeading, AuthSwitch, IconInput, PasswordInput, PasswordMeter, PhoneInput, authInputCls, AuthDivider } from './authKit'
 import { SocialButtons } from './SocialAuth'
 import { Consent } from './Legal'
 import { useAdoptAccount } from './LiveAuth'
@@ -12,9 +11,10 @@ import { rememberConsent, signUpWithEmail } from '@/shared/api/authBackend'
 import { appBaseUrl } from '@/shared/email/emailTemplate'
 
 /**
- * Patient sign-up on one screen: details, password and consent together, so
- * the account is created from here. Email verification follows (see
- * VerificationScreen). The logo above the form is the way back to welcome.
+ * Patient sign-up on one screen: name, email, phone, password and consent, so
+ * the account is created from here. Nothing optional is asked: birth date and
+ * the rest are added later from the profile. Email verification follows
+ * (see VerificationScreen). The logo above the form is the way back to welcome.
  */
 export function SelfRegisterScreen({ onSignIn, onConfirm }: {
   onSignIn?: () => void
@@ -22,28 +22,31 @@ export function SelfRegisterScreen({ onSignIn, onConfirm }: {
   onConfirm?: (email: string) => void
 }) {
   const { users, addUser, setCurrentUser } = useApp()
-  const [form, setForm] = useState({ name: '', email: '', phone: '', dob: '', password: '' })
+  /** `phone` is what is typed beside the country code. */
+  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '' })
+  const [country, setCountry] = useState<PhoneCountry>(PHONE_COUNTRIES[0])
   const [error, setError] = useState('')
-  /** Only complain about the email once the user has left the field. */
+  /** Only complain about the email or phone once the user has left the field. */
   const [emailTouched, setEmailTouched] = useState(false)
+  const [phoneTouched, setPhoneTouched] = useState(false)
   const [confirm, setConfirm] = useState('')
   const [agreed, setAgreed] = useState(false)
   const [busy, setBusy] = useState(false)
   const adopt = useAdoptAccount()
-  const today = new Date().toISOString().slice(0, 10)
 
   const set = (key: keyof typeof form, value: string) => { setForm(f => ({ ...f, [key]: value })); setError('') }
 
   const emailOk = isEmail(form.email)
   const mismatch = !!confirm && confirm !== form.password
-  const ready = !!form.name.trim() && emailOk && !passwordIssue(form.password) && confirm === form.password && agreed && !busy
-  const age = form.dob ? calcAge(form.dob) : null
+  const phone = fullPhone(country, form.phone)
+  const phoneBad = phoneTouched && !!form.phone && !phone
+  const ready = !!form.name.trim() && emailOk && !!phone && !passwordIssue(form.password) && confirm === form.password && agreed && !busy
 
   /** Live mode: the backend creates the account and emails the confirmation. */
   const registerLive = async () => {
     setBusy(true)
     rememberConsent()
-    const res = await signUpWithEmail(form, appBaseUrl())
+    const res = await signUpWithEmail({ ...form, phone: phone ?? '' }, appBaseUrl())
     setBusy(false)
     if (!res.ok) setError(res.error)
     else if (res.user) adopt(res.user)
@@ -60,8 +63,7 @@ export function SelfRegisterScreen({ onSignIn, onConfirm }: {
       id: `p_${Date.now()}`,
       name: form.name.trim(),
       email: form.email.trim(),
-      phone: form.phone.trim(),
-      dob: form.dob || undefined,
+      phone: phone ?? '',
       role: 'patient',
       status: 'unverified',
       createdAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
@@ -81,7 +83,7 @@ export function SelfRegisterScreen({ onSignIn, onConfirm }: {
   }
 
   return (
-    <form className="auth-stagger flex flex-col gap-2.5 @2xl:gap-3" onSubmit={e => { e.preventDefault(); handleRegister() }}>
+    <form className="auth-stagger flex flex-col gap-3" onSubmit={e => { e.preventDefault(); handleRegister() }}>
       <AuthHeading center title="Get started" />
 
       <AuthField label="Full name">
@@ -99,20 +101,9 @@ export function SelfRegisterScreen({ onSignIn, onConfirm }: {
         </IconInput>
       </AuthField>
 
-      {/* Every field gets a full row of its own, like the two above. */}
-      <AuthField label="Phone (optional)">
-        <IconInput icon="phone">
-          <input type="tel" autoComplete="tel" inputMode="tel" value={form.phone} onChange={e => set('phone', e.target.value)}
-            placeholder="+254 712 345 678" className={`${authInputCls} pl-10`} />
-        </IconInput>
-      </AuthField>
-
-      <AuthField label={age !== null ? `Birth date · age ${age}` : 'Birth date (optional)'}>
-        <IconInput icon="calendar">
-          {/* Empty, it reads like the other placeholders. */}
-          <input type="date" autoComplete="bday" value={form.dob} max={today} onChange={e => set('dob', e.target.value)}
-            className={`${authInputCls} pl-10 ${form.dob ? '' : 'text-gray-400'}`} />
-        </IconInput>
+      <AuthField label="Phone number" error={phoneBad ? `Enter a valid ${country.name} number.` : undefined}>
+        <PhoneInput country={country} onCountry={c => { setCountry(c); setError('') }} invalid={phoneBad}
+          value={form.phone} onChange={v => set('phone', v)} onBlur={() => setPhoneTouched(true)} />
       </AuthField>
 
       <AuthField label="Password">
@@ -133,15 +124,10 @@ export function SelfRegisterScreen({ onSignIn, onConfirm }: {
       <AuthButton type="submit" disabled={!ready}>{busy ? 'Creating…' : 'Sign up'}</AuthButton>
 
       {/* The quick way: the provider vouches for the email, so there is no code to type. */}
-      <AuthDivider>or</AuthDivider>
+      <AuthDivider>Or continue with</AuthDivider>
       <SocialButtons />
 
-      {onSignIn && (
-        <p className="text-center text-xs text-gray-600">
-          Have an account?{' '}
-          <button type="button" onClick={onSignIn} className="font-bold text-teal-700 underline underline-offset-4 hover:text-teal-800">Sign in</button>
-        </p>
-      )}
+      {onSignIn && <AuthSwitch prompt="Already have an account?" action="Sign in" onClick={onSignIn} />}
     </form>
   )
 }

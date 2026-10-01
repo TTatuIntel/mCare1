@@ -130,7 +130,7 @@ async function loadAccount(authUser: User): Promise<BackendSession> {
   const patient: PatientUser = {
     ...base, role: 'patient',
     assignedDoctorId: pt?.assigned_doctor_id ?? undefined,
-    profileSetup: pt?.profile_setup === 'done' ? 'done' : 'pending',
+    profileSetup: pt?.profile_setup === 'done' ? 'done' : pt?.profile_setup === 'skipped' ? 'skipped' : 'pending',
     trackedVitalIds: ['bp', 'hr'], thresholds: {}, prescriptions: [], readings: [], emergencyContacts: [],
   }
   return { ok: true, user: patient }
@@ -197,7 +197,8 @@ export async function signInWithEmail(email: string, password: string): Promise<
   }
 }
 
-export interface SignUpDetails { name: string; email: string; phone: string; dob: string; password: string }
+/** `phone` is the full number with its country code. Birth date is not asked for at sign-up; it is added later from the profile. */
+export interface SignUpDetails { name: string; email: string; phone: string; password: string }
 
 /**
  * Creates the account. Resolves with `user` when it can be used straight
@@ -208,7 +209,7 @@ export async function signUpWithEmail(d: SignUpDetails, redirectTo: string): Pro
     const supabase = await getSupabase()
     const { data, error } = await supabase.auth.signUp({
       email: d.email.trim(), password: d.password,
-      options: { emailRedirectTo: redirectTo, data: { full_name: d.name.trim(), phone: d.phone.trim(), dob: d.dob } },
+      options: { emailRedirectTo: redirectTo, data: { full_name: d.name.trim(), phone: d.phone.trim() } },
     })
     if (error) return { ok: false, error: error.message }
     // Supabase answers a taken email with a look-alike user that has no identities.

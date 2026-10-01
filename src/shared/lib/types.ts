@@ -317,8 +317,11 @@ export interface PatientUser extends BaseUser {
   /** Document privacy preferences. Enforced by the document access policy, not just the UI. */
   docPrefs?: PatientDocPrefs
   health?: HealthProfile
-  /** New accounts start 'pending' and are routed to the health-profile setup; absent means nothing to do. */
-  profileSetup?: 'pending' | 'done'
+  /**
+   * New accounts start 'pending' and are routed to the health-profile setup; absent means nothing to do.
+   * 'skipped' lets the patient into the portal, where Home reminds them to finish it.
+   */
+  profileSetup?: 'pending' | 'skipped' | 'done'
 }
 
 export interface PatientDocPrefs {

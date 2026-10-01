@@ -2,8 +2,9 @@ import { useState } from 'react'
 import { useApp, isActiveAlert } from '@/shared/state/AppContext'
 import {
   Pill, SectionHead, PATIENT_QUICK_REPLIES, useToast,
-  PortalHeader, HeroCard, QuickGrid, HERO_GRADIENT, levelStyle,
+  PortalHeader, HeroCard, QuickGrid, NoticeCard, HERO_GRADIENT, levelStyle,
 } from '@/shared'
+import { usePatient } from './usePatient'
 import { AlertSummaryCard } from './alertKit'
 import type { PatientUser } from '@/shared/lib/types'
 import { evaluate, latestValid, healthScore, unitView, ago } from '@/shared/lib/vitals'
@@ -72,6 +73,7 @@ export function HomeTab({ go, openVital, onLog }: {
 }) {
   const { currentUser, vitalDefs, alerts, now, unseenDocs } = useApp()
   const patient = currentUser as PatientUser
+  const { resumeSetup } = usePatient()
   const [openItem, setOpenItem] = useState<ScheduleItem | null>(null)
   const toast = useToast()
   const score = healthScore(patient, vitalDefs)
@@ -94,6 +96,13 @@ export function HomeTab({ go, openVital, onLog }: {
   return (
     <div className="flex flex-col gap-4 card-flow">
       <PortalHeader onNavigate={go} onProfile={() => go('profile')} />
+
+      {/* the health-profile setup was skipped: one tap goes back to it */}
+      {patient.profileSetup === 'skipped' && (
+        <NoticeCard tone="teal" pulse={false} title="Finish your health profile" action="Set up →" onAction={resumeSetup}>
+          <p className="text-[11px] text-teal-800">It takes about 2 minutes and helps your care team look after you.</p>
+        </NoticeCard>
+      )}
 
       {/* active alerts for me */}
       <AlertSummaryCard alerts={myAlerts} onOpenAll={() => go('alerts')} onLog={onLog} />

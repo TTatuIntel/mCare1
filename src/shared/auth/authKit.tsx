@@ -1,6 +1,6 @@
 /** Form controls shared by the signed-out screens: sign in, create account and verification. */
 import { useEffect, useRef, useState } from 'react'
-import { passwordStrength } from '@/shared/state/auth'
+import { PHONE_COUNTRIES, passwordStrength, type PhoneCountry } from '@/shared/state/auth'
 
 /* ─── Line icons (24px grid, stroke follows the text colour) ────────── */
 const ICONS = {
@@ -171,9 +171,33 @@ export function AuthHeading({ title, subtitle, icon, center = false }: {
           <AuthIcon name={icon} className="w-5 h-5 @2xl:w-6 @2xl:h-6" />
         </span>
       )}
-      <h2 className="text-lg @2xl:text-xl font-black text-gray-900 font-display leading-tight">{title}</h2>
-      {subtitle && <p className="text-xs @2xl:text-[13px] text-gray-500 mt-1 leading-relaxed">{subtitle}</p>}
+      {/* The same sizes as the welcome page's "Let's get you started". */}
+      <h2 className="text-xl font-black text-gray-900 font-display leading-tight">{title}</h2>
+      {subtitle && <p className="text-[13px] text-gray-600 mt-1.5 leading-relaxed">{subtitle}</p>}
     </div>
+  )
+}
+
+/**
+ * "Already have an account? Sign in": the line that swaps between the ways in,
+ * the same on the welcome, sign-in and sign-up pages. The words carry the brand
+ * shimmer; on hover the underline redraws and an arrow slides out.
+ */
+export function AuthSwitch({ prompt, action, onClick, className = '' }: {
+  prompt: string; action: string; onClick: () => void; className?: string
+}) {
+  return (
+    <p className={`text-center text-[13px] text-gray-600 ${className}`}>
+      {prompt}{' '}
+      <button type="button" onClick={onClick}
+        className="group relative inline-flex items-center pb-0.5 font-bold transition-transform active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 rounded">
+        <span className="auth-shimmer">{action}</span>
+        <span className="flex w-0 overflow-hidden text-teal-700 opacity-0 transition-all duration-300 group-hover:ml-1 group-hover:w-3.5 group-hover:opacity-100 group-focus-visible:ml-1 group-focus-visible:w-3.5 group-focus-visible:opacity-100">
+          <AuthIcon name="arrow" className="w-3.5 h-3.5 shrink-0" />
+        </span>
+        <span aria-hidden className="absolute inset-x-0 bottom-0 h-[1.5px] origin-left rounded-full bg-teal-700 group-hover:animate-[auth-underline_.45s_ease-out] motion-reduce:animate-none" />
+      </button>
+    </p>
   )
 }
 
@@ -215,6 +239,38 @@ export function IconInput({ icon, children }: { icon: AuthIconName; children: Re
       <span aria-hidden className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 transition-colors group-focus-within:text-teal-700">
         <AuthIcon name={icon} className="w-4 h-4" />
       </span>
+    </span>
+  )
+}
+
+/**
+ * A phone number in one field: the country code on the left (tap to change
+ * it), the rest of the number beside it. The real `<select>` lies invisibly
+ * over the code, so the device's own picker opens; the field shows only the
+ * flag and code.
+ */
+export function PhoneInput({ country, onCountry, value, onChange, onBlur, invalid = false }: {
+  country: PhoneCountry; onCountry: (c: PhoneCountry) => void
+  value: string; onChange: (v: string) => void; onBlur?: () => void; invalid?: boolean
+}) {
+  return (
+    <span className={`flex items-center w-full h-11 rounded-2xl border bg-gray-50 text-sm transition-all duration-200 hover:border-gray-300 focus-within:bg-white focus-within:ring-4 focus-within:ring-teal-500/15 ${invalid ? 'border-red-300 focus-within:border-red-400' : 'border-gray-200 focus-within:border-teal-600'}`}>
+      <span className="relative flex h-full shrink-0 items-center gap-1.5 pl-3.5 pr-2.5 border-r border-gray-200 text-gray-800">
+        <span aria-hidden>{country.flag}</span>
+        <span className="font-mono font-semibold">{country.dial}</span>
+        <svg className="w-3 h-3 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+        <select aria-label="Country code" value={country.iso} autoComplete="tel-country-code"
+          onChange={e => onCountry(PHONE_COUNTRIES.find(c => c.iso === e.target.value) ?? country)}
+          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+          {PHONE_COUNTRIES.map(c => <option key={c.iso} value={c.iso}>{c.flag} {c.name} ({c.dial})</option>)}
+        </select>
+      </span>
+      <input type="tel" inputMode="tel" autoComplete="tel-national" aria-label="Phone number" aria-invalid={invalid} required
+        value={value} onChange={e => onChange(e.target.value)} onBlur={onBlur}
+        placeholder="712 345 678"
+        className="flex-1 min-w-0 h-full bg-transparent px-3 font-mono outline-none placeholder:font-sans placeholder:text-gray-400" />
     </span>
   )
 }
@@ -269,21 +325,37 @@ export function AuthButton({ children, onClick, type = 'button', disabled = fals
     <div className="relative mx-auto w-fit min-w-40 max-w-full">
       {!disabled && <span aria-hidden className="auth-glow absolute inset-x-6 -bottom-1.5 h-8 rounded-full bg-teal-500/60 blur-xl" />}
       <button type={type} onClick={onClick} disabled={disabled}
-        className={`group relative w-full overflow-hidden rounded-full py-1.5 pl-6 pr-1.5 flex items-center gap-4 text-sm font-bold transition-all duration-300 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-teal-500/40 ${disabled
+        className={`group relative w-full overflow-hidden rounded-full py-1.5 pl-6 pr-1.5 flex items-center gap-4 text-[15px] font-bold transition-all duration-300 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-teal-500/40 ${disabled
           ? 'bg-gray-100 text-gray-400'
           : 'bg-teal-700 text-white ring-1 ring-inset ring-white/20 shadow-lg shadow-teal-700/30 hover:-translate-y-0.5 hover:bg-teal-800 hover:shadow-xl active:translate-y-0 active:scale-[.98]'}`}>
         {!disabled && <>
           <span aria-hidden className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/15 to-transparent" />
           <span aria-hidden className="auth-sheen absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent" />
         </>}
-        {/* The pill hugs its label and arrow (short labels keep a minimum width). The tile plus padding is as tall as an input. */}
-        <span className="relative flex-1 text-center">{children}</span>
-        <span className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${disabled
+        {/* The pill hugs its label and arrow (short labels keep a minimum width). Label and tile are the size of Get Started's. */}
+        <span className="relative flex-1 text-center whitespace-nowrap">{children}</span>
+        <span className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors ${disabled
           ? 'bg-gray-200/70' : 'bg-white/15 ring-1 ring-inset ring-white/25 backdrop-blur-sm group-hover:bg-white/25'}`}>
           <span className={`flex ${disabled ? '' : 'auth-nudge'}`}><AuthIcon name="arrow" className="w-4 h-4" /></span>
         </span>
       </button>
     </div>
+  )
+}
+
+/**
+ * The quiet way past an optional step ("Skip for now"), under the main button.
+ * Its arrow keeps nudging forward; under a pointer the link fills in and turns teal.
+ */
+export function AuthSkip({ onClick, children = 'Skip for now' }: { onClick: () => void; children?: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick}
+      className="group mx-auto flex w-fit items-center gap-1 rounded-full px-3.5 py-1.5 text-xs font-semibold text-gray-500 transition-all duration-200 hover:bg-teal-50 hover:text-teal-700 active:scale-95 active:bg-teal-50 active:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60">
+      {children}
+      <span className="auth-nudge flex transition-transform duration-200 group-hover:translate-x-0.5">
+        <AuthIcon name="arrow" className="w-3.5 h-3.5" />
+      </span>
+    </button>
   )
 }
 

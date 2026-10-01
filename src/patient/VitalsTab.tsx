@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
-import { Toggle, Page, VitalChart, InsightNotes, levelStyle, useElementWidth, TREND_ARROW, HERO_GRADIENT } from '@/shared'
+import { Toggle, Page, HeroCard, VitalChart, InsightNotes, levelStyle, useElementWidth, TREND_ARROW, HERO_GRADIENT } from '@/shared'
 import type { PatientUser, VitalDef } from '@/shared/lib/types'
 import {
-  evaluate, latestValid, targetRange, vitalTrend, generateInsights, readingTime, unitView, ago,
+  evaluate, latestValid, targetRange, vitalTrend, generateInsights, readingTime, unitView, ago, groupOf, VITAL_GROUPS,
   type VitalInsight, type VitalTrend,
 } from '@/shared/lib/vitals'
 import { countdown } from '@/shared/lib/schedule'
@@ -11,9 +11,11 @@ import { useDaySchedule } from './useDaySchedule'
 import { usePatient } from './usePatient'
 import { VitalDetail } from './VitalDetail'
 import { useVitalLog, SelfClearBanner } from './VitalLogSheets'
+import { ReportRequestCard } from './ReportRequest'
 
 type View = 'readings' | 'trends' | 'select'
 type Status = 'alert' | 'normal' | 'none'
+type Group = typeof VITAL_GROUPS[number]
 
 /** Alerts first, then normal, then vitals with nothing logged. */
 const RANK: Record<Status, number> = { alert: 0, normal: 1, none: 2 }
@@ -27,13 +29,19 @@ function centerInScroller(el: HTMLElement) {
 }
 
 /* ─── Vitals ──────────────────────────────────────────────────────────
-   The overview of every tracked vital. Tapping one opens its own page
+   The overview of every tracked vital: how today stands, then the vitals
+   in their groups (VITAL_GROUPS, the same structure the log sheets use),
+   the groups that need attention first. Tapping one opens its own page
    (VitalDetail); `vitalId` is that page's vital, owned by PatientApp so
-   Home, alerts and notifications can open a vital directly. */
-export function VitalsTab({ vitalId, onOpenVital, onCloseVital }: {
+   Home, alerts and notifications can open a vital directly.
+   The group filter narrows both the Now and the Trends view; each ends
+   with the section for asking the care team for a signed report. */
+export function VitalsTab({ vitalId, onOpenVital, onCloseVital, go }: {
   vitalId: string | null
   onOpenVital: (vitalId: string) => void
   onCloseVital: () => void
+  /** Opens another screen (Documents, for a finished report). */
+  go?: (tab: string) => void
 }) {
   const { currentUser, vitalDefs, now } = useApp()
   const { doctor, setTrackedVitals, status, error, reload } = usePatient()
@@ -44,6 +52,8 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital }: {
   const [dense, setDense] = useState(false)
   /** Optional status filter driven by the summary pills. */
   const [statusFilter, setStatusFilter] = useState<Status | null>(null)
+  /** Optional group filter (Heart, Breathing…), shared by the Now and Trends views. */
+  const [groupFilter, setGroupFilter] = useState<Group['id'] | null>(null)
   const [trendDays, setTrendDays] = useState(30)
   const rootRef = useRef<HTMLDivElement>(null)
   const lastOpened = useRef<string | null>(null)
@@ -84,10 +94,21 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital }: {
   }
   const count = (s: Status) => tracked.filter(v => statusOf(v) === s).length
 
-  /** Cards actually rendered: filtered by the summary pills, alerts first. */
-  const visible = tracked
+  /** The groups the patient tracks something in: the choices of the group filter. */
+  const groups = VITAL_GROUPS.filter(g => tracked.some(v => groupOf(v.id) === g.id))
+  const inGroup = tracked.filter(v => !groupFilter || groupOf(v.id) === groupFilter)
+  const clearFilters = () => { setStatusFilter(null); setGroupFilter(null) }
+
+  /** Cards actually rendered: filtered by the summary pills and the group, alerts first. */
+  const visible = inGroup
     .filter(v => !statusFilter || statusOf(v) === statusFilter)
     .sort((a, b) => RANK[statusOf(a)] - RANK[statusOf(b)])
+  /** The cards in their groups, groups with an alert first. A status filter shows one plain list instead. */
+  const sections: { group?: typeof VITAL_GROUPS[number]; vitals: VitalDef[] }[] = statusFilter
+    ? [{ vitals: visible }]
+    : VITAL_GROUPS
+      .map(group => ({ group, vitals: visible.filter(v => groupOf(v.id) === group.id) }))
+      .sort((a, b) => Math.min(...a.vitals.map(v => RANK[statusOf(v)]), 3) - Math.min(...b.vitals.map(v => RANK[statusOf(v)]), 3))
 
   /* ─ Trends: recomputed only when readings or the window change ─ */
   const trends = useMemo(() => {
@@ -101,9 +122,22 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital }: {
     [patient.readings, patient.thresholds, patient.trackedVitalIds, vitalDefs, trendDays],
   )
 
+  /** The trend window in one line, for the snapshot on the Now view. */
+  const trendTotals = useMemo(() => {
+    let readings = 0, inRange = 0, moving = 0
+    trends.forEach(t => {
+      readings += t.points.length
+      inRange += t.inRange
+      if (t.direction === 'rising' || t.direction === 'falling') moving++
+    })
+    return { readings, inRange, moving }
+  }, [trends])
+
+  const openDocs = go ? () => go('docs') : undefined
+
   if (vitalId) return (
     <>
-      <VitalDetail vitalId={vitalId} onSelect={onOpenVital} onBack={onCloseVital} onLog={log.logOne} />
+      <VitalDetail vitalId={vitalId} onSelect={onOpenVital} onBack={onCloseVital} onLog={log.logOne} onLogGroup={log.logGroup} />
       {log.sheets}
     </>
   )
@@ -129,15 +163,26 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital }: {
 
       {view === 'readings' ? (
         <>
-          {/* next check — the same per-vital reminder shown on Home */}
+          {/* how today stands: how many are in target, and the same next-check reminder shown on Home */}
           {tracked.length > 0 && (
-            <div className={`rounded-2xl px-3.5 py-2.5 flex items-center gap-2 text-xs ${vitalsDue.dueIn <= 0 ? 'bg-amber-50 text-amber-800' : 'bg-teal-50 text-teal-800'}`}>
-              <span>⏰</span>
-              <span className="flex-1">
-                {vitalsDue.lastAt ? `Last logged ${ago(vitalsDue.lastAt, now)}` : 'No readings yet'}
-              </span>
-              <span className="font-bold">{vitalsDue.dueIn <= 0 ? 'Check due now' : `Next check ${countdown(vitalsDue.dueIn)}`}</span>
-            </div>
+            <HeroCard eyebrow="Today’s vitals"
+              value={<span className="font-mono">{count('normal')}</span>}
+              suffix={`of ${tracked.length} in target`}
+              caption={<>
+                {count('alert') > 0
+                  ? `${count('alert')} ${count('alert') === 1 ? 'needs' : 'need'} attention`
+                  : count('normal') > 0 ? 'All logged vitals in target' : 'No readings yet'}
+                {vitalsDue.lastAt ? ` · last logged ${ago(vitalsDue.lastAt, now)}` : ''}
+              </>}
+              sideTitle="Next check"
+              side={[{ value: vitalsDue.dueIn <= 0 ? 'Due now' : countdown(vitalsDue.dueIn), label: vitalsDue.dueIn <= 0 ? 'tap Log vitals' : 'reading due' }]}>
+              {/* one segment per vital: in target, needs attention, nothing logged */}
+              <div className="px-5 pb-4 flex h-1.5 gap-0.5 box-content" aria-hidden="true">
+                {(['normal', 'alert', 'none'] as const).flatMap(s => tracked.filter(v => statusOf(v) === s).map(v => (
+                  <span key={v.id} className={`flex-1 rounded-full ${s === 'normal' ? 'bg-white' : s === 'alert' ? 'bg-amber-300' : 'bg-white/20'}`} />
+                )))}
+              </div>
+            </HeroCard>
           )}
 
           {/* Summary strip — tappable status filters + density toggle */}
@@ -166,14 +211,10 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital }: {
                 className="w-8 h-8 rounded-full bg-white text-gray-500 shadow-sm flex items-center justify-center flex-shrink-0 ml-auto active:scale-95 transition-transform">
                 <span className="text-xs">{dense ? '☰' : '▦'}</span>
               </button>
-              {/* Tablet and web: the bulk-log button lives here instead of floating over the cards. */}
-              <button onClick={log.logAll}
-                className="hidden @2xl:flex h-8 px-4 rounded-full items-center gap-1.5 bg-teal-700 text-white text-xs font-bold shadow-sm transition-all hover:bg-teal-800 active:scale-95">
-                <span className="text-base leading-none font-light">+</span>
-                Log All Vitals
-              </button>
             </div>
           )}
+
+          <GroupFilter groups={groups} value={groupFilter} onChange={setGroupFilter} />
 
           {/* Vital cards */}
           {tracked.length === 0 ? (
@@ -187,10 +228,28 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital }: {
               </button>
             </div>
           ) : (
-            <div className={dense
+            <div className="flex flex-col gap-4">
+              {sections.filter(sec => sec.vitals.length > 0).map(sec => (
+                <section key={sec.group?.id ?? 'filtered'} aria-label={sec.group?.label ?? 'Vitals'}>
+                  {sec.group && (
+                    <div className="mb-2 flex items-center gap-2 px-1">
+                      <span className="text-base" aria-hidden="true">{sec.group.icon}</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold text-gray-900">{sec.group.label}</p>
+                        <p className="truncate text-[10px] text-gray-400">{sec.group.hint}</p>
+                      </div>
+                      {sec.vitals.length > 1 && (
+                        <button onClick={() => log.logGroup(sec.group!.id)}
+                          className="flex-shrink-0 rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-bold text-teal-700 transition-all hover:bg-teal-100 active:scale-95">
+                          + Log group
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <div className={dense
               ? 'grid grid-cols-2 gap-2 @2xl:grid-cols-3 @2xl:gap-3 @5xl:grid-cols-4'
               : 'flex flex-col gap-2 @2xl:grid @2xl:grid-cols-2 @2xl:gap-3 @5xl:grid-cols-3'}>
-              {visible.map(v => {
+              {sec.vitals.map(v => {
                 const reading  = latestValid(patient, v.id)
                 const lvl      = reading ? evaluate(patient, v, reading.value) : null
                 const st       = levelStyle(lvl)
@@ -288,6 +347,13 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital }: {
                             {' · '}{when ?? 'tap + to log'}
                           </p>
                         </div>
+
+                        {/* where it has been heading; only where the card has the width for it */}
+                        {tr && tr.points.length > 1 && (
+                          <div className="hidden @sm:block w-14 h-7 flex-shrink-0" aria-hidden="true">
+                            <VitalChart points={tr.points} range={targetRange(patient, v)} height={28} bare />
+                          </div>
+                        )}
                       </button>
 
                       <div className="flex items-center pl-1 pr-3">
@@ -302,35 +368,48 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital }: {
                   </div>
                 )
               })}
+                  </div>
+                </section>
+              ))}
 
               {visible.length === 0 && (
-                <div className="col-span-full bg-white rounded-2xl py-6 text-center shadow-sm">
-                  <p className="text-xs text-gray-400 mb-2">Nothing in this status right now.</p>
-                  <button onClick={() => setStatusFilter(null)}
+                <div className="bg-white rounded-2xl py-6 text-center shadow-sm">
+                  <p className="text-xs text-gray-400 mb-2">Nothing matches these filters right now.</p>
+                  <button onClick={clearFilters}
                     className="text-[11px] font-bold text-teal-700">Show all vitals</button>
                 </div>
               )}
             </div>
           )}
 
-          {/* mobile: extra bottom room so the floating button never covers the text */}
-          <DoctorNote note={patient.doctorNote} doctorName={doctorName ?? (patient.assignedDoctorId ? 'Your Doctor' : undefined)} className="pb-16 @2xl:pb-4" />
-
-          {/* Floating bulk-log button (mobile) */}
-          {tracked.length > 0 && (
-            <div className="sticky bottom-6 flex justify-end pointer-events-none -mt-12 @2xl:hidden">
-              <button onClick={log.logAll}
-                className="pointer-events-auto h-14 px-5 rounded-full flex items-center gap-2 bg-teal-700 text-white text-sm font-bold shadow-xl active:scale-95 transition-transform">
-                <span className="text-xl leading-none font-light">+</span>
-                Log All Vitals
-              </button>
-            </div>
+          {/* The trend window in one line; the Trends view has the charts. */}
+          {trendTotals.readings > 0 && (
+            <button onClick={() => setView('trends')} className="bg-white rounded-2xl shadow-sm p-3.5 flex items-center gap-3 text-left transition-shadow hover:shadow-md">
+              <div className="w-10 h-10 rounded-xl bg-teal-50 flex items-center justify-center text-lg flex-shrink-0">📈</div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold text-gray-900">
+                  <span className="font-mono">{Math.round((trendTotals.inRange / trendTotals.readings) * 100)}%</span> of readings in target
+                </p>
+                <p className="text-[11px] text-gray-500 mt-0.5 truncate">
+                  Last <span className="font-mono">{trendDays}</span> days · <span className="font-mono">{trendTotals.readings}</span> readings
+                  {trendTotals.moving > 0 ? ` · ${trendTotals.moving} ${trendTotals.moving === 1 ? 'vital is' : 'vitals are'} changing` : ' · all steady'}
+                </p>
+              </div>
+              <span className="flex-shrink-0 text-xs font-semibold text-teal-700">Trends ›</span>
+            </button>
           )}
+
+          {tracked.length > 0 && <ReportRequestCard days={trendDays} onOpenDocs={openDocs} />}
+
+          {/* Logging one, a group or everything: the floating "Log vitals" button (PatientApp), the same one as on Home. */}
+          <DoctorNote note={patient.doctorNote} doctorName={doctorName ?? (patient.assignedDoctorId ? 'Your Doctor' : undefined)} />
         </>
       ) : view === 'trends' ? (
         <TrendsView
           patient={patient}
-          tracked={tracked}
+          tracked={inGroup}
+          filter={<GroupFilter groups={groups} value={groupFilter} onChange={setGroupFilter} />}
+          report={tracked.length > 0 && <ReportRequestCard days={trendDays} onOpenDocs={openDocs} />}
           trends={trends}
           insights={insights}
           days={trendDays}
@@ -401,9 +480,33 @@ function DoctorNote({ note, doctorName, className = '' }: { note?: string; docto
 
 /* ─── Trends view: unified chart + auto-generated summary ─────────────── */
 
-function TrendsView({ patient, tracked, trends, insights, days, onDays, onOpen, ring, doctorName }: {
+/** One chip per group the patient tracks something in, plus "All". Hidden when there is only one group. */
+function GroupFilter({ groups, value, onChange }: {
+  groups: Group[]; value: Group['id'] | null; onChange: (g: Group['id'] | null) => void
+}) {
+  if (groups.length < 2) return null
+  const chip = (on: boolean) => `flex-shrink-0 flex items-center gap-1 text-[11px] font-bold px-3 py-1.5 rounded-full border transition-colors ${
+    on ? 'bg-teal-700 text-white border-teal-700' : 'bg-white text-gray-500 border-gray-200'}`
+  return (
+    <div className="flex gap-1.5 overflow-x-auto" style={{ scrollbarWidth: 'none' }} role="group" aria-label="Filter by group">
+      <button onClick={() => onChange(null)} aria-pressed={!value} className={chip(!value)}>All</button>
+      {groups.map(g => (
+        <button key={g.id} onClick={() => onChange(value === g.id ? null : g.id)} aria-pressed={value === g.id} className={chip(value === g.id)}>
+          <span aria-hidden="true">{g.icon}</span>{g.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function TrendsView({ patient, tracked, filter, report, trends, insights, days, onDays, onOpen, ring, doctorName }: {
   patient: PatientUser
+  /** The vitals shown: the tracked ones, narrowed by the group filter. */
   tracked: VitalDef[]
+  /** The group filter, drawn under the window picker. */
+  filter?: React.ReactNode
+  /** The report-request section, drawn above the doctor's note. */
+  report?: React.ReactNode
   trends: Map<string, VitalTrend>
   insights: VitalInsight[]
   days: number
@@ -428,6 +531,7 @@ function TrendsView({ patient, tracked, trends, insights, days, onDays, onOpen, 
         ))}
         <span className="text-[11px] text-gray-400 ml-auto">{withData.length} of {tracked.length} with a trend</span>
       </div>
+      {filter}
 
       {/* Unified trend — every vital normalized onto its own target band */}
       <div className="bg-white rounded-2xl p-4 shadow-sm">
@@ -514,6 +618,7 @@ function TrendsView({ patient, tracked, trends, insights, days, onDays, onOpen, 
         </p>
       </div>
 
+      {report}
       <DoctorNote note={patient.doctorNote} doctorName={doctorName} />
     </div>
   )

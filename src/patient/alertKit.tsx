@@ -3,7 +3,9 @@
  * the target, what is happening to it and what to do in the meantime. Home and
  * My Alerts both read alerts through `useAlertView`, so they say the same thing.
  */
+import { useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
+import { CloseButton } from '@/shared'
 import type { AppAlert, VitalDef } from '@/shared/lib/types'
 import { parseValue, targetRange, unitView, SELF_CLEAR_WINDOW_MIN } from '@/shared/lib/vitals'
 import { usePatient } from './usePatient'
@@ -114,10 +116,20 @@ export const SELF_CLEAR_NOTE = `A warning clears by itself if you re-measure in 
 
 /* ─── Home: the alerts that are open right now ──────────────────────── */
 
+/** Alerts the patient has closed on Home, kept for this browser session. */
+const DISMISSED_KEY = 'mcare-home-alerts-closed'
+function readDismissed(): string[] {
+  try { return JSON.parse(sessionStorage.getItem(DISMISSED_KEY) ?? '[]') } catch { return [] }
+}
+
 /**
- * The alerts card on Home. One calm white card instead of a red wall: each
+ * The alerts popup on Home. One calm white card instead of a red wall: each
  * reading shows its number, where it is with the doctor, and a Re-measure
  * button when a fresh reading would help.
+ *
+ * The patient can close it with the x. Closing only hides the card: the alerts
+ * stay open with the care team and under My Alerts (the Alerts tile keeps its
+ * count). It comes back when a new alert arrives, and on the next visit.
  */
 export function AlertSummaryCard({ alerts, onOpenAll, onLog }: {
   alerts: AppAlert[]
@@ -126,14 +138,22 @@ export function AlertSummaryCard({ alerts, onOpenAll, onLog }: {
   onLog: (vitalId: string) => void
 }) {
   const view = useAlertView()
-  if (alerts.length === 0) return null
+  const [dismissed, setDismissed] = useState(readDismissed)
+  // Closed means every alert on show was there when the patient closed it.
+  if (alerts.length === 0 || alerts.every(a => dismissed.includes(a.id))) return null
+  const close = () => {
+    const ids = alerts.map(a => a.id)
+    setDismissed(ids)
+    try { sessionStorage.setItem(DISMISSED_KEY, JSON.stringify(ids)) } catch { /* private mode: closed until the screen is reopened */ }
+  }
   const anyDanger = alerts.some(a => a.severity === 'danger')
   const shown = alerts.slice(0, 3)
   const more = alerts.length - shown.length
 
   return (
-    <section aria-label="Active alerts" className={`bg-white rounded-2xl shadow-sm overflow-hidden border ${anyDanger ? 'border-red-200' : 'border-amber-200'}`}>
-      <button onClick={onOpenAll} className="w-full flex items-center gap-3 px-3.5 py-3 text-left">
+    <section aria-label="Active alerts" className={`alert-pop bg-white rounded-2xl shadow-sm overflow-hidden border ${anyDanger ? 'border-red-200' : 'border-amber-200'}`}>
+      <div className="flex items-center gap-2 pr-3">
+      <button onClick={onOpenAll} className="flex-1 min-w-0 flex items-center gap-3 pl-3.5 py-3 text-left">
         <span className={`relative w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${anyDanger ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'}`}>
           <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" /><path d="M12 9v4" /><path d="M12 17h.01" />
@@ -148,6 +168,8 @@ export function AlertSummaryCard({ alerts, onOpenAll, onLog }: {
         </span>
         <span className="text-[11px] font-bold text-teal-700 flex-shrink-0">View all ›</span>
       </button>
+      <CloseButton onClick={close} label="Close alerts" />
+      </div>
 
       <div className="border-t border-gray-100 divide-y divide-gray-100">
         {shown.map(a => {
@@ -170,7 +192,7 @@ export function AlertSummaryCard({ alerts, onOpenAll, onLog }: {
                 </span>
               </button>
               {v.remeasure && v.def && (
-                <div className="flex items-center gap-2 pl-[30px] pr-3.5 pb-2.5">
+                <div className="flex items-center gap-2 pl-7.5 pr-3.5 pb-2.5">
                   <p className="flex-1 min-w-0 text-[11px] text-gray-600 leading-snug">{v.remeasure.reason}.</p>
                   <button onClick={() => onLog(v.def!.id)} className="flex-shrink-0 rounded-full bg-teal-700 px-3 py-1.5 text-[11px] font-bold text-white active:scale-95 transition-transform">
                     Re-measure

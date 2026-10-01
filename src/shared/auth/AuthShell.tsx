@@ -358,7 +358,7 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
  * the welcome page.
  */
 function StepBrand({ onHome }: { onHome?: () => void }) {
-  const logo = (size: 'sm' | 'md') => onHome ? (
+  const logo = (size: 'sm' | 'md' | 'lg') => onHome ? (
     <button type="button" onClick={onHome} aria-label="mCare: back to the welcome page"
       className="relative z-10 rounded-2xl outline-none transition-transform duration-300 hover:scale-105 active:scale-95 focus-visible:ring-2 focus-visible:ring-teal-500/60">
       <MCareLogo size={size} />
@@ -366,8 +366,9 @@ function StepBrand({ onHome }: { onHome?: () => void }) {
   ) : <MCareLogo size={size} />
   return (
     <>
-      {/* Smaller than on the welcome page: here the fields come first. */}
-      <BrandCluster compact className="@5xl:hidden mt-6 @2xl:mt-0 mb-1.5 @2xl:mb-3">{logo('md')}</BrandCluster>
+      {/* The same cluster as the welcome page at each size: compact on mobile, large on tablet. */}
+      <BrandCluster compact className="@2xl:hidden mt-6 mb-4">{logo('md')}</BrandCluster>
+      <BrandCluster className="hidden @2xl:flex @5xl:hidden mb-6">{logo('lg')}</BrandCluster>
       <div className="hidden @5xl:flex justify-center mb-5">{logo('sm')}</div>
     </>
   )

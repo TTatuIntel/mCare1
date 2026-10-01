@@ -3,7 +3,7 @@ import { useApp } from '@/shared/state/AppContext'
 import type { DoctorUser, PatientUser } from '@/shared/lib/types'
 import { MailboxSheet } from '@/shared/email/Mailbox'
 import { AuthShell } from './AuthShell'
-import { AuthButton, AuthField, AuthHeading, OtpInput, StepBar, SuccessCheck, SIGNUP_STEPS, authInputCls } from './authKit'
+import { AuthButton, AuthField, AuthHeading, AuthSkip, OtpInput, StepBar, SuccessCheck, SIGNUP_STEPS, authInputCls } from './authKit'
 
 /** Demo mode lets you open the sent email on screen. Set to false once real email/SMS delivery exists. */
 const DEMO_MODE = true
@@ -79,7 +79,8 @@ export function VerificationScreen() {
   if (verified) {
     return (
       <AuthShell>
-        <div key="verified" className="screen-in flex flex-col text-center gap-4 py-4">
+        {/* The tick, the words and the two ways on arrive one after another. */}
+        <div key="verified" className="auth-stagger flex flex-col text-center gap-4 py-4">
           <SuccessCheck />
           <AuthHeading center title="Account Verified!" subtitle={setupNext
             ? 'Next, a few quick questions about your health so your care team can look after you. It takes about 2 minutes.'
@@ -87,6 +88,10 @@ export function VerificationScreen() {
           <AuthButton onClick={() => updateUser(currentUser.id, { status: 'active' })}>
             {setupNext ? 'Set up my health profile' : 'Continue to App'}
           </AuthButton>
+          {/* Straight to the dashboard; Home keeps a reminder to finish the profile. */}
+          {setupNext && (
+            <AuthSkip onClick={() => updateUser(currentUser.id, { status: 'active', profileSetup: 'skipped' } as Partial<PatientUser>)} />
+          )}
         </div>
       </AuthShell>
     )
@@ -142,7 +147,7 @@ export function VerificationScreen() {
       </form>
       <MailboxSheet address={currentUser.email} phone={currentUser.phone} open={mailOpen} onClose={() => setMailOpen(false)} openLatest
         onLink={e => {
-          // Same as tapping "Verify my email" in a real inbox.
+          // Same as tapping "Activate account" in a real inbox.
           const m = e.content.action?.url.match(/[?&]verify=([^.&]+)\.(\w+)/)
           if (!m || !verifyByLink(decodeURIComponent(m[1]), m[2])) return false
           succeed()

@@ -270,7 +270,16 @@ body {
 @keyframes upnext-progress { from { width: 0; } to { width: 100%; } }
 .upnext-in { animation: upnext-in .45s cubic-bezier(.2,.8,.2,1); }
 .upnext-progress { animation-name: upnext-progress; animation-timing-function: linear; animation-fill-mode: forwards; }
+/* Home alerts popup: drops in with a soft overshoot. */
+@keyframes alert-pop { 0% { opacity: 0; transform: translateY(-8px) scale(.97); } 60% { opacity: 1; transform: translateY(1px) scale(1.01); } 100% { transform: none; } }
+.alert-pop { animation: alert-pop .4s cubic-bezier(.2,.8,.2,1) both; }
+/* Floating action button: springs in from its corner, then bobs gently in place. */
+@keyframes fab-in { 0% { opacity: 0; transform: translateY(16px) scale(.6); } 65% { opacity: 1; transform: translateY(-3px) scale(1.05); } 100% { transform: none; } }
+@keyframes fab-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+.fab-in { animation: fab-in .5s cubic-bezier(.2,.8,.2,1) .15s both; }
+.fab-float { animation: fab-float 3.6s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
+  .alert-pop, .fab-in, .fab-float { animation: none; }
   .upnext-in { animation: none; }
   /* No auto-rotation when motion is reduced; the dots still switch items. */
   .upnext-progress { animation: none; width: 100%; }

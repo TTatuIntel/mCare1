@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
-import { Page, AddButton, Toggle, Chevron, useLoader, BottomSheet, SheetButton, Field, inputCls, useToast } from '@/shared'
+import { Page, AddButton, Toggle, Chevron, useLoader, useToast } from '@/shared'
 import type { DocSourceLink, PatientUser } from '@/shared/lib/types'
 import { isOfficial, DOC_RETENTION_DAYS } from '@/shared/documents/documents'
 import { DocRow, DocList, useDocFilters } from '@/shared/documents/DocKit'
@@ -10,18 +10,17 @@ import { ShareSheet } from '@/shared/documents/ShareSheet'
 import { buildLibraryZip, downloadBlob } from '@/shared/documents/exporters'
 import { SUPPORTED_SUMMARY } from '@/shared/documents/fileFormats'
 import { dayKey } from '@/shared/lib/vitals'
+import { ReportRequestSheet } from './ReportRequest'
 
 /* ─── Documents & Reports ────────────────────────────────────────────── */
 export function DocsTab({ go }: { go: (t: string) => void }) {
   const {
     currentUser, users, documentsFor, retryUpload, discardUpload, markDocsSeen, setDocPrivacyDefault, shareLinksFor, recordDownload, now,
-    getDocument, reportRequests, requestReport,
+    getDocument, reportRequests,
   } = useApp()
   const patient = currentUser as PatientUser
   const [openId, setOpenId] = useState<string | null>(null)
   const [requesting, setRequesting] = useState(false)
-  const [reqDays, setReqDays] = useState(30)
-  const [reqReason, setReqReason] = useState('')
   const toast = useToast()
   const [upload, setUpload] = useState(false)
   const [share, setShare] = useState(false)
@@ -64,13 +63,6 @@ export function DocsTab({ go }: { go: (t: string) => void }) {
     .filter(e => isOfficial(e.doc) && e.doc.body?.type === 'vitals' && !e.doc.supersededBy && e.level === 'content')
     .sort((a, b) => b.doc.documentDate.localeCompare(a.doc.documentDate))[0]
   const myRequests = reportRequests.filter(r => r.patientId === patient.id)
-  const hasPending = myRequests.some(r => r.status === 'pending')
-
-  const submitRequest = () => {
-    if (!requestReport(patient.id, reqDays, reqReason)) return
-    setRequesting(false); setReqReason('')
-    toast.show('Request sent to your care team')
-  }
 
   return (
     <Page title="Documents"
@@ -197,25 +189,8 @@ export function DocsTab({ go }: { go: (t: string) => void }) {
       <UploadSheet open={upload} onClose={() => setUpload(false)} patientId={patient.id} onOpenExisting={setOpenId} />
       <ShareSheet open={share} onClose={() => setShare(false)} patientId={patient.id} />
 
-      <BottomSheet open={requesting} onClose={() => setRequesting(false)} title="📊 Request a vitals report"
-        subtitle="Your care team builds it from your readings, signs it, and it appears here as an official document."
-        footer={<><SheetButton tone="ghost" onClick={() => setRequesting(false)}>Cancel</SheetButton><SheetButton onClick={submitRequest}>Send request</SheetButton></>}>
-        <Field label="Period">
-          <div className="grid grid-cols-3 gap-2">
-            {[7, 30, 90].map(d => (
-              <button key={d} onClick={() => setReqDays(d)}
-                className={`py-3 rounded-xl text-xs font-semibold border-2 ${reqDays === d ? 'border-teal-600 bg-teal-50 text-teal-800' : 'border-gray-100 bg-gray-50 text-gray-600'}`}>
-                Last {d} days
-              </button>
-            ))}
-          </div>
-        </Field>
-        <Field label="What is it for? (optional)">
-          <textarea rows={2} value={reqReason} onChange={e => setReqReason(e.target.value)} className={`${inputCls} resize-none`}
-            placeholder="e.g. insurance claim, second opinion, employer" />
-        </Field>
-        {hasPending && <p className="text-[11px] text-amber-700 bg-amber-50 rounded-xl px-3 py-2">You already have a request waiting — you can still send another.</p>}
-      </BottomSheet>
+      <ReportRequestSheet open={requesting} onClose={() => setRequesting(false)}
+        onSent={() => toast.show('Request sent to your care team')} />
     </Page>
   )
 }

@@ -7,7 +7,7 @@ import type { AppUser } from '@/shared/lib/types'
 import { backendConfigured } from '@/shared/api/supabase'
 import { mayHaveSession, resumeBackendSession, returningFromProvider, returningToReset, signInWithEmail } from '@/shared/api/authBackend'
 import { AuthShell } from './AuthShell'
-import { AuthBack, AuthButton, AuthDivider, AuthField, AuthHeading, IconInput, PasswordInput, authInputCls } from './authKit'
+import { AuthButton, AuthDivider, AuthField, AuthHeading, AuthSwitch, IconInput, PasswordInput, authInputCls } from './authKit'
 import { ForgotPassword } from './ForgotPassword'
 import { ConfirmEmail, LiveRecovery, useAdoptAccount } from './LiveAuth'
 import { SocialButtons } from './SocialAuth'
@@ -51,7 +51,8 @@ export function LoginScreen() {
   return (
     <AuthShell welcome={view === 'welcome'} entrance onHome={() => setView('welcome')}>
       <Loading when={resuming} label="Signing you in…" />
-      <div key={view} className="screen-in">
+      {/* Welcome fills the height left under the tour, so no band of white is left at the foot. */}
+      <div key={view} className={`screen-in ${view === 'welcome' ? 'flex flex-1 flex-col' : ''}`}>
         {view === 'welcome' && (
           <WelcomeScreen onGetStarted={() => setView('register')} onSignIn={() => signIn()} onDemo={() => signIn(true)} />
         )}
@@ -60,7 +61,7 @@ export function LoginScreen() {
             onConfirm={sentTo => { setEmail(sentTo); setView('confirm') }} />
         )}
         {view === 'signin' && (
-          <SignInForm initialDemoOpen={demoOpen} initialEmail={email} notice={notice} onBack={() => setView('welcome')} onRegister={() => setView('register')}
+          <SignInForm initialDemoOpen={demoOpen} initialEmail={email} notice={notice} onRegister={() => setView('register')}
             onForgot={typed => { setEmail(typed); setView('forgot') }}
             onUnconfirmed={typed => { setEmail(typed); setView('confirm') }} />
         )}
@@ -74,12 +75,12 @@ export function LoginScreen() {
   )
 }
 
-function SignInForm({ initialDemoOpen, initialEmail, notice, onBack, onRegister, onForgot, onUnconfirmed }: {
+function SignInForm({ initialDemoOpen, initialEmail, notice, onRegister, onForgot, onUnconfirmed }: {
   /** Live mode: the password was right but the email has not been confirmed yet. */
   onUnconfirmed: (email: string) => void
   /** A problem carried in from provider sign-in, shown until the user types. */
   notice: string
-  initialDemoOpen: boolean; initialEmail: string; onBack: () => void; onRegister: () => void
+  initialDemoOpen: boolean; initialEmail: string; onRegister: () => void
   /** Opens password recovery, carrying over whatever email is typed. */
   onForgot: (email: string) => void
 }) {
@@ -112,8 +113,8 @@ function SignInForm({ initialDemoOpen, initialEmail, notice, onBack, onRegister,
   }
 
   return (
-    <form className="auth-stagger flex flex-col gap-3.5" onSubmit={e => { e.preventDefault(); handleLogin() }}>
-      <AuthBack onClick={onBack} />
+    <form className="auth-stagger flex flex-col gap-3" onSubmit={e => { e.preventDefault(); handleLogin() }}>
+      {/* No back button: as on sign-up, the logo above is the way back to welcome. */}
       <AuthHeading center title="Welcome back" subtitle="Sign in to continue your care." />
 
       <AuthField label="Email Address">
@@ -143,17 +144,10 @@ function SignInForm({ initialDemoOpen, initialEmail, notice, onBack, onRegister,
       <AuthDivider>Or continue with</AuthDivider>
       <SocialButtons />
 
-      {/* One line, so the whole form fits the screen without scrolling. */}
-      <p className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs text-gray-600">
-        <span>
-          New here?{' '}
-          <button type="button" onClick={onRegister} className="font-bold text-teal-700 underline underline-offset-4 hover:text-teal-800">Create an account</button>
-        </span>
-        {!backendConfigured && <>
-          <span aria-hidden className="h-3 w-px bg-gray-300" />
-          <button type="button" onClick={() => setShowDemo(true)} className="font-semibold text-teal-700 underline-offset-4 hover:underline">Demo accounts</button>
-        </>}
-      </p>
+      <AuthSwitch prompt="New to mCare?" action="Create an account" onClick={onRegister} />
+      {!backendConfigured && (
+        <button type="button" onClick={() => setShowDemo(true)} className="self-center text-[10px] font-semibold text-teal-700 underline-offset-4 hover:underline">Demo accounts</button>
+      )}
 
       <BottomSheet open={showDemo} onClose={() => setShowDemo(false)} title="Demo accounts"
         subtitle={<>Tap any account to fill it in · Password for all: <span className="font-mono font-bold text-gray-700">mcare123</span></>}>

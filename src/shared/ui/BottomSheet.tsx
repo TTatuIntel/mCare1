@@ -43,8 +43,14 @@ export function BottomSheet({ open, onClose, title, subtitle, children, footer }
         style={{ borderRadius: '24px 24px 0 0', maxHeight: '86%' }}>
         <div className="px-5 pt-3 pb-2 flex-shrink-0">
           <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-3 @2xl:hidden" />
-          {title && <p className="text-base font-bold text-gray-900">{title}</p>}
-          {subtitle && <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>}
+          {/* Every sheet can be closed from its corner, as well as by Esc or a tap outside. */}
+          <div className="flex items-start gap-3">
+            <div className="min-w-0 flex-1">
+              {title && <p className="text-base font-bold text-gray-900">{title}</p>}
+              {subtitle && <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>}
+            </div>
+            <CloseButton onClick={onClose} />
+          </div>
         </div>
         <div className="px-5 overflow-y-auto flex-1 pb-3" style={{ scrollbarWidth: 'none' }}>{children}</div>
         {footer && <div className="px-5 pt-2 pb-8 flex gap-2 flex-shrink-0 border-t border-gray-50">{footer}</div>}
@@ -52,6 +58,18 @@ export function BottomSheet({ open, onClose, title, subtitle, children, footer }
     </div>
   )
   return root ? createPortal(sheet, root) : sheet
+}
+
+/** The round "x" that closes a sheet, popup or dismissible card. */
+export function CloseButton({ onClick, label = 'Close', className = '' }: { onClick: () => void; label?: string; className?: string }) {
+  return (
+    <button type="button" onClick={onClick} aria-label={label}
+      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-500 transition-all hover:bg-gray-200 hover:text-gray-800 active:scale-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 ${className}`}>
+      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" aria-hidden="true">
+        <path d="M6 6l12 12" /><path d="M18 6 6 18" />
+      </svg>
+    </button>
+  )
 }
 
 export function SheetButton({ children, onClick, tone = 'primary', disabled }: {

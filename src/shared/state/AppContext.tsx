@@ -456,7 +456,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     updateUser(userId, { verificationCode: code })
     sendVerification(u, code)
   }
-  /** The user tapped "Verify my email" in the email. Proves the address just like typing the code. */
+  /** The user tapped "Activate account" in the email. Proves the address just like typing the code. */
   const verifyByLink = (userId: string, token: string) => {
     const u = findUser(userId)
     return !!u && u.status === 'unverified' && !!u.verificationCode && token === activationToken(u.id, u.verificationCode)
