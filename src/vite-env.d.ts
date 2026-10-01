@@ -7,3 +7,6 @@ interface ImportMetaEnv {
   readonly VITE_SUPABASE_ANON_KEY?: string
 }
 interface ImportMeta { readonly env: ImportMetaEnv }
+
+/** The `version` in package.json, set at build time by vite.config.ts. */
+declare const __APP_VERSION__: string

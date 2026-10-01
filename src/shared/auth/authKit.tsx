@@ -1,5 +1,5 @@
 /** Form controls shared by the signed-out screens: sign in, create account and verification. */
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { passwordStrength } from '@/shared/state/auth'
 
 /* ─── Line icons (24px grid, stroke follows the text colour) ────────── */
@@ -42,27 +42,103 @@ const CLUSTER: { icon: AuthIconName; pos: string; tucked: string; delay: string 
   { icon: 'users', pos: 'right-[5%] top-[42%]', tucked: '-translate-x-16 translate-y-3', delay: '-4.8s' },
 ]
 
+/** How close (px) the pointer has to be before an icon leans in to it. */
+const MAGNET_REACH = 130
+/** How much of the gap to the pointer a nearby icon closes. */
+const MAGNET_PULL = 0.3
+/** How much a nearby icon grows. */
+const MAGNET_GROW = 0.4
+/** After a tap, how long the icons hold their lean before settling back. */
+const TOUCH_SETTLE_MS = 600
+
 /**
  * The logo (`children`) with the feature icons floating around it, straight on
  * the page: no card or bubble behind any of them. While `open` is false the
  * icons stay tucked away; they spring out one by one once it turns true,
  * `openDelayMs` later (time for the logo to arrive).
+ *
+ * The icons follow the pointer: all of them drift a little with it (each at
+ * its own depth), and the ones it comes close to lean in and grow. `active`
+ * is the icon of the feature on stage, which moves the way the real thing does.
  */
-export function BrandCluster({ children, className = '', open = true, openDelayMs = 0 }: {
-  children?: React.ReactNode; className?: string; open?: boolean; openDelayMs?: number
+export function BrandCluster({ children, className = '', open = true, openDelayMs = 0, active }: {
+  children?: React.ReactNode; className?: string; open?: boolean; openDelayMs?: number; active?: AuthIconName
 }) {
+  const rootRef = useRef<HTMLDivElement>(null)
+  const magnets = useRef<(HTMLSpanElement | null)[]>([])
+
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    let point: { x: number; y: number } | null = null
+    let frame = 0
+    let settle: ReturnType<typeof setTimeout> | undefined
+
+    const paint = () => {
+      frame = 0
+      const box = root.getBoundingClientRect()
+      const at = point
+      magnets.current.forEach((el, i) => {
+        // Measure the slot, not the icon: the slot doesn't move with the lean.
+        const slot = el?.parentElement
+        if (!el || !slot) return
+        // box.width is 0 while this size's layout is hidden.
+        if (!at || !box.width) { el.style.transform = ''; return }
+        const r = slot.getBoundingClientRect()
+        const dx = at.x - (r.left + r.width / 2), dy = at.y - (r.top + r.height / 2)
+        const near = Math.max(0, 1 - Math.hypot(dx, dy) / MAGNET_REACH)
+        const depth = 3 + (i % 3) * 2
+        const driftX = Math.max(-1, Math.min(1, (at.x - (box.left + box.width / 2)) / box.width)) * depth
+        const driftY = Math.max(-1, Math.min(1, (at.y - (box.top + box.height / 2)) / box.height)) * depth
+        const x = driftX + dx * near * MAGNET_PULL, y = driftY + dy * near * MAGNET_PULL
+        el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) scale(${(1 + near * MAGNET_GROW).toFixed(3)})`
+      })
+    }
+    const schedule = () => { frame ||= requestAnimationFrame(paint) }
+    const follow = (e: PointerEvent) => { clearTimeout(settle); point = { x: e.clientX, y: e.clientY }; schedule() }
+    const rest = () => { clearTimeout(settle); point = null; schedule() }
+    // A finger has no hover: hold the lean briefly after it lifts, so a tap is seen.
+    const lift = (e: PointerEvent) => {
+      if (e.pointerType === 'mouse') return
+      clearTimeout(settle)
+      settle = setTimeout(rest, TOUCH_SETTLE_MS)
+    }
+
+    window.addEventListener('pointermove', follow, { passive: true })
+    window.addEventListener('pointerdown', follow, { passive: true })
+    window.addEventListener('pointerup', lift)
+    window.addEventListener('pointercancel', lift)
+    window.addEventListener('blur', rest)
+    document.documentElement.addEventListener('pointerleave', rest)
+    return () => {
+      window.removeEventListener('pointermove', follow)
+      window.removeEventListener('pointerdown', follow)
+      window.removeEventListener('pointerup', lift)
+      window.removeEventListener('pointercancel', lift)
+      window.removeEventListener('blur', rest)
+      document.documentElement.removeEventListener('pointerleave', rest)
+      cancelAnimationFrame(frame)
+      clearTimeout(settle)
+    }
+  }, [])
+
   return (
-    <div className={`relative mx-auto w-64 h-28 flex items-end justify-center ${className}`}>
-      {CLUSTER.map((c, i) => (
-        <span key={c.icon} aria-hidden style={{ transitionDelay: open ? `${openDelayMs + i * 70}ms` : '0ms' }}
-          className={`absolute text-teal-700 transition-all motion-reduce:transition-none ${c.pos} ${open
-            ? 'duration-500 ease-[cubic-bezier(.3,1.5,.5,1)]'
-            : `duration-200 ease-in opacity-0 scale-50 ${c.tucked}`}`}>
-          <span className="auth-float flex" style={{ animationDelay: c.delay }}>
-            <AuthIcon name={c.icon} className="w-6 h-6" />
+    <div ref={rootRef} className={`relative mx-auto w-64 h-28 flex items-end justify-center ${className}`}>
+      {CLUSTER.map((c, i) => {
+        const on = open && c.icon === active
+        return (
+          <span key={c.icon} aria-hidden style={{ transitionDelay: open ? `${openDelayMs + i * 70}ms` : '0ms' }}
+            className={`absolute text-teal-700 transition-all motion-reduce:transition-none ${c.pos} ${open
+              ? 'duration-500 ease-[cubic-bezier(.3,1.5,.5,1)]'
+              : `duration-200 ease-in opacity-0 scale-50 ${c.tucked}`}`}>
+            <span ref={el => { magnets.current[i] = el }} className="flex transition-transform duration-300 ease-out will-change-transform">
+              <span className={`auth-float flex transition-[scale,color] duration-300 ${on ? 'scale-125 text-teal-600' : ''}`} style={{ animationDelay: c.delay }}>
+                <span className={`flex ${on ? `auth-icon-${c.icon}` : ''}`}><AuthIcon name={c.icon} className="w-6 h-6" /></span>
+              </span>
+            </span>
           </span>
-        </span>
-      ))}
+        )
+      })}
       {children}
     </div>
   )

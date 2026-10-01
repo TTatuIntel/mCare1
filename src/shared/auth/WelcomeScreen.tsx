@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { BottomSheet } from '@/shared/ui/BottomSheet'
 import MCareLogo from '@/shared/layout/MCareLogo'
-import { AuthDivider, AuthIcon, TrustBadges, type AuthIconName } from './authKit'
+import { AuthDivider, AuthIcon } from './authKit'
 import { SocialButtons } from './SocialAuth'
 
 const SUPPORT_EMAIL = 'support@matendocare.com'
@@ -43,6 +43,44 @@ function HelpSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   )
 }
 
+/* ─── About the application ─────────────────────────────────────────── */
+
+const OWNER = 'mcare.com'
+const DEVELOPER = 'Tattu Intel'
+const YEAR = new Date().getFullYear()
+/** From package.json. A dev server started before the version was wired in has no value yet. */
+const VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : ''
+
+function AboutSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const rows = [
+    ...(VERSION ? [{ label: 'Version', value: VERSION, mono: true }] : []),
+    { label: 'Owner', value: OWNER },
+    { label: 'Developed by', value: DEVELOPER },
+    { label: 'Support', value: SUPPORT_EMAIL },
+  ] as { label: string; value: string; mono?: boolean }[]
+  return (
+    <BottomSheet open={open} onClose={onClose} title="About mCare" subtitle="Your health, our priority">
+      <div className="flex flex-col gap-3">
+        <div className="flex justify-center py-1"><MCareLogo size="sm" /></div>
+        <p className="text-center text-xs text-gray-500 leading-relaxed">
+          One app for you and your care team: vitals, medicines and meals, appointments, records and emergency help.
+        </p>
+        <dl className="rounded-xl border border-gray-100 bg-gray-50 px-3">
+          {rows.map(r => (
+            <div key={r.label} className="flex items-center justify-between gap-3 border-b border-gray-100 py-2.5 text-xs last:border-0">
+              <dt className="text-gray-500">{r.label}</dt>
+              <dd className={`font-semibold text-gray-900 truncate ${r.mono ? 'font-mono' : ''}`}>{r.value}</dd>
+            </div>
+          ))}
+        </dl>
+        <p className="text-center text-[11px] text-gray-400">
+          © <span className="font-mono">{YEAR}</span> {OWNER}. All rights reserved.
+        </p>
+      </div>
+    </BottomSheet>
+  )
+}
+
 /* ─── Welcome ───────────────────────────────────────────────────────── */
 
 /**
@@ -56,26 +94,35 @@ export function WelcomeScreen({ onGetStarted, onSignIn, onDemo }: {
   onDemo: () => void
 }) {
   const [helpOpen, setHelpOpen] = useState(false)
+  const [aboutOpen, setAboutOpen] = useState(false)
 
   return (
-    <div className="flex flex-col gap-2.5 -mt-2">
-      <div className="relative rounded-2xl bg-white/60 backdrop-blur-md ring-1 ring-white/20 px-4 py-3.5 text-center animate-in fade-in slide-in-from-bottom-2 duration-500">
-        <h2 className="text-base @2xl:text-lg @5xl:text-xl font-black text-gray-900 font-display">Let’s get you started</h2>
-        <p className="text-[11px] @2xl:text-xs text-gray-500 mt-1.5">Create your account or sign in.</p>
+    <div className="flex flex-col gap-3">
+      {/* The one place to act, straight on the page: no card behind it. */}
+      <section aria-labelledby="welcome-start" className="text-center">
+        <h2 id="welcome-start" className="text-lg font-black text-gray-900 font-display leading-tight">Let’s get you started</h2>
+        <p className="mt-1 text-xs text-gray-600">New to mCare? Create your account in a minute.</p>
 
-        {/* Mobile and tablet: as wide as its label. Web: fills the card. */}
-        <button type="button" onClick={onGetStarted}
-          className="group relative overflow-hidden mt-3 px-6 py-2 @2xl:px-8 @2xl:py-2.5 @5xl:w-full rounded-xl bg-teal-700 text-white text-xs @2xl:text-sm font-bold shadow-sm shadow-teal-700/30 flex items-center justify-center gap-1.5 transition-all duration-300 hover:bg-teal-800 hover:shadow-md active:scale-[.98]">
-          <span aria-hidden className="auth-sheen absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent" />
-          <span className="relative">Get Started</span>
-          <AuthIcon name="arrow" className="relative w-3.5 h-3.5 @2xl:w-4 @2xl:h-4 transition-transform group-hover:translate-x-1" />
-        </button>
+        {/* Get Started: a soft glow breathes under it, a sheen crosses it, and the arrow sits in a frosted tile. */}
+        <div className="relative mx-auto mt-3.5 w-56 @5xl:w-64">
+          <span aria-hidden className="auth-glow absolute inset-x-6 -bottom-1.5 h-8 rounded-full bg-teal-500/60 blur-xl" />
+          <button type="button" onClick={onGetStarted}
+            className="group relative w-full overflow-hidden rounded-full bg-teal-700 py-1.5 pl-5 pr-1.5 flex items-center text-white text-sm font-bold ring-1 ring-inset ring-white/20 shadow-lg shadow-teal-700/30 transition-all duration-300 hover:-translate-y-0.5 hover:bg-teal-800 hover:shadow-xl active:translate-y-0 active:scale-[.97] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-teal-500/40">
+            <span aria-hidden className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/15 to-transparent" />
+            <span aria-hidden className="auth-sheen absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent" />
+            {/* pl-9 balances the arrow tile, so the label stays centred. */}
+            <span className="relative flex-1 pl-9 text-center">Get Started</span>
+            <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/15 ring-1 ring-inset ring-white/25 backdrop-blur-sm transition-colors group-hover:bg-white/25">
+              <span className="auth-nudge flex"><AuthIcon name="arrow" className="w-4 h-4" /></span>
+            </span>
+          </button>
+        </div>
 
-        <p className="text-[11px] @2xl:text-xs text-gray-500 text-center mt-2.5">
-          Already have an account?{‘ ‘}
-          <button type="button" onClick={onSignIn} className="font-bold text-teal-700 underline-offset-4 hover:underline">Sign in</button>
+        <p className="mt-3.5 text-xs text-gray-600">
+          Already have an account?{' '}
+          <button type="button" onClick={onSignIn} className="font-bold text-teal-700 underline underline-offset-4 hover:text-teal-800">Sign in</button>
         </p>
-      </div>
+      </section>
 
       <AuthDivider>Or continue with</AuthDivider>
       <SocialButtons />
@@ -87,11 +134,19 @@ export function WelcomeScreen({ onGetStarted, onSignIn, onDemo }: {
           <AuthIcon name="help" className="w-3 h-3 @2xl:w-3.5 @2xl:h-3.5" />
           Help &amp; support
         </button>
+        <span aria-hidden className="h-2 w-px bg-gray-300" />
+        <button type="button" onClick={() => setAboutOpen(true)} className="underline-offset-4 hover:underline">About</button>
       </div>
 
-      <TrustBadges className="justify-center gap-x-3 gap-y-1 text-[9px] @2xl:text-[10px] text-gray-400 @5xl:hidden" />
+      <p className="text-center text-[9px] @2xl:text-[10px] text-gray-400 leading-relaxed">
+        © <span className="font-mono">{YEAR}</span> {OWNER} · All rights reserved
+        <br />
+        Developed by <span className="font-semibold text-gray-500">{DEVELOPER}</span>
+        {VERSION && <> · Version <span className="font-mono font-semibold text-gray-500">{VERSION}</span></>}
+      </p>
 
       <HelpSheet open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <AboutSheet open={aboutOpen} onClose={() => setAboutOpen(false)} />
     </div>
   )
 }

@@ -134,6 +134,9 @@ body {
   35%, 100% { transform: translateX(520%) skewX(-20deg); }
 }
 .auth-sheen { animation: auth-sheen 3.6s ease-in-out infinite; }
+/* Get Started: its arrow keeps nudging forward. */
+@keyframes auth-nudge { 0%, 100% { transform: translateX(-1px); } 50% { transform: translateX(3px); } }
+.auth-nudge { animation: auth-nudge 1.4s ease-in-out infinite; }
 /* Welcome tour build-up: tiles drop in one after another with a soft overshoot
    (delay set inline), then the stage unfolds beneath them. `backwards` keeps a
    tile hidden while it waits but lets its own lift/hover transforms work after. */
@@ -183,7 +186,7 @@ body {
   .auth-tile-in, .auth-stage-open, .auth-scene-in, .auth-slide-next, .auth-slide-prev,
   .auth-icon-vitals, .auth-icon-pill, .auth-icon-chat, .auth-icon-bell, .auth-icon-users { animation: none; }
   .auth-ekg { stroke-dashoffset: 0; }
-  .auth-word-up, .auth-glow { animation: none; }
+  .auth-word-up, .auth-glow, .auth-nudge, .auth-progress { animation: none; }
   .auth-ring, .auth-sheen, .auth-halo, .auth-leave-next, .auth-leave-prev { animation: none; opacity: 0; }
 }
 

@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
 
 import siteConfiguration from './.figma/make/site.json'
+import packageJson from './package.json'
 
 
 // Vite config — https://vitejs.dev/config/
@@ -13,6 +14,8 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: process.env.FIGMA_PUBLIC_URL ? `${process.env.FIGMA_PUBLIC_URL}/` : '/',
+    // The app version shown on the welcome screen and in About.
+    define: { __APP_VERSION__: JSON.stringify(packageJson.version) },
     build: {
       sourcemap: emitSourcemaps ? 'inline' : false,
       minify: !emitSourcemaps,

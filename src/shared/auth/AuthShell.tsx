@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import MCareLogo from '@/shared/layout/MCareLogo'
 import { useSplashDone } from '@/shared/layout/splashSignal'
-import { AuthIcon, BrandCluster, TrustBadges, type AuthIconName } from './authKit'
+import { AuthIcon, BrandCluster, type AuthIconName } from './authKit'
 
-/** How long each feature stays on stage before the next one takes over. */
+/** How long each feature stays on stage before the next one takes over (the progress bar times it). */
 const AUTO_MS = 3000
 /** Horizontal drag (px) on the stage that counts as a swipe. */
 const SWIPE_PX = 40
@@ -280,24 +280,27 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
 
         <div className="w-full flex items-center justify-center gap-4 text-left @5xl:justify-start @5xl:gap-7">
           {/* The preview sits straight on the page: no tile or card behind it. */}
-          <div aria-hidden className={`relative w-28 h-28 shrink-0 flex items-center justify-center @5xl:w-36 @5xl:h-36 ${on('auth-scene-in')}`}>
+          <div aria-hidden className={`relative w-28 h-20 shrink-0 flex items-center justify-center @5xl:w-36 @5xl:h-36 ${on('auth-scene-in')}`}>
             <div className={`relative w-full h-full flex items-center justify-center ${on('auth-float')}`}><s.Scene /></div>
           </div>
-          {(['flex @5xl:hidden text-xs gap-1', 'hidden @5xl:flex text-[15px] gap-2'] as const).map(size => (
-            <div key={size} className={`${size} min-w-0 max-w-[16rem] flex-col @5xl:max-w-sm`}>
-              <p style={after(wordsDone)} className={`${on('auth-item-in')} text-gray-500 leading-snug`}>{s.body}</p>
-              <ul className="mt-0.5 flex flex-col gap-1 @5xl:gap-1.5">
-                {s.points.map((pt, i) => (
-                  <li key={pt} style={after(wordsDone + 140 + i * 140)} className={`${on('auth-item-in')} flex items-center gap-1.5 font-semibold text-gray-800`}>
-                    <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-teal-700 text-white @5xl:h-4 @5xl:w-4">
-                      <svg viewBox="0 0 24 24" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth={4} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M5 12.5l4.5 4.5L19 7.5" />
-                      </svg>
-                    </span>
-                    {pt}
-                  </li>
-                ))}
-              </ul>
+          {/* Mobile and tablet: one sentence, so the actions below stay the focus. Web has room for the list. */}
+          {([['flex @5xl:hidden text-[13px]', false], ['hidden @5xl:flex text-[15px] gap-2', true]] as const).map(([size, withPoints]) => (
+            <div key={size} className={`${size} min-w-0 max-w-[13rem] flex-col @5xl:max-w-sm`}>
+              <p style={after(wordsDone)} className={`${on('auth-item-in')} text-gray-600 leading-snug`}>{s.body}</p>
+              {withPoints && (
+                <ul className="mt-0.5 flex flex-col gap-1.5">
+                  {s.points.map((pt, i) => (
+                    <li key={pt} style={after(wordsDone + 140 + i * 140)} className={`${on('auth-item-in')} flex items-center gap-1.5 font-semibold text-gray-800`}>
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-teal-700 text-white">
+                        <svg viewBox="0 0 24 24" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth={4} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M5 12.5l4.5 4.5L19 7.5" />
+                        </svg>
+                      </span>
+                      {pt}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           ))}
         </div>
@@ -312,14 +315,14 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
       {/* Mobile and tablet: the logo stays put with the icons around it. Web: it
           rests here (its place is kept) until the user turns to the welcome card. */}
       <div className={r0.cls} style={r0.style}>
-        <BrandCluster className="@5xl:hidden"><MCareLogo size="lg" /></BrandCluster>
+        <BrandCluster className="@5xl:hidden" active={SLIDES[active].icon}><MCareLogo size="lg" /></BrandCluster>
         <div className="hidden @5xl:block h-[72px]">{logoHere && <FlyingLogo />}</div>
       </div>
 
       <div className="w-full max-w-2xl flex flex-col gap-1 @5xl:gap-2">
         {/* One message at a time, straight on the page. It moves on by itself; tap or swipe to change it. */}
         <div role="button" tabIndex={0} aria-label="Show the next feature" aria-roledescription="carousel" style={stageIn.style}
-          className={`${stageIn.className} grid items-start min-h-[13.5rem] cursor-pointer touch-pan-y select-none rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 @5xl:min-h-[19rem]`}
+          className={`${stageIn.className} grid items-start min-h-[11.25rem] cursor-pointer touch-pan-y select-none rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 @5xl:min-h-[19rem]`}
           onPointerEnter={e => { if (e.pointerType === 'mouse') setHeld(true) }}
           onPointerLeave={() => { setHeld(false); drag.current = null }}
           onPointerDown={e => { drag.current = { x: e.clientX, swiped: false } }}
@@ -337,8 +340,6 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
           {leaving !== null && renderSlide(SLIDES[leaving], 'out')}
           <div aria-live="polite" className="col-start-1 row-start-1 grid">{renderSlide(SLIDES[active], 'in')}</div>
         </div>
-
-        <TrustBadges className="hidden @5xl:flex gap-x-6 gap-y-2 pt-2 text-xs text-gray-500" />
       </div>
     </section>
   )
