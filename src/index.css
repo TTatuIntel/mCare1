@@ -1,0 +1,363 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;0,9..144,700;1,9..144,400&family=DM+Mono:wght@400;500&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --color-primary: #0a6e6e;
+  --color-primary-light: #0d8a8a;
+  --color-primary-dark: #064f4f;
+  --color-accent: #00c9a7;
+  --color-accent-light: #e6faf7;
+  --color-surface: #f5f7fa;
+  --color-card: #ffffff;
+  --color-border: #e2e8f0;
+  --color-muted: #6b7280;
+  --color-text: #0f172a;
+  --color-text-light: #475569;
+  --color-danger: #ef4444;
+  --color-warning: #f59e0b;
+  --color-success: #10b981;
+  --color-info: #3b82f6;
+
+  --font-sans: 'DM Sans', system-ui, sans-serif;
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-mono: 'DM Mono', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: #e8edf2;
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.15);
+  border-radius: 2px;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Sheet & screen motion (respecting reduced-motion) */
+@keyframes sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes sheet-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes screen-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.sheet-up { animation: sheet-up .28s cubic-bezier(.2,.8,.2,1); }
+.sheet-fade { animation: sheet-fade .2s ease-out; }
+/* Tablet and web: a screen's stack of cards flows into two columns, filled top to bottom then across.
+   Put `card-flow` on the element whose children are the cards (`Page` does this itself). The title row
+   (first child), plain text, search boxes and segmented controls stay full width; add `span-all` to
+   anything else that should. A screen with a single card keeps it full width. */
+@container (min-width: 42rem) {
+  .card-flow { display: block; columns: 2; column-gap: 1rem; }
+  .card-flow > * { break-inside: avoid; margin-bottom: 1rem; width: 100%; }
+  .card-flow > :first-child,
+  .card-flow > p,
+  .card-flow > input,
+  .card-flow > .bg-gray-100,
+  .card-flow > .span-all,
+  .card-flow > :nth-child(2):last-child { column-span: all; }
+}
+
+/* Tablet and web: a bottom sheet becomes a centred dialog. Matches every sheet that is pinned to the
+   bottom (`bottom-0`), shared or hand-rolled; full-screen layers (`inset-0`) are left alone. */
+@keyframes dialog-in { from { opacity: 0; transform: translateY(12px) scale(.98); } to { opacity: 1; transform: none; } }
+@container (min-width: 42rem) {
+  .sheet-up.bottom-0 {
+    left: 50%; right: auto; top: 50%; bottom: auto;
+    width: min(30rem, 92%); max-height: 86%;
+    translate: -50% -50%;
+    border-radius: 24px !important;
+    overflow-y: auto;
+    animation: dialog-in .22s cubic-bezier(.2,.8,.2,1);
+  }
+}
+.screen-in { animation: screen-in .22s ease-out; }
+/* Loading popup logo: settles in over the frosted page. */
+@keyframes loader-pop { from { opacity: 0; transform: scale(.94) translateY(4px); } to { opacity: 1; transform: none; } }
+.loader-pop { animation: loader-pop .24s cubic-bezier(.2,.8,.2,1); }
+/* Boot splash: the logo comes into focus, then the tagline rises in after it. */
+@keyframes splash-logo-in { from { opacity: 0; transform: scale(.92) translateY(8px); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes splash-tag-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.splash-logo-in { animation: splash-logo-in .6s cubic-bezier(.2,.8,.2,1) both; }
+.splash-tag-in { animation: splash-tag-in .5s ease-out .3s both; }
+/* Welcome screen: sections rise in one after another (delay set inline). */
+@keyframes rise-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+.rise-in { animation: rise-in .55s cubic-bezier(.2,.8,.2,1) both; }
+/* Signed-out pages: floating icon bubbles, the drifting background glow,
+   the shake on a wrong code or password, and the success tick. */
+@keyframes auth-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+@keyframes auth-drift { 0%, 100% { transform: none; } 50% { transform: translate(24px, 16px) scale(1.08); } }
+@keyframes auth-shake { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
+@keyframes auth-pop { 0% { opacity: 0; transform: scale(.6); } 60% { opacity: 1; transform: scale(1.08); } 100% { transform: none; } }
+@keyframes auth-check { from { stroke-dashoffset: 24; } to { stroke-dashoffset: 0; } }
+.auth-float { animation: auth-float 3.2s ease-in-out infinite; }
+.auth-drift { animation: auth-drift 18s ease-in-out infinite; }
+.auth-shake { animation: auth-shake .4s ease-in-out; }
+.auth-pop { animation: auth-pop .45s cubic-bezier(.2,.8,.2,1) both; }
+.auth-check { stroke-dasharray: 24; animation: auth-check .4s ease-out .25s both; }
+/* Welcome tour stage: pieces of a scene pop in one by one (delay set inline),
+   the heart trace draws itself on a loop, and the SOS button sends out rings. */
+@keyframes auth-item-in { from { opacity: 0; transform: translateY(8px) scale(.94); } to { opacity: 1; transform: none; } }
+@keyframes auth-ekg { 0% { stroke-dashoffset: 100; } 60%, 100% { stroke-dashoffset: 0; } }
+@keyframes auth-ring { from { opacity: .5; transform: scale(.8); } to { opacity: 0; transform: scale(2.2); } }
+.auth-item-in { animation: auth-item-in .45s cubic-bezier(.2,.8,.2,1) both; }
+.auth-ekg { stroke-dasharray: 100; animation: auth-ekg 2.4s ease-in-out infinite; }
+.auth-ring { animation: auth-ring 2s ease-out infinite; }
+/* Headline accent: a slow light passing through the brand teal. */
+@keyframes auth-shimmer { to { background-position: -200% 0; } }
+.auth-shimmer {
+  background: linear-gradient(90deg, #0f766e 0%, #14b8a6 50%, #0f766e 100%) 0 0 / 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: auth-shimmer 5s linear infinite;
+}
+/* Get Started: a sheen crosses the button every few seconds. */
+@keyframes auth-sheen {
+  0% { transform: translateX(0) skewX(-20deg); }
+  35%, 100% { transform: translateX(520%) skewX(-20deg); }
+}
+.auth-sheen { animation: auth-sheen 3.6s ease-in-out infinite; }
+/* Welcome tour build-up: tiles drop in one after another with a soft overshoot
+   (delay set inline), then the stage unfolds beneath them. `backwards` keeps a
+   tile hidden while it waits but lets its own lift/hover transforms work after. */
+@keyframes auth-tile-in {
+  0% { opacity: 0; transform: translateY(18px) scale(.86); filter: blur(4px); }
+  60% { opacity: 1; transform: translateY(-3px) scale(1.03); filter: none; }
+  100% { opacity: 1; transform: none; }
+}
+@keyframes auth-stage-open { from { opacity: 0; transform: translateY(10px) scale(.97); } to { opacity: 1; transform: none; } }
+.auth-tile-in { animation: auth-tile-in .6s cubic-bezier(.2,.8,.2,1) backwards; }
+.auth-stage-open { animation: auth-stage-open .55s cubic-bezier(.2,.8,.2,1) both; }
+/* Changing feature: the preview scales in while the words slide from the side the tour is moving to. */
+@keyframes auth-scene-in { from { opacity: 0; transform: scale(.88); } to { opacity: 1; transform: none; } }
+@keyframes auth-slide-next { from { opacity: 0; transform: translateX(18px); filter: blur(3px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes auth-slide-prev { from { opacity: 0; transform: translateX(-18px); filter: blur(3px); } to { opacity: 1; transform: none; filter: none; } }
+.auth-scene-in { animation: auth-scene-in .45s cubic-bezier(.2,.8,.2,1) both; }
+.auth-slide-next { animation: auth-slide-next .45s cubic-bezier(.2,.8,.2,1) both; }
+.auth-slide-prev { animation: auth-slide-prev .45s cubic-bezier(.2,.8,.2,1) both; }
+/* The active tile's icon: a soft halo breathes behind it, and each icon moves the way the real thing does. */
+@keyframes auth-halo { 0% { opacity: .35; transform: scale(1); } 100% { opacity: 0; transform: scale(1.75); } }
+@keyframes auth-icon-beat { 0%, 30%, 60%, 100% { transform: scale(1); } 15% { transform: scale(1.28); } 45% { transform: scale(1.14); } }
+@keyframes auth-icon-tilt { 0%, 100% { transform: rotate(0); } 30% { transform: rotate(-26deg); } 65% { transform: rotate(18deg); } }
+@keyframes auth-icon-hop { 0%, 100% { transform: translateY(0); } 35% { transform: translateY(-6px); } 60% { transform: translateY(2px); } }
+@keyframes auth-icon-swing { 0%, 100% { transform: rotate(0); } 20% { transform: rotate(22deg); } 40% { transform: rotate(-18deg); } 60% { transform: rotate(12deg); } 80% { transform: rotate(-6deg); } }
+@keyframes auth-icon-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+.auth-halo { animation: auth-halo 2.2s ease-out infinite; }
+/* The tour without cards: a title rises a word at a time out of its own line, the
+   outgoing feature slips away to the side it is leaving by, and a soft light
+   breathes behind the floating preview. */
+@keyframes auth-word-up { from { transform: translateY(115%) rotate(4deg); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes auth-leave-next { to { opacity: 0; transform: translateX(-22px) scale(.97); filter: blur(4px); } }
+@keyframes auth-leave-prev { to { opacity: 0; transform: translateX(22px) scale(.97); filter: blur(4px); } }
+@keyframes auth-glow { 0%, 100% { opacity: .55; transform: scale(.92); } 50% { opacity: 1; transform: scale(1.08); } }
+.auth-word-up { animation: auth-word-up .6s cubic-bezier(.2,.8,.2,1) both; }
+.auth-leave-next { animation: auth-leave-next .32s ease-in both; pointer-events: none; }
+.auth-leave-prev { animation: auth-leave-prev .32s ease-in both; pointer-events: none; }
+.auth-glow { animation: auth-glow 4.5s ease-in-out infinite; }
+.auth-icon-vitals { animation: auth-icon-beat 1.2s ease-in-out .3s infinite; }
+.auth-icon-pill { animation: auth-icon-tilt 1.0s ease-in-out .3s infinite; }
+.auth-icon-chat { animation: auth-icon-hop 0.8s ease-in-out .3s infinite; }
+.auth-icon-bell { transform-origin: 50% 10%; animation: auth-icon-swing 1.1s ease-in-out .3s infinite; }
+.auth-icon-users { animation: auth-icon-pulse 1.3s ease-in-out .3s infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .sheet-up, .sheet-fade, .screen-in, .loader-pop, .splash-logo-in, .splash-tag-in, .rise-in,
+  .auth-float, .auth-drift, .auth-shake, .auth-pop, .auth-check,
+  .auth-item-in, .auth-ekg, .auth-shimmer,
+  .auth-tile-in, .auth-stage-open, .auth-scene-in, .auth-slide-next, .auth-slide-prev,
+  .auth-icon-vitals, .auth-icon-pill, .auth-icon-chat, .auth-icon-bell, .auth-icon-users { animation: none; }
+  .auth-ekg { stroke-dashoffset: 0; }
+  .auth-word-up, .auth-glow { animation: none; }
+  .auth-ring, .auth-sheen, .auth-halo, .auth-leave-next, .auth-leave-prev { animation: none; opacity: 0; }
+}
+
+/* Home vitals trend popover: blurs in and "solidifies", then dissolves on leave.
+   It drifts in from its anchor — down when below, up when above, sideways
+   when beside — and glides (left/top) as it follows the cursor or flips side. */
+.vital-pop {
+  transition: opacity .22s ease, filter .24s ease, transform .26s cubic-bezier(.2,.8,.2,1),
+    left .18s cubic-bezier(.2,.8,.2,1), top .18s cubic-bezier(.2,.8,.2,1);
+}
+.vital-pop[data-open='false'] {
+  opacity: 0;
+  filter: blur(6px);
+  pointer-events: none;
+}
+.vital-pop[data-open='false'][data-side='bottom'] { transform: translateY(-6px) scale(.97); }
+.vital-pop[data-open='false'][data-side='top']    { transform: translateY(6px) scale(.97); }
+.vital-pop[data-open='false'][data-side='right']  { transform: translateX(-6px) scale(.97); }
+.vital-pop[data-open='false'][data-side='left']   { transform: translateX(6px) scale(.97); }
+
+/* Frosted glass: light teal tint, heavy backdrop blur, a top-edge sheen
+   and a hairline border. The faint text shadow keeps white type legible
+   when the glass sits over the light parts of the screen. */
+.vital-glass {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.14) 0%, rgba(255,255,255,0) 38%),
+    rgba(6, 62, 62, .48);
+  -webkit-backdrop-filter: blur(18px) saturate(170%);
+  backdrop-filter: blur(18px) saturate(170%);
+  border: 1px solid rgba(255,255,255,.18);
+  box-shadow:
+    0 18px 40px -12px rgba(2, 30, 30, .45),
+    inset 0 1px 0 rgba(255,255,255,.18);
+  text-shadow: 0 1px 2px rgba(0, 20, 20, .35);
+}
+.vital-glass-caret {
+  background: rgba(6, 62, 62, .55);
+}
+/* Browsers without backdrop blur get a solid tint instead of see-through text. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .vital-glass { background: rgba(4, 46, 46, .94); }
+  .vital-glass-caret { background: rgb(4, 46, 46); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vital-pop { transition: opacity .15s linear; }
+  .vital-pop[data-open='false'][data-side] { filter: none; transform: none; }
+}
+
+/* Home "Up next" ticker: each item rises in; the active dot fills, then advances. */
+@keyframes upnext-in { from { opacity: 0; transform: translateY(8px); filter: blur(3px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes upnext-progress { from { width: 0; } to { width: 100%; } }
+.upnext-in { animation: upnext-in .45s cubic-bezier(.2,.8,.2,1); }
+.upnext-progress { animation-name: upnext-progress; animation-timing-function: linear; animation-fill-mode: forwards; }
+@media (prefers-reduced-motion: reduce) {
+  .upnext-in { animation: none; }
+  /* No auto-rotation when motion is reduced; the dots still switch items. */
+  .upnext-progress { animation: none; width: 100%; }
+}
+
+/* ─── mCare logo: hospital-monitor EKG trace ─────────────────────────
+   One 2.4s cycle drives everything, so the sweep dot, the drawn trace,
+   the color and the "m" all beat together:
+     0%    sweep starts at the far left on the flat baseline
+     ~42%  sweep crosses the QRS spike — this is the "beat"
+     100%  sweep exits right, trace has faded out behind it
+   The color (--mcare-pulse-color) is picked at random on every beat by
+   the shared pulse clock in MCareLogo.tsx and set inline on the logo.
+   The clock also sets --mcare-beat-delay so every logo on screen beats
+   in phase and the hue flips exactly on the QRS spike. */
+
+/* The trace: dash offset sweeps the stroke in from the left, then the
+   tail is erased behind it — the classic scope wipe. */
+@keyframes mcare-trace-sweep {
+  0%   { stroke-dashoffset: var(--mcare-len); }
+  55%  { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: 0; }
+}
+@keyframes mcare-trace-fade {
+  0%, 55% { opacity: 1; }
+  100%    { opacity: 0.15; }
+}
+
+/* The glowing sweep head riding along the path. */
+@keyframes mcare-sweep-dot {
+  0%   { offset-distance: 0%;   opacity: 0; }
+  4%   { opacity: 1; }
+  96%  { opacity: 1; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+
+/* "lub-dub" — timed so the big contraction lands as the sweep hits the
+   QRS spike at ~42% of the cycle. */
+@keyframes mcare-heartbeat {
+  0%, 34%    { transform: scale(1); }
+  38%        { transform: scale(1.06); }
+  41%        { transform: scale(1); }
+  45%        { transform: scale(1.13); }
+  52%, 100%  { transform: scale(1); }
+}
+
+/* Only the "m" tracks the pulse color — "Care" stays fixed.
+   Stepped, not eased: the hue flips with the spike. */
+.mcare-pulse-text {
+  color: var(--mcare-pulse-color, #047857);
+}
+.mcare-heartbeat {
+  animation: mcare-heartbeat 2.4s ease-in-out infinite;
+  animation-delay: var(--mcare-beat-delay, 0s);
+  transform-origin: center;
+}
+
+.mcare-trace {
+  color: var(--mcare-pulse-color, #047857);
+  filter: drop-shadow(0 0 2px currentColor);
+}
+.mcare-trace-path {
+  stroke-dasharray: var(--mcare-len);
+  animation:
+    mcare-trace-sweep 2.4s linear infinite,
+    mcare-trace-fade  2.4s linear infinite;
+  animation-delay: var(--mcare-beat-delay, 0s);
+}
+.mcare-sweep-dot {
+  offset-path: var(--mcare-path);
+  offset-rotate: 0deg;
+  animation: mcare-sweep-dot 2.4s linear infinite;
+  animation-delay: var(--mcare-beat-delay, 0s);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mcare-heartbeat,
+  .mcare-trace-path,
+  .mcare-sweep-dot { animation: none; }
+  .mcare-trace-path { stroke-dashoffset: 0; opacity: 1; }
+  .mcare-sweep-dot { opacity: 0; }
+  /* No beat means no color changes either — pin the resting hue. */
+  .mcare-pulse-text,
+  .mcare-trace { color: #047857; }
+}
+
+/* ─── Theme: dark mode via filter flip ───────────────────────────────
+   The app's screens use hardcoded light-palette utility classes, so a
+   real dark mode is applied as a hue-preserving invert on the whole
+   phone shell. Media (emoji glyphs, photos) is un-inverted so it still
+   reads naturally. */
+.mcare-theme-dark {
+  filter: invert(1) hue-rotate(180deg);
+}
+.mcare-theme-dark img,
+.mcare-theme-dark video,
+.mcare-theme-dark [data-no-invert] {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+/* ─── Font size scale ───────────────────────────────────────────────
+   The screens use Tailwind's rem-based text utilities (text-xs, text-sm…),
+   which ignore a container font-size. To make the user's preference
+   actually scale every label, the shell re-defines the rem-based text
+   utilities in terms of --mcare-font-scale. */
+.mcare-font-sm { --mcare-font-scale: 0.875; }
+.mcare-font-md { --mcare-font-scale: 1; }
+.mcare-font-lg { --mcare-font-scale: 1.15; }
+
+[class*='mcare-font-'] {
+  font-size: calc(1rem * var(--mcare-font-scale));
+}
+[class*='mcare-font-'] .text-\[9px\]  { font-size: calc(0.5625rem * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-\[10px\] { font-size: calc(0.625rem * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-\[11px\] { font-size: calc(0.6875rem * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-\[13px\] { font-size: calc(0.8125rem * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-xs   { font-size: calc(0.75rem  * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-sm   { font-size: calc(0.875rem * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-base { font-size: calc(1rem     * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-lg   { font-size: calc(1.125rem * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-xl   { font-size: calc(1.25rem  * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-2xl  { font-size: calc(1.5rem   * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-5xl  { font-size: calc(3rem     * var(--mcare-font-scale)); }

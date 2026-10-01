@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="<!-- figma:lang -->">
+  <head>
+    <!-- figma:head-start -->
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Open the font connections early so the splash's brand font is ready sooner. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <title><!-- figma:title --></title>
+    <!-- figma:head-end -->
+  </head>
+  <body>
+    <!-- figma:body-start -->
+    <div id="root">
+      <!-- Pre-JS: just the page background, so there's no white flash and no
+           second logo. The one splash (SplashScreen) appears when React mounts. -->
+      <div style="position:fixed;inset:0;background:linear-gradient(160deg,#d8eae8 0%,#c4d8e8 100%)"></div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+    <!-- figma:body-end -->
+  </body>
+</html>
