@@ -2,8 +2,9 @@ import { useState } from 'react'
 import { useApp, isActiveAlert } from '@/shared/state/AppContext'
 import {
   Pill, SectionHead, PATIENT_QUICK_REPLIES, useToast,
-  PortalHeader, HeroCard, QuickGrid, NoticeCard, NoticeRow, HERO_GRADIENT, levelStyle,
+  PortalHeader, HeroCard, QuickGrid, HERO_GRADIENT, levelStyle,
 } from '@/shared'
+import { AlertSummaryCard } from './alertKit'
 import type { PatientUser } from '@/shared/lib/types'
 import { evaluate, latestValid, healthScore, unitView, ago } from '@/shared/lib/vitals'
 import { countdown, toneOf, TONE_PILL, type ScheduleItem } from '@/shared/lib/schedule'
@@ -63,7 +64,12 @@ function UpNext({ items, go, onOpen }: { items: UpNextItem[]; go: (t: string) =>
 }
 
 /* ─── Home ──────────────────────────────────────────────────────────── */
-export function HomeTab({ go, openVital }: { go: (t: string) => void; openVital: (vitalId: string) => void }) {
+export function HomeTab({ go, openVital, onLog }: {
+  go: (t: string) => void
+  openVital: (vitalId: string) => void
+  /** Opens the log sheet for one vital. */
+  onLog: (vitalId: string) => void
+}) {
   const { currentUser, vitalDefs, alerts, now, unseenDocs } = useApp()
   const patient = currentUser as PatientUser
   const [openItem, setOpenItem] = useState<ScheduleItem | null>(null)
@@ -90,15 +96,7 @@ export function HomeTab({ go, openVital }: { go: (t: string) => void; openVital:
       <PortalHeader onNavigate={go} onProfile={() => go('profile')} />
 
       {/* active alerts for me */}
-      {myAlerts.length > 0 && (
-        <NoticeCard tone="red" title={`⚠ ${myAlerts.length} active alert${myAlerts.length > 1 ? 's' : ''}`} action="Details →" onAction={() => go('alerts')}>
-          {myAlerts.slice(0, 2).map(a => (
-            <NoticeRow key={a.id} onClick={() => go('alerts')}
-              title={a.type === 'sos' ? 'SOS' : `${a.vitalName} ${a.value} ${a.unit}`}
-              sub={a.status === 'acknowledged' ? 'Your doctor is reviewing' : a.status === 'escalated' ? 'Care team notified' : 'Sent to your doctor'} />
-          ))}
-        </NoticeCard>
-      )}
+      <AlertSummaryCard alerts={myAlerts} onOpenAll={() => go('alerts')} onLog={onLog} />
 
       {/* health hero card — the vitals trend popover floats over it */}
       <HeroCard

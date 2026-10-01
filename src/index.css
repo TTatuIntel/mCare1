@@ -375,7 +375,12 @@ body {
    The screens use Tailwind's rem-based text utilities (text-xs, text-sm…),
    which ignore a container font-size. To make the user's preference
    actually scale every label, the shell re-defines the rem-based text
-   utilities in terms of --mcare-font-scale. */
+   utilities in terms of --mcare-font-scale.
+
+   Every size here is in rem on purpose: the root font size carries the
+   device's own text size and the automatic fit for narrow phones
+   (shared/layout/deviceScale.ts), and this preference multiplies on top.
+   A px text size used in a screen needs a line here, or it will not scale. */
 .mcare-font-sm { --mcare-font-scale: 0.875; }
 .mcare-font-md { --mcare-font-scale: 1; }
 .mcare-font-lg { --mcare-font-scale: 1.15; }
@@ -383,14 +388,21 @@ body {
 [class*='mcare-font-'] {
   font-size: calc(1rem * var(--mcare-font-scale));
 }
+[class*='mcare-font-'] .text-\[8px\]  { font-size: calc(0.5rem * var(--mcare-font-scale)); }
 [class*='mcare-font-'] .text-\[9px\]  { font-size: calc(0.5625rem * var(--mcare-font-scale)); }
 [class*='mcare-font-'] .text-\[10px\] { font-size: calc(0.625rem * var(--mcare-font-scale)); }
 [class*='mcare-font-'] .text-\[11px\] { font-size: calc(0.6875rem * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-\[12px\] { font-size: calc(0.75rem * var(--mcare-font-scale)); }
 [class*='mcare-font-'] .text-\[13px\] { font-size: calc(0.8125rem * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-\[15px\] { font-size: calc(0.9375rem * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-\[22px\] { font-size: calc(1.375rem * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-\[44px\] { font-size: calc(2.75rem * var(--mcare-font-scale)); }
 [class*='mcare-font-'] .text-xs   { font-size: calc(0.75rem  * var(--mcare-font-scale)); }
 [class*='mcare-font-'] .text-sm   { font-size: calc(0.875rem * var(--mcare-font-scale)); }
 [class*='mcare-font-'] .text-base { font-size: calc(1rem     * var(--mcare-font-scale)); }
 [class*='mcare-font-'] .text-lg   { font-size: calc(1.125rem * var(--mcare-font-scale)); }
 [class*='mcare-font-'] .text-xl   { font-size: calc(1.25rem  * var(--mcare-font-scale)); }
 [class*='mcare-font-'] .text-2xl  { font-size: calc(1.5rem   * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-3xl  { font-size: calc(1.875rem * var(--mcare-font-scale)); }
+[class*='mcare-font-'] .text-4xl  { font-size: calc(2.25rem  * var(--mcare-font-scale)); }
 [class*='mcare-font-'] .text-5xl  { font-size: calc(3rem     * var(--mcare-font-scale)); }

@@ -140,10 +140,17 @@ function MCareMark({ pulseWidth, dotR }: { pulseWidth: number; dotR: number }) {
   )
 }
 
+/**
+ * A design px value as a length that follows the device and the user's font
+ * size (see deviceScale.ts and the font scale in index.css), so the logo
+ * always stays in proportion to the text around it.
+ */
+const scaled = (px: number) => `calc(${px / 16}rem * var(--mcare-font-scale, 1))`
+
 const SIZES = {
   sm: { font: 22, gap: 'gap-1', traceW: 72, traceH: 14, pulseWidth: 2.6, dotR: 2.2 },
-  md: { font: 30, gap: 'gap-1', traceW: 104, traceH: 19, pulseWidth: 2.9, dotR: 2.5 },
-  lg: { font: 40, gap: 'gap-1.5', traceW: 140, traceH: 26, pulseWidth: 3.2, dotR: 2.8 },
+  md: { font: 38, gap: 'gap-1', traceW: 132, traceH: 24, pulseWidth: 3.1, dotR: 2.7 },
+  lg: { font: 48, gap: 'gap-1.5', traceW: 168, traceH: 30, pulseWidth: 3.4, dotR: 3 },
   xl: { font: 64, gap: 'gap-2.5', traceW: 220, traceH: 40, pulseWidth: 3.6, dotR: 3.2 },
 } as const
 
@@ -158,14 +165,14 @@ export function MCareLogo({ size = 'lg' }: { size?: keyof typeof SIZES }) {
       style={{ ['--mcare-pulse-color' as string]: color, ['--mcare-beat-delay' as string]: delay }}
     >
       <div
-        className="font-black tracking-tight leading-none"
-        style={{ fontFamily: 'Fraunces, Georgia, serif', fontSize: s.font }}
+        className="font-display font-black tracking-tight leading-none"
+        style={{ fontSize: scaled(s.font) }}
       >
         {/* only the "m" beats + changes color */}
         <span className="mcare-heartbeat mcare-pulse-text inline-block">m</span>
         <span style={{ color: BRAND_VIOLET }}>Care</span>
       </div>
-      <div style={{ width: s.traceW, height: s.traceH }}>
+      <div style={{ width: scaled(s.traceW), height: scaled(s.traceH) }}>
         <MCareMark pulseWidth={s.pulseWidth} dotR={s.dotR} />
       </div>
     </div>

@@ -4,14 +4,19 @@ import { BottomSheet, SheetButton, levelStyle } from '@/shared'
 import type { PatientUser, VitalDef } from '@/shared/lib/types'
 import {
   evaluate, alertIsFor, latestValid, targetRange, validateReading, unitView, groupOf, VITAL_GROUPS,
-  SELF_CLEAR_WINDOW_MIN, type VitalLevel,
+  SELF_CLEAR_WINDOW_MIN, ago, readingTime, type VitalLevel,
 } from '@/shared/lib/vitals'
 
 /* ─── Logging vitals ──────────────────────────────────────────────────
    The only place a patient enters a reading. Every screen that logs —
    the Vitals list, a vital's detail page, a Home reminder — opens one of
    these two sheets, so validation, alerts and the re-measure flow behave
-   the same everywhere. */
+   the same everywhere.
+
+   Logging follows the vital groups (VITAL_GROUPS: heart, breathing…), the
+   same structure the Vitals tab uses. A patient can log one vital, one
+   group together, or everything at once, and can move between the three:
+   the one-vital sheet offers the rest of its group as the next step. */
 
 type Result = { level: VitalLevel; alerted: boolean; readingId: string; name: string; value: string; cleared?: boolean }
 
@@ -55,12 +60,15 @@ export function SelfClearBanner({ def, onLog }: { def: VitalDef; onLog: () => vo
 
 /** Owns which log sheet is open. Render `sheets` once; call `logOne` / `logAll` from anywhere on the screen. */
 export function useVitalLog() {
-  const [target, setTarget] = useState<{ vitalId?: string } | null>(null)
+  const [target, setTarget] = useState<{ vitalId?: string; groupId?: string } | null>(null)
   const close = () => setTarget(null)
+  const logOne = (vitalId: string) => setTarget({ vitalId })
+  /** Every tracked vital of one group (see VITAL_GROUPS) in one sheet. */
+  const logGroup = (groupId: string) => setTarget({ groupId })
   const sheets = !target ? null
-    : target.vitalId ? <LogOneSheet key={target.vitalId} vitalId={target.vitalId} onClose={close} />
-    : <LogAllSheet onClose={close} />
-  return { logOne: (vitalId: string) => setTarget({ vitalId }), logAll: () => setTarget({}), sheets }
+    : target.vitalId ? <LogOneSheet key={target.vitalId} vitalId={target.vitalId} onClose={close} onSwitch={logOne} onLogGroup={logGroup} />
+    : <LogAllSheet key={target.groupId ?? 'all'} groupId={target.groupId} onClose={close} />
+  return { logOne, logGroup, logAll: () => setTarget({}), sheets }
 }
 
 /* ─── What happened to an out-of-range (or alert-clearing) reading ─── */
@@ -91,8 +99,15 @@ function ResultSheet({ result, onClose }: { result: Result; onClose: () => void 
 }
 
 /* ─── One vital ─── */
-function LogOneSheet({ vitalId, onClose }: { vitalId: string; onClose: () => void }) {
-  const { currentUser, vitalDefs, logReading } = useApp()
+function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
+  vitalId: string
+  onClose: () => void
+  /** Carry on with another vital of the same group. */
+  onSwitch: (vitalId: string) => void
+  /** Log the whole group together instead. */
+  onLogGroup: (groupId: string) => void
+}) {
+  const { currentUser, vitalDefs, logReading, now } = useApp()
   const patient = currentUser as PatientUser
   const selfClear = useSelfClear()
   const [value, setValue] = useState('')
@@ -110,20 +125,28 @@ function LogOneSheet({ vitalId, onClose }: { vitalId: string; onClose: () => voi
   const error = value.trim() ? validateReading(def, canon, u.unit) : null
   const lvl = value.trim() && !error ? evaluate(patient, def, canon) : null
   const range = u.range(targetRange(patient, def))
+  const last = latestValid(patient, def.id)
+  const lastAt = last ? readingTime(last) : null
+  // The vitals measured together with this one: the rest of its group that the patient tracks.
+  const group = VITAL_GROUPS.find(g => g.id === groupOf(def.id))
+  const siblings = vitalDefs.filter(v => v.active && v.id !== def.id && patient.trackedVitalIds.includes(v.id) && groupOf(v.id) === group?.id)
 
-  const save = () => {
+  /** Saves, then closes; `then` runs instead of closing when the reading needs no follow-up. */
+  const save = (then: () => void = onClose) => {
     if (!value.trim() || error) return
     const res = logReading(patient.id, { id: `rd_${Date.now()}`, vitalId, value: canon, loggedAt: '', note: note.trim() || undefined })
     const cleared = clearing && res.level === 'normal'
     if (res.level !== 'normal' || cleared) setResult({ ...res, name: def.name, value: `${u.value(canon)} ${u.unit}`, cleared })
-    else onClose()
+    else then()
   }
+  /** Moving on keeps what was typed: a reading in the box is saved first. */
+  const moveOn = (then: () => void) => (value.trim() ? save(then) : then())
 
   return (
     <BottomSheet open onClose={onClose} title={`${def.icon} Log ${def.name}`}
-      subtitle={`Enter reading in ${u.unit} · target ${range.min}–${range.max}`}
+      subtitle={`${u.unit} · target ${range.min}–${range.max}${last ? ` · last ${u.value(last.value)}${lastAt ? `, ${ago(lastAt, now)}` : ''}` : ''}`}
       footer={<><SheetButton tone="ghost" onClick={onClose}>Cancel</SheetButton>
-        <SheetButton disabled={!value.trim() || !!error} onClick={save}>Save Reading</SheetButton></>}>
+        <SheetButton disabled={!value.trim() || !!error} onClick={() => save()}>Save Reading</SheetButton></>}>
       {clearing && (
         <div className="mb-3 px-3 py-2 rounded-xl bg-amber-50 border border-amber-100">
           <p className="text-[11px] text-amber-700 font-semibold">
@@ -163,19 +186,47 @@ function LogOneSheet({ vitalId, onClose }: { vitalId: string; onClose: () => voi
       </div>
       <input value={note} onChange={e => setNote(e.target.value)} placeholder="Add context (optional) — e.g. missed dose, felt dizzy"
         className="w-full mt-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-teal-400" />
+
+      {/* the rest of this vital's group: measured together, so offered as the next step */}
+      {group && siblings.length > 0 && (
+        <div className="mt-4 rounded-2xl border border-gray-100 bg-gray-50 p-3">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500"><span aria-hidden="true">{group.icon}</span> {group.label} · log next</p>
+          <p className="mt-0.5 text-[10px] text-gray-400">{value.trim() ? 'This reading is saved first.' : group.hint}</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {siblings.map(s => {
+              const sLast = latestValid(patient, s.id)
+              return (
+                <button key={s.id} type="button" disabled={!!error} onClick={() => moveOn(() => onSwitch(s.id))}
+                  className="flex items-center gap-1.5 rounded-full border border-gray-200 bg-white py-1 pl-2 pr-2.5 text-[11px] font-semibold text-gray-800 transition-all hover:border-teal-300 active:scale-95 disabled:opacity-50">
+                  <span aria-hidden="true">{s.icon}</span>
+                  {s.name}
+                  {sLast && <span className="font-mono font-normal text-gray-400">{unitView(s, patient).value(sLast.value)}</span>}
+                </button>
+              )
+            })}
+            <button type="button" disabled={!!error} onClick={() => moveOn(() => onLogGroup(group.id))}
+              className="rounded-full bg-teal-700 px-3 py-1 text-[11px] font-bold text-white transition-transform active:scale-95 disabled:opacity-50">
+              Log the group together
+            </button>
+          </div>
+        </div>
+      )}
     </BottomSheet>
   )
 }
 
-/* ─── Every tracked vital, grouped ─── */
-export function LogAllSheet({ onClose, onSaved }: {
+/* ─── Every tracked vital, grouped; or just one group ─── */
+export function LogAllSheet({ onClose, onSaved, groupId }: {
   onClose: () => void
+  /** Only this group's vitals (see VITAL_GROUPS). Leave out for everything the patient tracks. */
+  groupId?: string
   /** Called once the readings are stored, with how many were saved. */
   onSaved?: (count: number) => void
 }) {
   const { currentUser, vitalDefs, logReading } = useApp()
   const patient = currentUser as PatientUser
-  const tracked = vitalDefs.filter(v => v.active && patient.trackedVitalIds.includes(v.id))
+  const only = VITAL_GROUPS.find(g => g.id === groupId)
+  const tracked = vitalDefs.filter(v => v.active && patient.trackedVitalIds.includes(v.id) && (!only || groupOf(v.id) === only.id))
   const [values, setValues] = useState<Record<string, string>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [openGroup, setOpenGroup] = useState<string | null>(null)
@@ -213,7 +264,8 @@ export function LogAllSheet({ onClose, onSaved }: {
   }
 
   return (
-    <BottomSheet open onClose={onClose} title="🩺 Log Your Vitals" subtitle="Fill what you have — empty fields are skipped."
+    <BottomSheet open onClose={onClose} title={only ? `${only.icon} Log ${only.label}` : '🩺 Log Your Vitals'}
+      subtitle={only ? `${only.hint}. Empty fields are skipped.` : 'Fill what you have — empty fields are skipped.'}
       footer={<><SheetButton tone="ghost" onClick={onClose}>Cancel</SheetButton>
         <SheetButton disabled={filled === 0} onClick={save}>
           {hasErrors ? 'Fix errors to save' : filled > 0 ? `Save ${filled} reading${filled > 1 ? 's' : ''}` : 'Save Readings'}
@@ -284,7 +336,7 @@ export function LogAllSheet({ onClose, onSaved }: {
                               }}
                               placeholder={v.id === 'bp' ? '120/80' : '—'}
                               aria-label={`${v.name} in ${u.unit}`}
-                              className={`w-[72px] text-right text-sm font-bold bg-white border rounded-xl px-2 py-1.5 outline-none transition-colors ${
+                              className={`w-18 text-right text-sm font-bold bg-white border rounded-xl px-2 py-1.5 outline-none transition-colors ${
                                 err || lvl === 'critical' ? 'border-red-300 text-red-600'
                                 : lvl === 'warning' ? 'border-amber-300 text-amber-600'
                                 : lvl === 'normal' ? 'border-emerald-300 text-emerald-700'
@@ -293,9 +345,9 @@ export function LogAllSheet({ onClose, onSaved }: {
                             <span className="text-[9px] text-gray-400 w-9 text-left leading-tight">{u.unit}</span>
                           </div>
                         </div>
-                        {err && <p className="text-[10px] text-red-500 mt-1.5 pl-[42px]">{err}</p>}
+                        {err && <p className="text-[10px] text-red-500 mt-1.5 pl-10.5">{err}</p>}
                         {!err && lvl && lvl !== 'normal' && (
-                          <p className={`text-[10px] mt-1.5 pl-[42px] font-semibold ${levelStyle(lvl).value}`}>
+                          <p className={`text-[10px] mt-1.5 pl-10.5 font-semibold ${levelStyle(lvl).value}`}>
                             {lvl === 'critical'
                               ? '⚠ Critical — your doctor is alerted as soon as you save'
                               : '▲ Outside target — you can re-measure to clear it'}

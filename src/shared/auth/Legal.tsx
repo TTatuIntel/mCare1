@@ -15,7 +15,7 @@ const PRIVACY: { title: string; body: string }[] = [
   { title: 'Your choices', body: 'You can correct your details, choose what documents you share, and ask for your account to be closed from your profile.' },
 ]
 
-function LegalSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function LegalSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [tab, setTab] = useState<'terms' | 'privacy'>('terms')
   return (
     <BottomSheet open={open} onClose={onClose} title="Terms & Privacy Policy" subtitle="The short version, in plain language"

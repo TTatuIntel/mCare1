@@ -51,54 +51,91 @@ const STYLE = `
 @media (prefers-color-scheme:dark){
   .bg{background:#0b1215!important}.card{background:#141d21!important;border-color:#24323a!important}
   .h{color:#f1f5f9!important}.t{color:#cbd5e1!important}.m{color:#8fa1ad!important}
-  .d{background:#0b1215!important;border-color:#2b3b44!important;color:#f1f5f9!important}
+  .panel{background:#0f171b!important;border-color:#24323a!important}
+  .d{background:#141d21!important;border-color:#2b3b44!important;color:#f1f5f9!important}
+  .tag{background:#10302d!important;color:#5eead4!important}.tag-u{background:#3a1616!important;color:#fca5a5!important}
   .logo{background:#f8fafb!important;border-radius:16px!important;padding:8px 16px!important}.rule{border-color:#24323a!important}.btn{background:#14b8a6!important}.btn a{color:#04201d!important}.lnk{color:#5eead4!important}
 }
-@media (max-width:480px){.card{padding:26px 20px!important}.d{width:38px!important;height:48px!important;font-size:22px!important;line-height:48px!important}.h{font-size:22px!important}}`
+@media (max-width:480px){.pad{padding-left:20px!important;padding-right:20px!important}.panel{padding:16px 10px!important}.dc{padding:0 2px!important}.d{width:38px!important;height:48px!important;font-size:22px!important;line-height:48px!important}.h{font-size:23px!important}}`
+
+/** The small label over the heading: what kind of email this is, at a glance. */
+const TAG: Record<EmailContent['kind'], string> = {
+  verification: 'Confirm your email',
+  invitation: 'Invitation',
+  password_reset: 'Account security',
+  password_changed: 'Account security',
+  welcome: 'Welcome',
+  notification: 'Notification',
+}
+const URGENT_RED = '#dc2626'
 
 export interface RenderedEmail { subject: string; html: string; text: string }
 
 export function renderEmail(c: EmailContent, opts: { baseUrl?: string } = {}): RenderedEmail {
   const base = opts.baseUrl ?? appBaseUrl()
   const logo = `${base}${EMAIL_LOGO_PATH}`
-  const p = (t: string) => `<p class="t" style="margin:0 0 20px;font:400 16px/1.55 ${FONT};color:#475569">${esc(t)}</p>`
+  const urgent = c.tone === 'urgent'
+  const p = (t: string) => `<p class="t" style="margin:0 0 12px;font:400 16px/1.6 ${FONT};color:#475569">${esc(t)}</p>`
 
+  // The strip across the top of the card: the brand colours, or red when it can't wait.
+  const strip = urgent
+    ? `<td bgcolor="${URGENT_RED}" style="background:${URGENT_RED};height:6px;font-size:0;line-height:0">&nbsp;</td>`
+    : `<td bgcolor="${BRAND_TEAL}" style="background:${BRAND_TEAL};background:linear-gradient(90deg,${BRAND_TEAL},#14b8a6 45%,${BRAND_VIOLET});height:6px;font-size:0;line-height:0">&nbsp;</td>`
+
+  const tag = `<span class="${urgent ? 'tag-u' : 'tag'}" style="display:inline-block;padding:6px 12px;border-radius:999px;background:${urgent ? '#fef2f2' : '#f0fdfa'};font:700 11px/1 ${FONT};letter-spacing:.08em;text-transform:uppercase;color:${urgent ? '#b91c1c' : BRAND_TEAL}">${esc(urgent ? 'Urgent' : TAG[c.kind])}</span>`
+
+  // A pill like the buttons in the app: as wide as its label, centred.
   const action = c.action ? `
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td class="btn" align="center" bgcolor="${BRAND_TEAL}" style="background:${BRAND_TEAL};border-radius:14px">
-  <a href="${esc(c.action.url)}" target="_blank" rel="noopener" style="display:block;padding:15px 20px;font:600 16px/1.2 ${FONT};color:#ffffff;text-decoration:none">${esc(c.action.label)}</a>
+<table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:22px auto 0"><tr><td class="btn" align="center" bgcolor="${BRAND_TEAL}" style="background:${BRAND_TEAL};border-radius:999px">
+  <a href="${esc(c.action.url)}" target="_blank" rel="noopener" style="display:inline-block;padding:14px 30px;font:700 16px/1.2 ${FONT};color:#ffffff;text-decoration:none;border-radius:999px">${esc(c.action.label)}&nbsp;&nbsp;&rarr;</a>
 </td></tr></table>` : ''
 
-  // Each digit in its own tile — easy to read and to type across.
+  // Each digit in its own tile, easy to read and to type across.
   const code = c.code ? `
-${c.action ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:22px 0 14px"><tr>
-  <td class="rule" style="border-top:1px solid #e5eaee;font-size:0;line-height:0" width="50%">&nbsp;</td>
-  <td class="m" style="padding:0 12px;font:500 12px/1 ${FONT};color:#94a3b8;white-space:nowrap">${esc(c.code.label)}</td>
-  <td class="rule" style="border-top:1px solid #e5eaee;font-size:0;line-height:0" width="50%">&nbsp;</td>
-</tr></table>` : `<div class="m" style="font:500 12px/1 ${FONT};color:#94a3b8;margin:0 0 12px">${esc(c.code.label)}</div>`}
-<table role="presentation" cellpadding="0" cellspacing="0" align="center" aria-label="${esc(c.code.value)}"><tr>
-  ${[...c.code.value].map(ch => `<td style="padding:0 3px"><div class="d" style="width:44px;height:54px;border:1px solid #dbe3e8;border-radius:12px;background:#f8fafb;font:600 26px/54px ${MONO};color:#0f172a;text-align:center">${esc(ch)}</div></td>`).join('')}
-</tr></table>
-${c.code.expires ? `<div class="m" style="font:400 13px/1.4 ${FONT};color:#94a3b8;text-align:center;margin-top:12px">${esc(c.code.expires)}</div>` : ''}` : ''
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:22px 0 0"><tr><td class="panel" align="center" style="background:#f6f9f9;border:1px solid #e5eaee;border-radius:18px;padding:18px 16px">
+  <div class="m" style="font:600 12px/1 ${FONT};letter-spacing:.04em;text-transform:uppercase;color:#64748b;margin:0 0 12px">${esc(c.code.label)}</div>
+  <table role="presentation" cellpadding="0" cellspacing="0" align="center" aria-label="${esc(c.code.value)}"><tr>
+    ${[...c.code.value].map(ch => `<td class="dc" style="padding:0 3px"><div class="d" style="width:44px;height:54px;border:1px solid #dbe3e8;border-radius:12px;background:#ffffff;font:700 26px/54px ${MONO};color:#0f172a;text-align:center">${esc(ch)}</div></td>`).join('')}
+  </tr></table>
+  ${c.code.expires ? `<div class="m" style="font:400 13px/1.4 ${FONT};color:#64748b;margin-top:12px">${esc(c.code.expires)}</div>` : ''}
+</td></tr></table>` : ''
+
+  // For mail apps that drop the button: the same link, spelled out.
+  const fallback = c.action && c.code ? `
+<p class="m" style="margin:18px 0 0;font:400 12px/1.6 ${FONT};color:#94a3b8;text-align:center">Button not working? Paste this link into your browser:<br>
+<a class="lnk" href="${esc(c.action.url)}" target="_blank" rel="noopener" style="color:${BRAND_TEAL};word-break:break-all">${esc(c.action.url)}</a></p>` : ''
+
+  const security = c.security ? `
+  <tr><td class="pad" style="padding:0 32px 28px">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td class="panel m" style="background:#f6f9f9;border:1px solid #e5eaee;border-left:3px solid ${urgent ? URGENT_RED : BRAND_TEAL};border-radius:12px;padding:12px 14px;font:400 13px/1.5 ${FONT};color:#64748b">${esc(c.security)}</td>
+    </tr></table>
+  </td></tr>` : ''
 
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark"><meta name="supported-color-schemes" content="light dark">
 <title>${esc(c.subject)}</title><style>${STYLE}</style></head>
-<body class="bg" style="margin:0;padding:0;background:#f3f6f8;-webkit-text-size-adjust:100%">
+<body class="bg" style="margin:0;padding:0;background:#eef3f3;-webkit-text-size-adjust:100%">
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">${esc(c.preheader ?? c.lines[0] ?? '')}</div>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="bg" bgcolor="#f3f6f8" style="background:#f3f6f8"><tr><td align="center" style="padding:32px 14px">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:440px">
-  <tr><td align="center" style="padding:0 0 22px">
-    <img src="${esc(logo)}" width="${LOGO_W}" height="${LOGO_H}" alt="mCare" class="logo" style="display:block;border:0;outline:none;font:700 28px/1 ${FONT};color:${BRAND_VIOLET}">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="bg" bgcolor="#eef3f3" style="background:#eef3f3"><tr><td align="center" style="padding:28px 14px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="card" bgcolor="#ffffff" style="max-width:480px;background:#ffffff;border:1px solid #e5eaee;border-radius:24px;border-collapse:separate;overflow:hidden">
+  <tr>${strip}</tr>
+  <tr><td class="pad" align="center" style="padding:28px 32px 0">
+    <img src="${esc(logo)}" width="${LOGO_W}" height="${LOGO_H}" alt="mCare" class="logo" style="display:block;margin:0 auto;border:0;outline:none;font:700 28px/1 ${FONT};color:${BRAND_VIOLET}">
   </td></tr>
-  <tr><td class="card" bgcolor="#ffffff" style="background:#ffffff;border:1px solid #e5eaee;border-radius:24px;padding:34px 32px">
-    <h1 class="h" style="margin:0 0 10px;font:700 24px/1.25 ${FONT};letter-spacing:-.02em;color:#0f172a">${esc(c.heading)}</h1>
+  <tr><td class="pad" align="center" style="padding:20px 32px 28px;text-align:center">
+    ${tag}
+    <h1 class="h" style="margin:14px 0 10px;font:800 26px/1.2 ${FONT};letter-spacing:-.02em;color:#0f172a">${esc(c.heading)}</h1>
     ${c.lines.map(p).join('')}
-    ${action}${code}
-    ${(c.after ?? []).map(l => `<p class="t" style="margin:20px 0 0;font:400 14px/1.5 ${FONT};color:#475569">${esc(l)}</p>`).join('')}
-  </td></tr>
-  <tr><td align="center" class="m" style="padding:20px 16px 0;font:400 12px/1.6 ${FONT};color:#94a3b8">
-    ${c.security ? `${esc(c.security)}<br>` : ''}
-    <span style="font-weight:600"><span style="color:${BRAND_TEAL}">m</span><span style="color:${BRAND_VIOLET}">Care</span></span> · Sent to ${esc(c.to)}
+    ${action}${code}${fallback}
+    ${(c.after ?? []).map(l => `<p class="t" style="margin:18px 0 0;font:400 14px/1.5 ${FONT};color:#475569">${esc(l)}</p>`).join('')}
+  </td></tr>${security}
+</table>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px">
+  <tr><td align="center" class="m" style="padding:20px 16px 0;font:400 12px/1.7 ${FONT};color:#94a3b8">
+    <span style="font-weight:700;font-size:14px"><span style="color:${BRAND_TEAL}">m</span><span style="color:${BRAND_VIOLET}">Care</span></span> · Your health, our priority<br>
+    Sent to ${esc(c.to)}. This is an automated message, so replies aren’t read.<br>
+    &copy; ${new Date().getFullYear()} mCare
   </td></tr>
 </table>
 </td></tr></table>
@@ -180,6 +217,7 @@ export const emails = {
     const priv = PRIVATE[kind]
     return {
       to: u.email, kind: 'notification', subject: priv ? `${priv[0]} · mCare` : title,
+      tone: kind === 'sos' || kind === 'escalation' ? 'urgent' : undefined,
       heading: priv ? priv[0] : title, lines: [priv ? priv[1] : body],
       action: { label: 'Open mCare', url: baseUrl },
       security: priv ? 'For your privacy, details are only shown in the app.' : undefined,

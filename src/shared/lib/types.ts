@@ -244,6 +244,8 @@ export interface EmailContent {
   after?: string[]
   /** "Wasn't you?" note. */
   security?: string
+  /** `urgent` turns the accent red (SOS and escalations). */
+  tone?: 'urgent'
 }
 
 /** One email handed to the mail service. Kept so support and the recipient can see what was sent. */

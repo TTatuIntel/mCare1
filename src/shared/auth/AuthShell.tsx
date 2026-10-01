@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import MCareLogo from '@/shared/layout/MCareLogo'
 import { useSplashDone } from '@/shared/layout/splashSignal'
-import { AuthIcon, BrandCluster, type AuthIconName } from './authKit'
+import { AuthIcon, AuthRights, BrandCluster, type AuthIconName } from './authKit'
 
 /** How long each feature stays on stage before the next one takes over. */
 const AUTO_MS = 3000
@@ -311,18 +311,22 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
   return (
     <section aria-label="What you can do with mCare" onFocus={onUse}
       onPointerEnter={e => { if (e.pointerType === 'mouse') onUse() }}
-      className={`${className} flex-col justify-center items-center text-center gap-4 @5xl:items-start @5xl:text-left @5xl:gap-8`}>
+      className={`${className} flex-col justify-center items-center text-center gap-8 @5xl:items-start @5xl:text-left @5xl:gap-8`}>
       {/* Mobile and tablet: the logo stays put with the icons around it. Web: it
           rests here (its place is kept) until the user turns to the welcome card. */}
       <div className={r0.cls} style={r0.style}>
-        <BrandCluster className="@5xl:hidden" active={SLIDES[active].icon}><MCareLogo size="lg" /></BrandCluster>
-        <div className="hidden @5xl:block h-[72px]">{logoHere && <FlyingLogo />}</div>
+        {/* Mobile: the compact cluster, so the tour and the way in fit the screen. Tablet has room for the large one. */}
+        <BrandCluster compact className="@2xl:hidden mt-6" active={SLIDES[active].icon}><MCareLogo size="md" /></BrandCluster>
+        <BrandCluster className="hidden @2xl:flex @5xl:hidden" active={SLIDES[active].icon}><MCareLogo size="lg" /></BrandCluster>
+        <div className="hidden @5xl:block h-[4.5rem]">{logoHere && <FlyingLogo />}</div>
       </div>
 
       <div className="w-full max-w-2xl flex flex-col gap-1 @5xl:gap-2">
-        {/* One message at a time, straight on the page. It moves on by itself; tap or swipe to change it. */}
+        {/* One message at a time, straight on the page. It moves on by itself; tap or swipe to change it.
+            The stage keeps the height of the tallest slide (so the actions below never jump) and
+            centres shorter ones in it, which splits the spare room evenly above and below. */}
         <div role="button" tabIndex={0} aria-label="Show the next feature" aria-roledescription="carousel" style={stageIn.style}
-          className={`${stageIn.className} grid items-start min-h-[10rem] cursor-pointer touch-pan-y select-none rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 @5xl:min-h-[19rem]`}
+          className={`${stageIn.className} grid items-center @5xl:items-start min-h-[10rem] cursor-pointer touch-pan-y select-none rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 @5xl:min-h-[19rem]`}
           onPointerEnter={e => { if (e.pointerType === 'mouse') setHeld(true) }}
           onPointerLeave={() => { setHeld(false); drag.current = null }}
           onPointerDown={e => { drag.current = { x: e.clientX, swiped: false } }}
@@ -363,7 +367,7 @@ function StepBrand({ onHome }: { onHome?: () => void }) {
   return (
     <>
       {/* Smaller than on the welcome page: here the fields come first. */}
-      <BrandCluster compact className="@5xl:hidden mb-1.5 @2xl:mb-3">{logo('md')}</BrandCluster>
+      <BrandCluster compact className="@5xl:hidden mt-6 @2xl:mt-0 mb-1.5 @2xl:mb-3">{logo('md')}</BrandCluster>
       <div className="hidden @5xl:flex justify-center mb-5">{logo('sm')}</div>
     </>
   )
@@ -405,19 +409,26 @@ export function AuthShell({ children, welcome = false, entrance = false, onHome 
       <div className="absolute inset-0 overflow-y-auto overscroll-none scrollbar-hide">
         <div className="mx-auto min-h-full w-full max-w-md flex flex-col gap-4 px-4 py-3 @2xl:justify-center @2xl:py-8 @5xl:max-w-6xl @5xl:flex-row @5xl:items-center @5xl:gap-14 @5xl:px-10">
           <AuthHero playing={splashDone} rise={rise} logoHere={!logoInCard} onUse={() => setUsingCard(false)}
-            className={`${welcome ? 'flex' : 'hidden @5xl:flex'} flex-1 min-w-0 @2xl:flex-none @5xl:flex-1`} />
+            className={`${welcome ? 'flex' : 'hidden @5xl:flex'} flex-none min-w-0 @5xl:flex-1`} />
 
           <main onFocus={() => setUsingCard(true)} onPointerDown={() => setUsingCard(true)}
             onPointerEnter={e => { if (e.pointerType === 'mouse') setUsingCard(true) }}
-            className={`w-full flex flex-col @2xl:flex-none @5xl:w-[27rem] @5xl:shrink-0 ${welcome ? '' : 'flex-1'} ${!welcome ? card.cls : ''}`} style={!welcome ? card.style : undefined}>
-            <div className="px-3 py-2.5 @2xl:px-4 @2xl:py-3 @5xl:p-8">
+            className={`w-full flex flex-col @2xl:flex-none @5xl:w-[27rem] @5xl:shrink-0 flex-1 ${!welcome ? card.cls : ''}`} style={!welcome ? card.style : undefined}>
+            <div className="flex flex-1 flex-col px-3 py-2.5 @2xl:px-4 @2xl:py-3 @5xl:p-8">
               {/* Web: where the logo lands; the icons spring out around it as it arrives. */}
-              {welcome ? (
+              {welcome ? <>
                 <BrandCluster className="hidden @5xl:flex mb-3" open={logoInCard} openDelayMs={FLY_MS * 0.55}>
                   {logoInCard && <FlyingLogo />}
                 </BrandCluster>
-              ) : <StepBrand onHome={onHome} />}
-              {children}
+                {children}
+              </> : <>
+                {/* Mobile: the step sits in the middle of the screen, the rights line at its foot. */}
+                <div className="my-auto">
+                  <StepBrand onHome={onHome} />
+                  {children}
+                </div>
+                <AuthRights className="pt-4" />
+              </>}
             </div>
           </main>
         </div>

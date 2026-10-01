@@ -13,6 +13,8 @@ import { ProfileTab } from './ProfileTab'
 import { MealsTab } from './MealsTab'
 import { CareTeamTab } from './CareTeamTab'
 import { MyAlertsTab } from './MyAlertsTab'
+import { QuickLogFab } from './QuickLogFab'
+import { useVitalLog } from './VitalLogSheets'
 
 /* ─── Root ──────────────────────────────────────────────────────────── */
 const NAV = [
@@ -23,6 +25,8 @@ const NAV = [
   { id: 'appts',    label: 'Appts',  icon: '📅' },
 ]
 const SCREENS = ['home', 'vitals', 'medicine', 'messages', 'appts', 'docs', 'profile', 'meals', 'care', 'alerts']
+/** Screens that show the floating "Log vitals" button. The Vitals tab has its own log buttons. */
+const FAB_SCREENS = ['home', 'alerts']
 
 export default function PatientApp() {
   const { currentUser, messages, appointments } = useApp()
@@ -43,9 +47,16 @@ export default function PatientApp() {
     appts: appointments.filter(a => a.patientId === patient.id && (a.status === 'rescheduled')).length,
   }
 
+  // The floating "Log vitals" button, on the screens where a reading is the next thing to do.
+  const log = useVitalLog()
+  const vitalsDue = !!day.vitals.item && day.vitals.item.inMin <= 0
+  const fab = FAB_SCREENS.includes(tab) && patient.trackedVitalIds.length > 0
+    ? <QuickLogFab onLogOne={log.logOne} onLogAll={log.logAll} due={vitalsDue} /> : undefined
+
   return (
-    <PortalShell screen={tab} nav={NAV.map(n => ({ ...n, badge: badge[n.id] }))} onSelect={go} homeId="home" fill={tab === 'messages'}>
-      {tab ==='home'     && <HomeTab go={go} openVital={openVital} />}
+    <PortalShell screen={tab} nav={NAV.map(n => ({ ...n, badge: badge[n.id] }))} onSelect={go} homeId="home" fill={tab === 'messages'} floating={fab}>
+      {log.sheets}
+      {tab ==='home'     && <HomeTab go={go} openVital={openVital} onLog={log.logOne} />}
       {tab ==='vitals'   && <VitalsTab vitalId={vital?.id ?? null} onOpenVital={openVital} onCloseVital={closeVital} />}
       {tab ==='medicine' && <MedicineTab />}
       {tab ==='messages' && <MessagesTab go={go} />}
@@ -54,7 +65,7 @@ export default function PatientApp() {
       {tab ==='profile'  && <ProfileTab />}
       {tab ==='meals'    && <MealsTab />}
       {tab ==='care'     && <CareTeamTab go={go} />}
-      {tab ==='alerts'   && <MyAlertsTab openVital={openVital} />}
+      {tab ==='alerts'   && <MyAlertsTab openVital={openVital} onLog={log.logOne} go={go} />}
     </PortalShell>
   )
 }

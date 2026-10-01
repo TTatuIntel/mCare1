@@ -3,6 +3,7 @@ import { useApp } from '@/shared/state/AppContext'
 import { LoaderProvider, useLoaderBusy } from '@/shared/ui/Loader'
 import SplashScreen from './SplashScreen'
 import { StatusBar } from './StatusBar'
+import { useDeviceScale } from './deviceScale'
 
 /* ─── App frame ───────────────────────────────────────────────────────
    The frame every role renders inside. By default it fills the browser
@@ -17,7 +18,8 @@ import { StatusBar } from './StatusBar'
    web — never the viewport ones (`md:`, `lg:`). That is what lets the
    preview switcher below show the tablet and phone layouts on a desktop.
 
-   Also owns: theme and font scale, the sheet layer, the loading popup and
+   Also owns: theme, font scale and the device scale (`deviceScale.ts`,
+   which shrinks everything together on narrow phones), the sheet layer, the loading popup and
    the boot splash. */
 
 type Device = 'web' | 'tablet' | 'mobile'
@@ -70,11 +72,12 @@ export function PhoneShell({ children }: { children: React.ReactNode }) {
   const isDark = theme === 'dark' || (theme === 'auto' && prefersDark)
   const fontCls = `mcare-font-${currentUser?.fontSize ?? 'md'}`
   const frame = device === 'web' ? null : FRAME[device]
+  const frameRef = useDeviceScale<HTMLDivElement>()
 
   return (
     <div className="h-dvh flex items-center justify-center overflow-hidden"
       style={{ background: 'linear-gradient(160deg,#d8eae8 0%,#c4d8e8 100%)' }}>
-      <div className={`@container relative flex flex-col bg-gray-100 overflow-hidden ${frame ? '' : 'w-full h-full'} ${isDark ? 'mcare-theme-dark' : ''} ${fontCls}`}
+      <div ref={frameRef} className={`@container relative flex flex-col bg-gray-100 overflow-hidden ${frame ? '' : 'w-full h-full'} ${isDark ? 'mcare-theme-dark' : ''} ${fontCls}`}
         style={frame ? {
           width: frame.width, height: frame.height, maxHeight: 'calc(100dvh - 24px)', borderRadius: frame.radius,
           boxShadow: '0 50px 100px rgba(0,0,0,.40), 0 0 0 1px rgba(255,255,255,.25), inset 0 0 0 1.5px rgba(0,0,0,.08)',

@@ -3,7 +3,7 @@ import { useApp } from '@/shared/state/AppContext'
 import { Avatar, Field, Toggle, inputCls } from '@/shared'
 import type { BiologicalSex, BloodType } from '@/shared/lib/types'
 import { calcAge } from '@/shared/lib/vitals'
-import { healthOf, suggestedVitals } from '@/shared/lib/health'
+import { healthOf, sexLabel, suggestedVitals } from '@/shared/lib/health'
 import { readSquarePhoto } from '@/shared/lib/photo'
 import { usePatient } from './usePatient'
 import {
@@ -105,33 +105,101 @@ export default function HealthSetup() {
 
   /* ─── Finished ─── */
   if (finished) {
-    const rows = [
-      { l: 'About you', v: [age !== null ? `${age} yrs` : '', about.bloodType ?? ''].filter(Boolean).join(' · ') || 'Saved' },
-      { l: 'Conditions', v: cond.noConditions ? 'None' : `${cond.conditions.length} recorded` },
-      { l: 'Allergies', v: allergy.noKnownAllergies ? 'None known' : `${allergy.allergies.length} recorded` },
-      { l: 'Next of kin', v: kinSkipped ? 'Add later in Profile' : kin.name.trim(), warn: kinSkipped },
-      { l: 'Tracking', v: `${tracked.length} vital${tracked.length === 1 ? '' : 's'}` },
+    const chip = 'rounded-full bg-white border border-gray-200 px-2.5 py-1 text-[11px] font-semibold text-gray-800'
+    const none = (text: string) => <p className="text-xs text-gray-500">{text}</p>
+    const trackedDefs = activeVitals.filter(v => tracked.includes(v.id))
+    const born = dob ? new Date(`${dob}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : ''
+    const facts = [
+      { l: 'Date of birth', v: born },
+      { l: 'Age', v: age !== null ? `${age} years` : '' },
+      { l: 'Sex', v: sexLabel(about.sex) ?? '' },
+      { l: 'Blood type', v: about.bloodType ?? 'Not sure' },
     ]
-    return (
-      <div className="min-h-full flex flex-col px-6 pt-10 pb-6 bg-white screen-in">
-        <div className="text-center">
-          <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center text-3xl mx-auto">✓</div>
-          <h2 className="text-2xl font-black text-gray-900 font-display mt-4">You're all set, {patient.name.split(' ')[0]}!</h2>
-          <p className="text-sm text-gray-500 mt-1.5">Your care team can now see your health profile. Update it any time from Profile.</p>
-        </div>
-        <div className="mt-6 bg-gray-50 rounded-2xl px-4 py-1">
-          {rows.map(r => (
-            <div key={r.l} className="flex items-center justify-between py-2.5 border-b border-gray-100 last:border-0">
-              <p className="text-xs font-semibold text-gray-500">{r.l}</p>
-              <p className={`text-xs font-bold ${r.warn ? 'text-amber-700' : 'text-gray-900'}`}>{r.v}</p>
-            </div>
+    /** Everything the patient entered, step by step; Edit reopens that step. */
+    const sections: { id: StepId; body: React.ReactNode }[] = [
+      { id: 'about', body: (
+        <>
+          <div className="flex items-center gap-3">
+            <Avatar name={patient.name} avatar={{ gradient: patient.avatar?.gradient ?? 'teal', emoji: patient.avatar?.emoji ?? '', photo }} size="md" />
+            <p className="text-sm font-bold text-gray-900 truncate">{patient.name}</p>
+          </div>
+          <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
+            {facts.map(f => (
+              <div key={f.l}>
+                <dt className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">{f.l}</dt>
+                <dd className="text-xs font-bold text-gray-900">{f.v || '—'}</dd>
+              </div>
+            ))}
+          </dl>
+        </>
+      ) },
+      { id: 'conditions', body: (
+        <>
+          {cond.conditions.length
+            ? <div className="flex flex-wrap gap-1.5">{cond.conditions.map(c => <span key={c} className={chip}>{c}</span>)}</div>
+            : none('No long-term conditions.')}
+          {cond.otherMedicines?.trim() && (
+            <p className="mt-2 text-xs text-gray-600"><span className="font-semibold text-gray-500">Other medicines: </span>{cond.otherMedicines.trim()}</p>
+          )}
+        </>
+      ) },
+      { id: 'allergies', body: allergy.allergies.length ? (
+        <ul className="flex flex-col gap-1.5">
+          {allergy.allergies.map(a => (
+            <li key={a.id} className="flex items-center justify-between gap-3">
+              <span className="text-xs font-semibold text-gray-900 truncate">{a.substance}</span>
+              <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold capitalize ${a.severity === 'severe' ? 'bg-red-50 text-red-700' : a.severity === 'moderate' ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>{a.severity}</span>
+            </li>
           ))}
+        </ul>
+      ) : none('No known allergies.') },
+      { id: 'kin', body: kinSkipped || !kinComplete(kin)
+        ? <p className="text-xs font-semibold text-amber-700">Not added yet. You can add one later in Profile.</p>
+        : (
+          <>
+            <p className="text-xs font-bold text-gray-900">{kin.name.trim()}{kin.relationship && <span className="font-semibold text-gray-500"> · {kin.relationship}</span>}</p>
+            <p className="mt-0.5 font-mono text-xs text-gray-600">{kin.phone.trim()}</p>
+          </>
+        ) },
+      { id: 'tracking', body: (
+        <div className="flex flex-wrap gap-1.5">
+          {trackedDefs.map(v => <span key={v.id} className={chip}>{v.icon} {v.name}</span>)}
         </div>
-        <div className="flex-1 min-h-6" />
-        <button onClick={completeSetup}
-          className="w-full py-3.5 rounded-2xl bg-teal-700 text-white text-sm font-bold shadow-lg shadow-teal-700/25 active:scale-[.98] transition-transform">
-          Go to my dashboard
-        </button>
+      ) },
+    ]
+    const HEADINGS: Record<StepId, string> = { about: 'About you', conditions: 'Conditions', allergies: 'Allergies', kin: 'Next of kin', tracking: 'Tracking' }
+    return (
+      <div className="min-h-full flex flex-col bg-white screen-in">
+        <div className="flex-1 w-full max-w-2xl mx-auto px-5 pt-8 pb-4">
+          <div className="text-center">
+            <div className="auth-pop w-14 h-14 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center text-2xl mx-auto">✓</div>
+            <h2 className="text-2xl font-black text-gray-900 font-display mt-3">You're all set, {patient.name.split(' ')[0]}!</h2>
+            <p className="text-sm text-gray-500 mt-1.5">Here is what you told us. Your care team can now see it, and you can update it any time from Profile.</p>
+          </div>
+          <div className="mt-5 grid gap-3 @2xl:grid-cols-2">
+            {sections.map(s => {
+              const i = STEPS.findIndex(x => x.id === s.id)
+              return (
+                <section key={s.id} className={`rounded-2xl bg-gray-50 px-4 py-3 ${s.id === 'about' ? '@2xl:col-span-2' : ''}`}>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h3 className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-gray-500">
+                      <span aria-hidden>{STEPS[i].icon}</span>{HEADINGS[s.id]}
+                    </h3>
+                    <button onClick={() => { setFinished(false); setStep(i) }} aria-label={`Edit ${HEADINGS[s.id]}`}
+                      className="text-[11px] font-bold text-teal-700 underline-offset-4 hover:underline">Edit</button>
+                  </div>
+                  {s.body}
+                </section>
+              )
+            })}
+          </div>
+        </div>
+        <footer className="sticky bottom-0 bg-white/95 backdrop-blur px-5 pt-3 pb-6 border-t border-gray-100">
+          <button onClick={completeSetup}
+            className="block w-full max-w-2xl mx-auto py-3.5 rounded-2xl bg-teal-700 text-white text-sm font-bold shadow-lg shadow-teal-700/25 active:scale-[.98] transition-transform">
+            Go to my dashboard
+          </button>
+        </footer>
       </div>
     )
   }

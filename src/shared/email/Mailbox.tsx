@@ -18,7 +18,7 @@ export function EmailPreview({ email }: { email: SentEmail }) {
         <p className="text-xs font-bold text-gray-900 truncate">{subject}</p>
         <p className="text-[10px] text-gray-400 truncate">{EMAIL_FROM} · to {email.content.to}</p>
       </div>
-      <iframe title={subject} sandbox="" srcDoc={html} className="w-full block" style={{ height: 440, border: 0 }} />
+      <iframe title={subject} sandbox="" srcDoc={html} className="w-full block" style={{ height: 520, border: 0 }} />
     </div>
   )
 }

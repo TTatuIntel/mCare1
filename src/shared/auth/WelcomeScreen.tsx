@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { BottomSheet } from '@/shared/ui/BottomSheet'
 import MCareLogo from '@/shared/layout/MCareLogo'
-import { AuthDivider, AuthIcon } from './authKit'
+import { AuthDivider, AuthIcon, AuthRights, OWNER } from './authKit'
 import { SocialButtons } from './SocialAuth'
 
 const SUPPORT_EMAIL = 'support@matendocare.com'
@@ -45,7 +45,6 @@ function HelpSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
 
 /* ─── About the application ─────────────────────────────────────────── */
 
-const OWNER = 'mcare.com'
 const DEVELOPER = 'Tattu Intel'
 const YEAR = new Date().getFullYear()
 /** From package.json. A dev server started before the version was wired in has no value yet. */
@@ -108,7 +107,7 @@ function GetStartedButton({ onClick }: { onClick: () => void }) {
   }
 
   return (
-    <div ref={wrapRef} className="relative mx-auto mt-5 w-64 transition-transform duration-200 ease-out @5xl:w-72">
+    <div ref={wrapRef} className="relative mx-auto mt-5 w-fit transition-transform duration-200 ease-out">
       <span aria-hidden className="auth-glow absolute inset-x-6 -bottom-1.5 h-8 rounded-full bg-teal-500/60 blur-xl" />
       <span aria-hidden className="auth-cta-ring pointer-events-none absolute inset-0 rounded-full ring-2 ring-teal-500/60" />
       <button type="button" onClick={onClick}
@@ -119,7 +118,7 @@ function GetStartedButton({ onClick }: { onClick: () => void }) {
           const r = e.currentTarget.getBoundingClientRect()
           setRipples(rs => [...rs, { id: e.timeStamp, x: e.clientX - r.left, y: e.clientY - r.top }])
         }}
-        className="group relative w-full overflow-hidden rounded-full bg-teal-700 py-1.5 pl-5 pr-1.5 flex items-center text-white text-[15px] font-bold ring-1 ring-inset ring-white/20 shadow-lg shadow-teal-700/30 transition-all duration-300 hover:bg-teal-800 hover:shadow-xl hover:shadow-teal-700/40 active:scale-[.96] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-teal-500/40">
+        className="group relative w-full overflow-hidden rounded-full bg-teal-700 py-1.5 pl-6 pr-1.5 flex items-center gap-4 text-white text-[15px] font-bold ring-1 ring-inset ring-white/20 shadow-lg shadow-teal-700/30 transition-all duration-300 hover:bg-teal-800 hover:shadow-xl hover:shadow-teal-700/40 active:scale-[.96] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-teal-500/40">
         <span aria-hidden className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/15 to-transparent" />
         <span aria-hidden className="auth-sheen absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent" />
         {/* A soft light under the pointer. */}
@@ -129,8 +128,8 @@ function GetStartedButton({ onClick }: { onClick: () => void }) {
           <span key={rp.id} aria-hidden onAnimationEnd={() => setRipples(rs => rs.filter(x => x.id !== rp.id))}
             className="auth-ripple pointer-events-none absolute -ml-3 -mt-3 h-6 w-6 rounded-full bg-white/40" style={{ left: rp.x, top: rp.y }} />
         ))}
-        {/* pl-11 balances the arrow tile, so the label stays centred. */}
-        <span className="relative flex-1 pl-11 text-center transition-[letter-spacing] duration-300 group-hover:tracking-wide">Get Started</span>
+        {/* The pill hugs its label and arrow: no wider than what it says. */}
+        <span className="relative whitespace-nowrap transition-[letter-spacing] duration-300 group-hover:tracking-wide">Get Started</span>
         <span className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/15 ring-1 ring-inset ring-white/25 backdrop-blur-sm transition-all duration-300 group-hover:bg-white group-hover:text-teal-700 group-active:scale-90">
           {/* One arrow leaves to the right as its twin arrives from the left. */}
           <span className="flex transition-transform duration-300 ease-out group-hover:translate-x-9">
@@ -161,9 +160,10 @@ export function WelcomeScreen({ onGetStarted, onSignIn, onDemo }: {
   const [aboutOpen, setAboutOpen] = useState(false)
 
   return (
-    <div className="flex flex-col gap-3">
+    // Mobile: the tour keeps its own height and this takes the rest of the screen, so no band of white is left between them.
+    <div className="flex flex-1 flex-col gap-3">
       {/* The one place to act, straight on the page: no card behind it. */}
-      <section aria-labelledby="welcome-start" className="text-center">
+      <section aria-labelledby="welcome-start" className="flex flex-1 flex-col justify-center text-center">
         {/* A touch larger than the tour above it, so the eye lands on the way in. */}
         <h2 id="welcome-start" className="text-xl font-black text-gray-900 font-display leading-tight">Let’s get you started</h2>
         <p className="mt-1.5 text-[13px] text-gray-600">New to mCare? Create your account in a minute.</p>
@@ -199,9 +199,7 @@ export function WelcomeScreen({ onGetStarted, onSignIn, onDemo }: {
       </div>
 
       {/* One line; the version and who built it are under About. */}
-      <p className="text-center text-[9px] @2xl:text-[10px] text-gray-400 whitespace-nowrap">
-        © <span className="font-mono">{YEAR}</span> {OWNER} · All rights reserved
-      </p>
+      <AuthRights />
 
       <HelpSheet open={helpOpen} onClose={() => setHelpOpen(false)} />
       <AboutSheet open={aboutOpen} onClose={() => setAboutOpen(false)} />

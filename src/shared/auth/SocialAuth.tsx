@@ -6,7 +6,7 @@ import { backendConfigured } from '@/shared/api/supabase'
 import { providerAvailable, rememberConsent, startProviderSignIn } from '@/shared/api/authBackend'
 import { appBaseUrl } from '@/shared/email/emailTemplate'
 import { AuthButton, AuthField, authInputCls } from './authKit'
-import { Consent } from './Legal'
+import { Consent, LegalSheet } from './Legal'
 
 function ProviderMark({ mark, outline, colors, className = 'w-[18px] h-[18px]' }: { mark: string; outline?: boolean; colors?: string[]; className?: string }) {
   return (
@@ -27,11 +27,12 @@ const DOCK_REACH = 1.6
  * "Continue with Google / Apple / Facebook / Instagram / X / Yahoo": one compact row, so the sign-in page never scrolls. Signs in an existing account or
  * creates a patient on first use (`socialAuth`).
  *
- * Live mode (backend keys set): after the Terms are accepted the browser goes
- * to the provider's own sign-in window, and LoginScreen opens the account when
- * it comes back. Only providers the backend supports are shown.
- * Demo mode: a sheet stands in for the provider and asks for the name and
- * email it would hand back.
+ * Live mode (backend keys set): a tap goes straight to the provider's own
+ * sign-in page, with no sheet of ours in between, and LoginScreen opens the
+ * account when it comes back. Continuing is the agreement to the Terms, as the
+ * line under the row says. Only providers the backend supports are shown.
+ * Demo mode: there is no real provider to go to, so a sheet stands in for it
+ * and asks for the name and email it would hand back.
  */
 const PROVIDERS = SOCIAL_PROVIDERS.filter(p => providerAvailable(p.id))
 /** Six fit one row in demo mode; live mode shows the connected ones only. */
@@ -44,9 +45,21 @@ export function SocialButtons() {
   const [email, setEmail] = useState('')
   const [agreed, setAgreed] = useState(false)
   const [error, setError] = useState('')
-  const [leaving, setLeaving] = useState(false)
+  /** Live mode: the provider whose sign-in page is being opened. */
+  const [leaving, setLeaving] = useState<ProviderStyle | null>(null)
+  const [legalOpen, setLegalOpen] = useState(false)
 
-  const ready = agreed && (backendConfigured || isEmail(email)) && !leaving
+  const ready = agreed && isEmail(email)
+
+  /** Live mode: off to the provider's own page. Only a failure to start comes back here. */
+  const leave = async (p: ProviderStyle) => {
+    if (leaving) return
+    setError('')
+    rememberConsent()
+    setLeaving(p)
+    const failed = await startProviderSignIn(p.id, appBaseUrl())
+    if (failed) { setError(failed); setLeaving(null) }
+  }
 
   const buttons = useRef<(HTMLButtonElement | null)[]>([])
   const frame = useRef(0)
@@ -66,16 +79,9 @@ export function SocialButtons() {
       })
     })
   }
-  const submit = async () => {
+  /** Demo mode: the stand-in sheet plays the provider. */
+  const submit = () => {
     if (!provider || !ready) return
-    if (backendConfigured) {
-      rememberConsent()
-      setLeaving(true)
-      const failed = await startProviderSignIn(provider.id, appBaseUrl())
-      // On success the page is already navigating away; only a failure lands here.
-      if (failed) { setError(failed); setLeaving(false) }
-      return
-    }
     const res = socialAuth(provider.id, email, name)
     if (!res.ok || !res.user) { setError(res.error ?? 'Could not sign you in. Please try again.'); return }
     if (res.isNew) updateUser(res.user.id, { termsAcceptedAt: Date.now() })
@@ -90,8 +96,9 @@ export function SocialButtons() {
         onPointerLeave={() => dock(null)} onPointerUp={e => { if (e.pointerType !== 'mouse') dock(null) }} onPointerCancel={() => dock(null)}>
         {PROVIDERS.map((p, i) => (
           <button key={p.id} ref={el => { buttons.current[i] = el }} type="button" aria-label={`Continue with ${p.label}`}
-            onClick={() => { setProvider(p); setError('') }} style={{ animationDelay: `${i * 60}ms` }}
-            className={`social-btn auth-tile-in group relative h-11 rounded-2xl border flex items-center justify-center shadow-sm transition-all duration-200 ease-out hover:shadow-lg focus-visible:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 active:scale-[.92] ${p.bg} ${p.border} ${p.text} ${p.glow}`}>
+            onClick={() => { if (backendConfigured) leave(p); else { setProvider(p); setError('') } }}
+            aria-busy={leaving?.id === p.id || undefined} style={{ animationDelay: `${i * 60}ms` }}
+            className={`${leaving?.id === p.id ? 'motion-safe:animate-pulse' : leaving ? 'opacity-50' : ''} social-btn auth-tile-in group relative h-11 rounded-2xl border flex items-center justify-center shadow-sm transition-all duration-200 ease-out hover:shadow-lg focus-visible:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 active:scale-[.92] ${p.bg} ${p.border} ${p.text} ${p.glow}`}>
             {/* Clipped to the button, so the sheen never spills past its corners. */}
             <span aria-hidden className="absolute inset-0 overflow-hidden rounded-[inherit]">
               <span className="social-sheen absolute inset-y-0 left-0 w-1/2 bg-gradient-to-r from-transparent via-white/40 to-transparent" />
@@ -107,28 +114,37 @@ export function SocialButtons() {
         ))}
       </div>
 
-      <BottomSheet open={!!provider} onClose={() => setProvider(null)}
-        title={`Continue with ${provider?.label ?? ''}`}
-        subtitle={backendConfigured
-          ? `You will sign in on ${provider?.label ?? 'the provider'}’s own page, then come straight back.`
-          : `Demo mode: this stands in for ${provider?.label ?? 'the provider'}’s own sign-in window.`}>
-        {/* stopPropagation: React bubbles this through the portal to the sign-in form the buttons sit in. */}
-        <form className="flex flex-col gap-3 pb-2" onSubmit={e => { e.preventDefault(); e.stopPropagation(); submit() }}>
-          {!backendConfigured && <>
-          <AuthField label={`${provider?.label ?? ''} account email`}>
-            <input type="email" autoComplete="email" value={email} onChange={e => { setEmail(e.target.value); setError('') }}
-              placeholder="you@example.com" className={authInputCls} />
-          </AuthField>
-          <AuthField label="Name (new accounts)">
-            <input type="text" autoComplete="name" value={name} onChange={e => setName(e.target.value)}
-              placeholder="e.g. Grace Otieno" className={authInputCls} />
-          </AuthField>
+      {backendConfigured && <>
+        <p className="text-center text-[11px] text-gray-500" aria-live="polite">
+          {leaving ? `Opening ${leaving.label}…` : <>
+            By continuing you agree to the{' '}
+            <button type="button" onClick={() => setLegalOpen(true)} className="font-semibold text-teal-700 underline underline-offset-2">Terms &amp; Privacy Policy</button>
           </>}
-          <Consent checked={agreed} onChange={setAgreed} />
-          {error && <p role="alert" className="auth-shake text-xs text-red-500 text-center">{error}</p>}
-          <AuthButton type="submit" disabled={!ready}>{leaving ? 'Opening…' : 'Continue'}</AuthButton>
-        </form>
-      </BottomSheet>
+        </p>
+        {error && <p role="alert" className="auth-shake text-xs text-red-500 text-center">{error}</p>}
+        <LegalSheet open={legalOpen} onClose={() => setLegalOpen(false)} />
+      </>}
+
+      {!backendConfigured && (
+        <BottomSheet open={!!provider} onClose={() => setProvider(null)}
+          title={`Continue with ${provider?.label ?? ''}`}
+          subtitle={`Demo mode: this stands in for ${provider?.label ?? 'the provider'}’s own sign-in window.`}>
+          {/* stopPropagation: React bubbles this through the portal to the sign-in form the buttons sit in. */}
+          <form className="flex flex-col gap-3 pb-2" onSubmit={e => { e.preventDefault(); e.stopPropagation(); submit() }}>
+            <AuthField label={`${provider?.label ?? ''} account email`}>
+              <input type="email" autoComplete="email" value={email} onChange={e => { setEmail(e.target.value); setError('') }}
+                placeholder="you@example.com" className={authInputCls} />
+            </AuthField>
+            <AuthField label="Name (new accounts)">
+              <input type="text" autoComplete="name" value={name} onChange={e => setName(e.target.value)}
+                placeholder="e.g. Grace Otieno" className={authInputCls} />
+            </AuthField>
+            <Consent checked={agreed} onChange={setAgreed} />
+            {error && <p role="alert" className="auth-shake text-xs text-red-500 text-center">{error}</p>}
+            <AuthButton type="submit" disabled={!ready}>Continue</AuthButton>
+          </form>
+        </BottomSheet>
+      )}
     </>
   )
 }

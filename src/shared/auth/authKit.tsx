@@ -128,7 +128,7 @@ export function BrandCluster({ children, className = '', open = true, openDelayM
   }, [])
 
   return (
-    <div ref={rootRef} className={`relative mx-auto flex items-end justify-center ${compact ? 'w-48 h-20' : 'w-64 h-28'} ${className}`}>
+    <div ref={rootRef} className={`relative mx-auto flex items-end justify-center ${compact ? 'w-56 h-[5.5rem]' : 'w-72 h-[7.5rem]'} ${className}`}>
       {CLUSTER.map((c, i) => {
         const on = open && c.icon === active
         return (
@@ -138,7 +138,7 @@ export function BrandCluster({ children, className = '', open = true, openDelayM
               : `duration-200 ease-in opacity-0 scale-50 ${c.tucked}`}`}>
             <span ref={el => { magnets.current[i] = el }} className="flex transition-transform duration-300 ease-out will-change-transform">
               <span className={`auth-float flex transition-[scale,color] duration-300 ${on ? 'scale-125 text-teal-600' : ''}`} style={{ animationDelay: c.delay }}>
-                <span className={`flex ${on ? `auth-icon-${c.icon}` : ''}`}><AuthIcon name={c.icon} className={compact ? 'w-[18px] h-[18px]' : 'w-6 h-6'} /></span>
+                <span className={`flex ${on ? `auth-icon-${c.icon}` : ''}`}><AuthIcon name={c.icon} className={compact ? 'w-4.5 h-4.5' : 'w-6 h-6'} /></span>
               </span>
             </span>
           </span>
@@ -251,7 +251,7 @@ export function PasswordInput({ value, onChange, placeholder, invalid = false, a
 
 /**
  * The main action of a step. Once it can be pressed it looks like Get Started
- * on the welcome page: a pill with a glow breathing under it, a sheen crossing
+ * on the welcome page: a compact, centred pill with a glow breathing under it, a sheen crossing
  * it and the arrow in a frosted tile. Until then it is a quiet grey pill.
  */
 export function AuthButton({ children, onClick, type = 'button', disabled = false, variant = 'primary' }: {
@@ -260,24 +260,24 @@ export function AuthButton({ children, onClick, type = 'button', disabled = fals
   if (variant === 'secondary') {
     return (
       <button type={type} onClick={onClick} disabled={disabled}
-        className="w-full rounded-full border border-gray-200 bg-white h-11 text-sm font-bold text-gray-800 transition-all hover:border-teal-300 active:scale-[.98]">
+        className="mx-auto block w-fit min-w-40 max-w-full rounded-full border border-gray-200 bg-white h-11 px-6 text-sm font-bold text-gray-800 transition-all hover:border-teal-300 active:scale-[.98]">
         {children}
       </button>
     )
   }
   return (
-    <div className="relative w-full">
-      {!disabled && <span aria-hidden className="auth-glow absolute inset-x-10 -bottom-1.5 h-8 rounded-full bg-teal-500/60 blur-xl" />}
+    <div className="relative mx-auto w-fit min-w-40 max-w-full">
+      {!disabled && <span aria-hidden className="auth-glow absolute inset-x-6 -bottom-1.5 h-8 rounded-full bg-teal-500/60 blur-xl" />}
       <button type={type} onClick={onClick} disabled={disabled}
-        className={`group relative w-full overflow-hidden rounded-full py-1.5 pl-5 pr-1.5 flex items-center text-sm font-bold transition-all duration-300 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-teal-500/40 ${disabled
+        className={`group relative w-full overflow-hidden rounded-full py-1.5 pl-6 pr-1.5 flex items-center gap-4 text-sm font-bold transition-all duration-300 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-teal-500/40 ${disabled
           ? 'bg-gray-100 text-gray-400'
           : 'bg-teal-700 text-white ring-1 ring-inset ring-white/20 shadow-lg shadow-teal-700/30 hover:-translate-y-0.5 hover:bg-teal-800 hover:shadow-xl active:translate-y-0 active:scale-[.98]'}`}>
         {!disabled && <>
           <span aria-hidden className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/15 to-transparent" />
           <span aria-hidden className="auth-sheen absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent" />
         </>}
-        {/* pl-8 balances the arrow tile, so the label stays centred. The tile plus padding is as tall as an input. */}
-        <span className="relative flex-1 pl-8 text-center">{children}</span>
+        {/* The pill hugs its label and arrow (short labels keep a minimum width). The tile plus padding is as tall as an input. */}
+        <span className="relative flex-1 text-center">{children}</span>
         <span className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${disabled
           ? 'bg-gray-200/70' : 'bg-white/15 ring-1 ring-inset ring-white/25 backdrop-blur-sm group-hover:bg-white/25'}`}>
           <span className={`flex ${disabled ? '' : 'auth-nudge'}`}><AuthIcon name="arrow" className="w-4 h-4" /></span>
@@ -317,6 +317,17 @@ export function AuthDivider({ children }: { children: React.ReactNode }) {
       {children}
       <span className="h-px flex-1 bg-gray-200" />
     </div>
+  )
+}
+
+export const OWNER = 'mcare.com'
+
+/** The copyright line at the foot of every signed-out page. */
+export function AuthRights({ className = '' }: { className?: string }) {
+  return (
+    <p className={`text-center text-[9px] @2xl:text-[10px] text-gray-400 whitespace-nowrap ${className}`}>
+      © <span className="font-mono">{new Date().getFullYear()}</span> {OWNER} · All rights reserved
+    </p>
   )
 }
 
