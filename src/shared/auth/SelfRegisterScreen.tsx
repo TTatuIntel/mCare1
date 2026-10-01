@@ -124,6 +124,7 @@ export function SelfRegisterScreen({ onSignIn, onConfirm }: {
       <AuthField label="Confirm password" error={mismatch ? 'Passwords don’t match.' : undefined}>
         <PasswordInput value={confirm} onChange={v => { setConfirm(v); setError('') }}
           placeholder="Repeat your password" invalid={mismatch} autoComplete="new-password" />
+      </AuthField>
 
       <Consent checked={agreed} onChange={setAgreed} />
 
