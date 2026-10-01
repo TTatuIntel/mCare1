@@ -46,7 +46,7 @@ export function PortalShell({ screen, animKey, nav, onSelect, homeId, fill, hide
           {children}
         </div>
       </div>
-      <NavBar items={nav.map(n => ({ ...n, badge: n.badge || undefined }))} active={inNav ? screen : homeId} onSelect={onSelect} />
+      <NavBar items={nav.map(n => ({ ...n, badge: n.badge || undefined }))} active={inNav ? screen : homeId} onSelect={onSelect} onHome={() => onSelect(homeId)} />
     </div>
   )
 }

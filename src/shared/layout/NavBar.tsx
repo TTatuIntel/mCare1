@@ -5,10 +5,12 @@ import { Avatar } from '@/shared/ui/primitives'
 /** Main navigation — identical in every portal: a bottom tab bar on mobile, an icon rail on tablet, a labelled sidebar on web. */
 
 /* ─── NavBar ────────────────────────────────────────────────────────── */
-export function NavBar({ items, active, onSelect }: {
+export function NavBar({ items, active, onSelect, onHome }: {
   items: { id: string; label: string; icon: string; badge?: number; group?: string; webOnly?: boolean }[]
   active: string
   onSelect: (id: string) => void
+  /** The brand at the top of the rail and sidebar takes the user home. */
+  onHome: () => void
 }) {
   const { currentUser, setCurrentUser } = useApp()
   return (
@@ -17,9 +19,10 @@ export function NavBar({ items, active, onSelect }: {
         @2xl:static @2xl:order-first @2xl:flex-shrink-0 @2xl:w-20 @2xl:h-full @2xl:flex @2xl:flex-col @2xl:border-t-0 @2xl:border-r @2xl:px-2 @2xl:py-4 @2xl:overflow-y-auto
         @5xl:w-56 @5xl:px-3">
       {/* brand — rail shows the mark, sidebar the full name */}
-      <p className="hidden @2xl:block text-center @5xl:text-left @5xl:px-3 mb-4 text-xl font-black text-teal-700 font-display" aria-hidden="true">
+      <button type="button" onClick={onHome} aria-label="mCare: go to home"
+        className="hidden @2xl:block w-full rounded-xl text-center @5xl:text-left @5xl:px-3 mb-4 text-xl font-black text-teal-700 font-display transition-transform hover:scale-105 active:scale-95 @5xl:origin-left">
         m<span className="hidden @5xl:inline">Care</span>
-      </p>
+      </button>
       <div className="flex justify-around items-center @2xl:flex-col @2xl:justify-start @2xl:items-stretch @2xl:gap-1">
         {items.map(({ id, label, icon, badge, group, webOnly }, i) => {
           const on = active === id

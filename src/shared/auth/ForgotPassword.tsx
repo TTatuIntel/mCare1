@@ -111,7 +111,7 @@ export function ForgotPassword({ initialEmail, onBack, onDone }: {
         </AuthField>
         <AuthField label="Anything that helps us reach you (optional)">
           <textarea value={note} onChange={e => setNote(e.target.value)} rows={2}
-            placeholder="e.g. a phone number we can call" className={`${authInputCls} resize-none`} />
+            placeholder="e.g. a phone number we can call" className={`${authInputCls} h-auto! py-2.5 resize-none`} />
         </AuthField>
         <AuthButton type="submit" disabled={!isEmail(identifier)}>Send request</AuthButton>
       </form>

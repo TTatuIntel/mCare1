@@ -3,7 +3,7 @@ import MCareLogo from '@/shared/layout/MCareLogo'
 import { useSplashDone } from '@/shared/layout/splashSignal'
 import { AuthIcon, BrandCluster, type AuthIconName } from './authKit'
 
-/** How long each feature stays on stage before the next one takes over (the progress bar times it). */
+/** How long each feature stays on stage before the next one takes over. */
 const AUTO_MS = 3000
 /** Horizontal drag (px) on the stage that counts as a swipe. */
 const SWIPE_PX = 40
@@ -259,7 +259,7 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
     const wordsDone = 160 + words.length * 60
     return (
       <div key={`${s.name}-${mode}`} aria-hidden={mode === 'out'}
-        className={`col-start-1 row-start-1 w-full flex flex-col items-center gap-3 @5xl:items-start @5xl:gap-5 ${mode === 'out' ? (dir > 0 ? 'auth-leave-next' : 'auth-leave-prev') : ''}`}>
+        className={`col-start-1 row-start-1 w-full flex flex-col items-center gap-2 @5xl:items-start @5xl:gap-5 ${mode === 'out' ? (dir > 0 ? 'auth-leave-next' : 'auth-leave-prev') : ''}`}>
         <p className={`${on('auth-item-in')} flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.16em] text-teal-700`}>
           <span className={`flex ${on(`auth-icon-${s.icon}`)}`}><AuthIcon name={s.icon} className="w-4 h-4" /></span>
           {s.name}
@@ -280,7 +280,7 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
 
         <div className="w-full flex items-center justify-center gap-4 text-left @5xl:justify-start @5xl:gap-7">
           {/* The preview sits straight on the page: no tile or card behind it. */}
-          <div aria-hidden className={`relative w-28 h-20 shrink-0 flex items-center justify-center @5xl:w-36 @5xl:h-36 ${on('auth-scene-in')}`}>
+          <div aria-hidden className={`relative w-28 h-[4.5rem] shrink-0 flex items-center justify-center @5xl:w-36 @5xl:h-36 ${on('auth-scene-in')}`}>
             <div className={`relative w-full h-full flex items-center justify-center ${on('auth-float')}`}><s.Scene /></div>
           </div>
           {/* Mobile and tablet: one sentence, so the actions below stay the focus. Web has room for the list. */}
@@ -322,7 +322,7 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
       <div className="w-full max-w-2xl flex flex-col gap-1 @5xl:gap-2">
         {/* One message at a time, straight on the page. It moves on by itself; tap or swipe to change it. */}
         <div role="button" tabIndex={0} aria-label="Show the next feature" aria-roledescription="carousel" style={stageIn.style}
-          className={`${stageIn.className} grid items-start min-h-[11.25rem] cursor-pointer touch-pan-y select-none rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 @5xl:min-h-[19rem]`}
+          className={`${stageIn.className} grid items-start min-h-[10rem] cursor-pointer touch-pan-y select-none rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 @5xl:min-h-[19rem]`}
           onPointerEnter={e => { if (e.pointerType === 'mouse') setHeld(true) }}
           onPointerLeave={() => { setHeld(false); drag.current = null }}
           onPointerDown={e => { drag.current = { x: e.clientX, swiped: false } }}
@@ -347,25 +347,45 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
 
 /* ─── Shell ─────────────────────────────────────────────────────────── */
 
-const CARD = 'rounded-[28px] bg-white/90 backdrop-blur-xl ring-1 ring-teal-900/5 shadow-xl shadow-teal-900/10'
-/** The same card, on web only: the welcome step has no card on mobile and tablet. */
-const CARD_WEB = '@5xl:rounded-[28px] @5xl:bg-white/90 @5xl:backdrop-blur-xl @5xl:ring-1 @5xl:ring-teal-900/5 @5xl:shadow-xl @5xl:shadow-teal-900/10'
+/**
+ * The brand over a form step, where the welcome page has it: the logo with the
+ * feature icons around it on mobile and tablet, the small logo on web (the big
+ * one is beside it, over the tour). With `onHome` the logo is the way back to
+ * the welcome page.
+ */
+function StepBrand({ onHome }: { onHome?: () => void }) {
+  const logo = (size: 'sm' | 'md') => onHome ? (
+    <button type="button" onClick={onHome} aria-label="mCare: back to the welcome page"
+      className="relative z-10 rounded-2xl outline-none transition-transform duration-300 hover:scale-105 active:scale-95 focus-visible:ring-2 focus-visible:ring-teal-500/60">
+      <MCareLogo size={size} />
+    </button>
+  ) : <MCareLogo size={size} />
+  return (
+    <>
+      {/* Smaller than on the welcome page: here the fields come first. */}
+      <BrandCluster compact className="@5xl:hidden mb-1.5 @2xl:mb-3">{logo('md')}</BrandCluster>
+      <div className="hidden @5xl:flex justify-center mb-5">{logo('sm')}</div>
+    </>
+  )
+}
 
 /**
  * The one page every signed-out step renders on: brand and feature tour on
- * one side, a card on the other. Welcome, sign in, create account and
- * verification only swap what is inside the card.
+ * one side, the step on the other, straight on the page with no card behind
+ * it. Welcome, sign in, create account and verification only swap the step.
  *
  * Web: two columns that fit the window. Tablet: a centred column. Mobile: the
- * welcome step (`welcome`) shows the tour with the actions sitting straight
- * on the page, no card; form steps get the whole screen. Nothing scrolls
- * unless the screen is too short to fit.
+ * welcome step (`welcome`) shows the tour above its actions; form steps get
+ * the whole screen, under the same brand. Nothing scrolls unless the screen
+ * is too short to fit.
  */
-export function AuthShell({ children, welcome = false, entrance = false }: {
+export function AuthShell({ children, welcome = false, entrance = false, onHome }: {
   children: React.ReactNode
   welcome?: boolean
   /** Stagger the sections in as the boot splash clears (first screen only). */
   entrance?: boolean
+  /** Form steps: where the logo takes the user (the welcome page). */
+  onHome?: () => void
 }) {
   const splashDone = useSplashDone()
   const rise = (delayMs: number) => !entrance ? { cls: '' }
@@ -390,13 +410,13 @@ export function AuthShell({ children, welcome = false, entrance = false }: {
           <main onFocus={() => setUsingCard(true)} onPointerDown={() => setUsingCard(true)}
             onPointerEnter={e => { if (e.pointerType === 'mouse') setUsingCard(true) }}
             className={`w-full flex flex-col @2xl:flex-none @5xl:w-[27rem] @5xl:shrink-0 ${welcome ? '' : 'flex-1'} ${!welcome ? card.cls : ''}`} style={!welcome ? card.style : undefined}>
-            <div className={welcome ? `px-3 py-2.5 @2xl:px-4 @2xl:py-3 @5xl:p-8` : `flex-1 p-5 @2xl:flex-none @5xl:p-8 ${CARD}`}>
+            <div className="px-3 py-2.5 @2xl:px-4 @2xl:py-3 @5xl:p-8">
               {/* Web: where the logo lands; the icons spring out around it as it arrives. */}
-              {welcome && (
+              {welcome ? (
                 <BrandCluster className="hidden @5xl:flex mb-3" open={logoInCard} openDelayMs={FLY_MS * 0.55}>
                   {logoInCard && <FlyingLogo />}
                 </BrandCluster>
-              )}
+              ) : <StepBrand onHome={onHome} />}
               {children}
             </div>
           </main>

@@ -13,9 +13,12 @@ const ICONS = {
   mail: ['M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z', 'm22 7-10 6L2 7'],
   back: ['M15 19l-7-7 7-7'],
   arrow: ['M5 12h14', 'm12 5 7 7-7 7'],
+  user: ['M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2', 'M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z'],
   lock: ['M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z', 'M7 11V7a5 5 0 0 1 10 0v4'],
   history: ['M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z', 'M12 6v6l4 2'],
   help: ['M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z', 'M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3', 'M12 17h.01'],
+  phone: ['M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z', 'M12 18h.01'],
+  calendar: ['M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z', 'M16 2v4', 'M8 2v4', 'M3 10h18'],
 } as const
 export type AuthIconName = keyof typeof ICONS
 
@@ -61,8 +64,10 @@ const TOUCH_SETTLE_MS = 600
  * its own depth), and the ones it comes close to lean in and grow. `active`
  * is the icon of the feature on stage, which moves the way the real thing does.
  */
-export function BrandCluster({ children, className = '', open = true, openDelayMs = 0, active }: {
+export function BrandCluster({ children, className = '', open = true, openDelayMs = 0, active, compact = false }: {
   children?: React.ReactNode; className?: string; open?: boolean; openDelayMs?: number; active?: AuthIconName
+  /** Form steps: a smaller cluster, so the fields below get the room. */
+  compact?: boolean
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const magnets = useRef<(HTMLSpanElement | null)[]>([])
@@ -123,7 +128,7 @@ export function BrandCluster({ children, className = '', open = true, openDelayM
   }, [])
 
   return (
-    <div ref={rootRef} className={`relative mx-auto w-64 h-28 flex items-end justify-center ${className}`}>
+    <div ref={rootRef} className={`relative mx-auto flex items-end justify-center ${compact ? 'w-48 h-20' : 'w-64 h-28'} ${className}`}>
       {CLUSTER.map((c, i) => {
         const on = open && c.icon === active
         return (
@@ -133,7 +138,7 @@ export function BrandCluster({ children, className = '', open = true, openDelayM
               : `duration-200 ease-in opacity-0 scale-50 ${c.tucked}`}`}>
             <span ref={el => { magnets.current[i] = el }} className="flex transition-transform duration-300 ease-out will-change-transform">
               <span className={`auth-float flex transition-[scale,color] duration-300 ${on ? 'scale-125 text-teal-600' : ''}`} style={{ animationDelay: c.delay }}>
-                <span className={`flex ${on ? `auth-icon-${c.icon}` : ''}`}><AuthIcon name={c.icon} className="w-6 h-6" /></span>
+                <span className={`flex ${on ? `auth-icon-${c.icon}` : ''}`}><AuthIcon name={c.icon} className={compact ? 'w-[18px] h-[18px]' : 'w-6 h-6'} /></span>
               </span>
             </span>
           </span>
@@ -148,8 +153,9 @@ export function BrandCluster({ children, className = '', open = true, openDelayM
 
 export function AuthBack({ onClick, children = 'Back' }: { onClick: () => void; children?: React.ReactNode }) {
   return (
-    <button type="button" onClick={onClick} className="self-start flex items-center gap-1 -ml-1 text-teal-700 text-sm font-semibold">
-      <AuthIcon name="back" className="w-4 h-4" />
+    <button type="button" onClick={onClick}
+      className="group self-start flex items-center gap-1 rounded-full bg-teal-50 py-1 pl-1.5 pr-3 text-xs font-semibold text-teal-700 transition-colors hover:bg-teal-100 active:scale-[.97]">
+      <AuthIcon name="back" className="w-3.5 h-3.5 transition-transform group-hover:-translate-x-0.5" />
       {children}
     </button>
   )
@@ -171,8 +177,8 @@ export function AuthHeading({ title, subtitle, icon, center = false }: {
   )
 }
 
-/** Patient sign-up: two form steps in SelfRegisterScreen, then email verification. */
-export const SIGNUP_STEPS = 3
+/** Patient sign-up: the one-screen form in SelfRegisterScreen, then email verification. */
+export const SIGNUP_STEPS = 2
 
 /** Progress through a multi-step flow: filled segments plus "Step 2 of 4 · Label". */
 export function StepBar({ step, total, label }: { step: number; total: number; label: string }) {
@@ -181,7 +187,10 @@ export function StepBar({ step, total, label }: { step: number; total: number; l
       <div className="flex gap-1 @2xl:gap-1.5" role="progressbar" aria-valuemin={1} aria-valuemax={total} aria-valuenow={step}
         aria-label={`Step ${step} of ${total}: ${label}`}>
         {Array.from({ length: total }, (_, i) => (
-          <span key={i} className={`h-1 @2xl:h-1.5 flex-1 rounded-full transition-colors duration-300 ${i < step ? 'bg-teal-700' : 'bg-gray-200'}`} />
+          <span key={i} className="h-1 @2xl:h-1.5 flex-1 overflow-hidden rounded-full bg-gray-200">
+            {/* The bar of the step just reached fills from the left. */}
+            <span className={`block h-full origin-left rounded-full bg-teal-700 transition-transform duration-500 ease-out motion-reduce:transition-none ${i < step ? 'scale-x-100' : 'scale-x-0'}`} />
+          </span>
         ))}
       </div>
       <p className="mt-1.5 @2xl:mt-2 text-[9px] @2xl:text-[11px] font-semibold text-gray-400">
@@ -193,14 +202,32 @@ export function StepBar({ step, total, label }: { step: number; total: number; l
 
 /* ─── Inputs and buttons ────────────────────────────────────────────── */
 
-export const authInputCls = 'w-full bg-gray-50 border-2 border-gray-200 rounded-xl @2xl:rounded-2xl px-3 @2xl:px-4 py-2 @2xl:py-3 text-xs @2xl:text-sm outline-none focus:border-teal-500 focus:bg-white transition-colors'
+export const authInputCls = 'w-full bg-gray-50 border border-gray-200 rounded-2xl px-4 h-11 text-sm outline-none transition-all duration-200 placeholder:text-gray-400 hover:border-gray-300 focus:border-teal-600 focus:bg-white focus:ring-4 focus:ring-teal-500/15'
 
-export function AuthField({ label, hint, children }: { label: string; hint?: React.ReactNode; children: React.ReactNode }) {
+/**
+ * An input with a leading icon that turns teal while the field is in use.
+ * Give the input inside `pl-10` so its text clears the icon.
+ */
+export function IconInput({ icon, children }: { icon: AuthIconName; children: React.ReactNode }) {
+  return (
+    <span className="group relative block">
+      {children}
+      <span aria-hidden className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 transition-colors group-focus-within:text-teal-700">
+        <AuthIcon name={icon} className="w-4 h-4" />
+      </span>
+    </span>
+  )
+}
+
+export function AuthField({ label, hint, error, children }: {
+  label: string; hint?: React.ReactNode; error?: React.ReactNode; children: React.ReactNode
+}) {
   return (
     <label className="block">
       <span className="block text-[9px] @2xl:text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">{label}</span>
       {children}
       {hint && <span className="block text-xs @2xl:text-[11px] text-teal-700 font-semibold mt-1">{hint}</span>}
+      {error && <span role="alert" className="block text-xs @2xl:text-[11px] text-red-500 font-semibold mt-1">{error}</span>}
     </label>
   )
 }
@@ -210,31 +237,53 @@ export function PasswordInput({ value, onChange, placeholder, invalid = false, a
 }) {
   const [show, setShow] = useState(false)
   return (
-    <span className="relative block">
+    <IconInput icon="lock">
       <input type={show ? 'text' : 'password'} value={value} onChange={e => onChange(e.target.value)}
         placeholder={placeholder} autoComplete={autoComplete}
-        className={`${authInputCls} pr-14 ${invalid ? 'border-red-300 focus:border-red-400' : ''}`} />
+        className={`${authInputCls} pl-10 pr-14 ${invalid ? 'border-red-300 focus:border-red-400' : ''}`} />
       <button type="button" onClick={() => setShow(v => !v)}
-        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs font-semibold">
+        className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400 transition-colors hover:text-teal-700">
         {show ? 'Hide' : 'Show'}
       </button>
-    </span>
+    </IconInput>
   )
 }
 
+/**
+ * The main action of a step. Once it can be pressed it looks like Get Started
+ * on the welcome page: a pill with a glow breathing under it, a sheen crossing
+ * it and the arrow in a frosted tile. Until then it is a quiet grey pill.
+ */
 export function AuthButton({ children, onClick, type = 'button', disabled = false, variant = 'primary' }: {
   children: React.ReactNode; onClick?: () => void; type?: 'button' | 'submit'; disabled?: boolean; variant?: 'primary' | 'secondary'
 }) {
-  const look = variant === 'secondary'
-    ? 'bg-white border-2 border-gray-200 text-gray-800 hover:border-teal-300 active:scale-[.98]'
-    : disabled
-      ? 'bg-gray-200 text-gray-400'
-      : 'bg-teal-700 text-white shadow-md @2xl:shadow-lg shadow-teal-700/25 hover:bg-teal-800 active:scale-[.98]'
+  if (variant === 'secondary') {
+    return (
+      <button type={type} onClick={onClick} disabled={disabled}
+        className="w-full rounded-full border border-gray-200 bg-white h-11 text-sm font-bold text-gray-800 transition-all hover:border-teal-300 active:scale-[.98]">
+        {children}
+      </button>
+    )
+  }
   return (
-    <button type={type} onClick={onClick} disabled={disabled}
-      className={`w-full py-2.5 @2xl:py-3 @2xl:py-3.5 rounded-xl @2xl:rounded-2xl text-xs @2xl:text-sm font-bold transition-all ${look}`}>
-      {children}
-    </button>
+    <div className="relative w-full">
+      {!disabled && <span aria-hidden className="auth-glow absolute inset-x-10 -bottom-1.5 h-8 rounded-full bg-teal-500/60 blur-xl" />}
+      <button type={type} onClick={onClick} disabled={disabled}
+        className={`group relative w-full overflow-hidden rounded-full py-1.5 pl-5 pr-1.5 flex items-center text-sm font-bold transition-all duration-300 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-teal-500/40 ${disabled
+          ? 'bg-gray-100 text-gray-400'
+          : 'bg-teal-700 text-white ring-1 ring-inset ring-white/20 shadow-lg shadow-teal-700/30 hover:-translate-y-0.5 hover:bg-teal-800 hover:shadow-xl active:translate-y-0 active:scale-[.98]'}`}>
+        {!disabled && <>
+          <span aria-hidden className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/15 to-transparent" />
+          <span aria-hidden className="auth-sheen absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent" />
+        </>}
+        {/* pl-8 balances the arrow tile, so the label stays centred. The tile plus padding is as tall as an input. */}
+        <span className="relative flex-1 pl-8 text-center">{children}</span>
+        <span className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${disabled
+          ? 'bg-gray-200/70' : 'bg-white/15 ring-1 ring-inset ring-white/25 backdrop-blur-sm group-hover:bg-white/25'}`}>
+          <span className={`flex ${disabled ? '' : 'auth-nudge'}`}><AuthIcon name="arrow" className="w-4 h-4" /></span>
+        </span>
+      </button>
+    </div>
   )
 }
 

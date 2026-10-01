@@ -45,7 +45,7 @@ export function Consent({ checked, onChange }: { checked: boolean; onChange: (v:
   const [open, setOpen] = useState(false)
   return (
     <>
-      <div className={`flex items-center gap-2.5 rounded-xl px-3 py-2.5 transition-colors ${checked ? 'bg-teal-50' : 'bg-gray-50'}`}>
+      <div className={`flex items-center gap-2.5 rounded-2xl px-4 h-11 transition-colors ${checked ? 'bg-teal-50' : 'bg-gray-50'}`}>
         <input id="auth-consent" type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)}
           className="w-4 h-4 shrink-0 accent-teal-700" />
         <p className="text-xs text-gray-600">

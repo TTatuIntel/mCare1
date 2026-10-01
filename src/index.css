@@ -117,6 +117,16 @@ body {
 @keyframes auth-ekg { 0% { stroke-dashoffset: 100; } 60%, 100% { stroke-dashoffset: 0; } }
 @keyframes auth-ring { from { opacity: .5; transform: scale(.8); } to { opacity: 0; transform: scale(2.2); } }
 .auth-item-in { animation: auth-item-in .45s cubic-bezier(.2,.8,.2,1) both; }
+/* Form steps: the heading, fields and actions rise in one after another. `:where` keeps
+   this weaker than a child's own animation class (e.g. the shake on an error line). */
+:where(.auth-stagger) > * { animation: auth-item-in .45s cubic-bezier(.2,.8,.2,1) both; }
+:where(.auth-stagger) > :nth-child(2) { animation-delay: 60ms; }
+:where(.auth-stagger) > :nth-child(3) { animation-delay: 120ms; }
+:where(.auth-stagger) > :nth-child(4) { animation-delay: 180ms; }
+:where(.auth-stagger) > :nth-child(5) { animation-delay: 240ms; }
+:where(.auth-stagger) > :nth-child(6) { animation-delay: 300ms; }
+:where(.auth-stagger) > :nth-child(7) { animation-delay: 360ms; }
+:where(.auth-stagger) > :nth-child(n+8) { animation-delay: 420ms; }
 .auth-ekg { stroke-dasharray: 100; animation: auth-ekg 2.4s ease-in-out infinite; }
 .auth-ring { animation: auth-ring 2s ease-out infinite; }
 /* Headline accent: a slow light passing through the brand teal. */
@@ -137,6 +147,13 @@ body {
 /* Get Started: its arrow keeps nudging forward. */
 @keyframes auth-nudge { 0%, 100% { transform: translateX(-1px); } 50% { transform: translateX(3px); } }
 .auth-nudge { animation: auth-nudge 1.4s ease-in-out infinite; }
+/* Get Started: a ring pulses out from it, a ripple spreads from where it is pressed,
+   and the Sign in link's underline redraws from the left on hover. */
+@keyframes auth-cta-ring { 0% { opacity: .7; transform: scale(1); } 70%, 100% { opacity: 0; transform: scale(1.1, 1.45); } }
+@keyframes auth-ripple { from { opacity: .6; transform: scale(0); } to { opacity: 0; transform: scale(14); } }
+@keyframes auth-underline { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.auth-cta-ring { animation: auth-cta-ring 2.4s ease-out infinite; }
+.auth-ripple { animation: auth-ripple .6s ease-out both; }
 /* Welcome tour build-up: tiles drop in one after another with a soft overshoot
    (delay set inline), then the stage unfolds beneath them. `backwards` keeps a
    tile hidden while it waits but lets its own lift/hover transforms work after. */
@@ -179,15 +196,28 @@ body {
 .auth-icon-chat { animation: auth-icon-hop 0.8s ease-in-out .3s infinite; }
 .auth-icon-bell { transform-origin: 50% 10%; animation: auth-icon-swing 1.1s ease-in-out .3s infinite; }
 .auth-icon-users { animation: auth-icon-pulse 1.3s ease-in-out .3s infinite; }
+/* Social sign-in buttons: Instagram's own gradient, a sheen that crosses the
+   button under the pointer, and the brand mark giving a quick wiggle. */
+.social-instagram { background: radial-gradient(circle at 30% 107%, #fdf497 0%, #fdf497 5%, #fd5949 45%, #d6249f 60%, #285aeb 90%); }
+@keyframes social-mark { 0% { transform: none; } 35% { transform: scale(1.3) rotate(-10deg); } 70% { transform: scale(1.08) rotate(6deg); } 100% { transform: scale(1.14); } }
+@keyframes social-sheen { from { transform: translateX(-120%) skewX(-20deg); } to { transform: translateX(320%) skewX(-20deg); } }
+.social-sheen { transform: translateX(-120%) skewX(-20deg); }
+.social-btn:focus-visible .social-mark { animation: social-mark .45s cubic-bezier(.2,.8,.2,1) forwards; }
+.social-btn:focus-visible .social-sheen { animation: social-sheen .7s ease-out; }
+@media (hover: hover) {
+  .social-btn:hover .social-mark { animation: social-mark .45s cubic-bezier(.2,.8,.2,1) forwards; }
+  .social-btn:hover .social-sheen { animation: social-sheen .7s ease-out; }
+}
 @media (prefers-reduced-motion: reduce) {
+  .social-btn .social-mark, .social-btn .social-sheen { animation: none; }
   .sheet-up, .sheet-fade, .screen-in, .loader-pop, .splash-logo-in, .splash-tag-in, .rise-in,
   .auth-float, .auth-drift, .auth-shake, .auth-pop, .auth-check,
   .auth-item-in, .auth-ekg, .auth-shimmer,
   .auth-tile-in, .auth-stage-open, .auth-scene-in, .auth-slide-next, .auth-slide-prev,
   .auth-icon-vitals, .auth-icon-pill, .auth-icon-chat, .auth-icon-bell, .auth-icon-users { animation: none; }
   .auth-ekg { stroke-dashoffset: 0; }
-  .auth-word-up, .auth-glow, .auth-nudge, .auth-progress { animation: none; }
-  .auth-ring, .auth-sheen, .auth-halo, .auth-leave-next, .auth-leave-prev { animation: none; opacity: 0; }
+  .auth-word-up, .auth-glow, .auth-nudge, .auth-stagger > * { animation: none; }
+  .auth-ring, .auth-sheen, .auth-halo, .auth-cta-ring, .auth-leave-next, .auth-leave-prev { animation: none; opacity: 0; }
 }
 
 /* Home vitals trend popover: blurs in and "solidifies", then dissolves on leave.

@@ -142,6 +142,7 @@ function MCareMark({ pulseWidth, dotR }: { pulseWidth: number; dotR: number }) {
 
 const SIZES = {
   sm: { font: 22, gap: 'gap-1', traceW: 72, traceH: 14, pulseWidth: 2.6, dotR: 2.2 },
+  md: { font: 30, gap: 'gap-1', traceW: 104, traceH: 19, pulseWidth: 2.9, dotR: 2.5 },
   lg: { font: 40, gap: 'gap-1.5', traceW: 140, traceH: 26, pulseWidth: 3.2, dotR: 2.8 },
   xl: { font: 64, gap: 'gap-2.5', traceW: 220, traceH: 40, pulseWidth: 3.6, dotR: 3.2 },
 } as const

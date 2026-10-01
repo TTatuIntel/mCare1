@@ -3,12 +3,11 @@ import { useApp } from '@/shared/state/AppContext'
 import { Avatar, Pill } from '@/shared/ui/primitives'
 import { BottomSheet } from '@/shared/ui/BottomSheet'
 import { Loading } from '@/shared/ui/Loader'
-import MCareLogo from '@/shared/layout/MCareLogo'
 import type { AppUser } from '@/shared/lib/types'
 import { backendConfigured } from '@/shared/api/supabase'
 import { mayHaveSession, resumeBackendSession, returningFromProvider, returningToReset, signInWithEmail } from '@/shared/api/authBackend'
 import { AuthShell } from './AuthShell'
-import { AuthBack, AuthButton, AuthDivider, AuthField, AuthHeading, PasswordInput, authInputCls } from './authKit'
+import { AuthBack, AuthButton, AuthDivider, AuthField, AuthHeading, IconInput, PasswordInput, authInputCls } from './authKit'
 import { ForgotPassword } from './ForgotPassword'
 import { ConfirmEmail, LiveRecovery, useAdoptAccount } from './LiveAuth'
 import { SocialButtons } from './SocialAuth'
@@ -50,14 +49,14 @@ export function LoginScreen() {
   }, [])
 
   return (
-    <AuthShell welcome={view === 'welcome'} entrance>
+    <AuthShell welcome={view === 'welcome'} entrance onHome={() => setView('welcome')}>
       <Loading when={resuming} label="Signing you in…" />
       <div key={view} className="screen-in">
         {view === 'welcome' && (
           <WelcomeScreen onGetStarted={() => setView('register')} onSignIn={() => signIn()} onDemo={() => signIn(true)} />
         )}
         {view === 'register' && (
-          <SelfRegisterScreen onBack={() => setView('welcome')} onSignIn={() => signIn()}
+          <SelfRegisterScreen onSignIn={() => signIn()}
             onConfirm={sentTo => { setEmail(sentTo); setView('confirm') }} />
         )}
         {view === 'signin' && (
@@ -113,28 +112,27 @@ function SignInForm({ initialDemoOpen, initialEmail, notice, onBack, onRegister,
   }
 
   return (
-    <form className="flex flex-col gap-3.5" onSubmit={e => { e.preventDefault(); handleLogin() }}>
+    <form className="auth-stagger flex flex-col gap-3.5" onSubmit={e => { e.preventDefault(); handleLogin() }}>
       <AuthBack onClick={onBack} />
-      <div className="flex justify-center mb-2">
-        <MCareLogo size="sm" />
-      </div>
-      <AuthHeading title="Welcome back" subtitle="Sign in to continue your care." />
+      <AuthHeading center title="Welcome back" subtitle="Sign in to continue your care." />
 
       <AuthField label="Email Address">
-        <input
-          type="email" autoComplete="username"
-          value={email}
-          onChange={e => { setEmail(e.target.value); setError('') }}
-          placeholder="you@example.com"
-          className={authInputCls}
-        />
+        <IconInput icon="mail">
+          <input
+            type="email" autoComplete="username"
+            value={email}
+            onChange={e => { setEmail(e.target.value); setError('') }}
+            placeholder="you@example.com"
+            className={`${authInputCls} pl-10`}
+          />
+        </IconInput>
       </AuthField>
 
       <AuthField label="Password">
         <PasswordInput value={password} onChange={v => { setPassword(v); setError('') }}
           placeholder="Enter your password" autoComplete="current-password" />
       </AuthField>
-      <button type="button" onClick={() => onForgot(email.trim())} className="self-end -mt-2 text-xs font-semibold text-teal-700">
+      <button type="button" onClick={() => onForgot(email.trim())} className="self-end -mt-2 text-xs font-semibold text-teal-700 underline-offset-4 hover:underline">
         Forgot password?
       </button>
 
@@ -146,14 +144,14 @@ function SignInForm({ initialDemoOpen, initialEmail, notice, onBack, onRegister,
       <SocialButtons />
 
       {/* One line, so the whole form fits the screen without scrolling. */}
-      <p className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs text-gray-500">
+      <p className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs text-gray-600">
         <span>
           New here?{' '}
-          <button type="button" onClick={onRegister} className="text-teal-700 font-bold">Create an account</button>
+          <button type="button" onClick={onRegister} className="font-bold text-teal-700 underline underline-offset-4 hover:text-teal-800">Create an account</button>
         </span>
         {!backendConfigured && <>
           <span aria-hidden className="h-3 w-px bg-gray-300" />
-          <button type="button" onClick={() => setShowDemo(true)} className="font-semibold text-teal-700">Demo accounts</button>
+          <button type="button" onClick={() => setShowDemo(true)} className="font-semibold text-teal-700 underline-offset-4 hover:underline">Demo accounts</button>
         </>}
       </p>
 
