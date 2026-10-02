@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import { BottomSheet, SheetButton, useLoader } from '@/shared'
 import type { MedicalDocument } from '@/shared/lib/types'
@@ -13,7 +13,14 @@ type Option = { key: string; icon: string; label: string; hint: string; run: () 
  * the store first — that is both the access check and the access-history entry.
  */
 export function DownloadSheet({ doc, open, onClose }: { doc: MedicalDocument; open: boolean; onClose: () => void }) {
-  const { users, recordDownload } = useApp()
+  const { users, recordDownload, loadDocumentFile, live } = useApp()
+  // Live mode: the original file is fetched from storage when the sheet opens.
+  const [fileFailed, setFileFailed] = useState(false)
+  useEffect(() => {
+    if (!open || !doc.file || doc.file.dataUrl) return
+    setFileFailed(false)
+    loadDocumentFile(doc.id).then(url => { if (!url) setFileFailed(true) })
+  }, [open, doc.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const loader = useLoader()
@@ -49,7 +56,10 @@ export function DownloadSheet({ doc, open, onClose }: { doc: MedicalDocument; op
     )
   }
   if (!doc.file?.dataUrl && doc.file && !hasReport) {
-    options.push({ key: 'none', icon: '🗄️', label: 'Original file', hint: 'Held in secure storage — not available in this demo', run: () => setError('The original file is not available in this demo.') })
+    options.push(live
+      ? { key: 'none', icon: '🗄️', label: 'Original file', hint: fileFailed ? 'Could not be fetched. Tap to try again.' : 'Fetching from secure storage…',
+          run: async () => { setFileFailed(false); if (!(await loadDocumentFile(doc.id))) { setFileFailed(true); setError('The file could not be fetched. Check your connection and try again.') } } }
+      : { key: 'none', icon: '🗄️', label: 'Original file', hint: 'Held in secure storage — not available in this demo', run: () => setError('The original file is not available in this demo.') })
   }
 
   return (

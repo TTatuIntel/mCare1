@@ -3,7 +3,7 @@ import { useApp } from '@/shared/state/AppContext'
 import type { PatientUser } from '@/shared/lib/types'
 import { MIN_PASSWORD_LEN, PHONE_COUNTRIES, fullPhone, isEmail, passwordIssue, type PhoneCountry } from '@/shared/state/auth'
 import { AuthButton, AuthField, AuthHeading, AuthSwitch, IconInput, PasswordInput, PasswordMeter, PhoneInput, authInputCls, AuthDivider } from './authKit'
-import { SocialButtons } from './SocialAuth'
+import { SocialButtons, socialSignInAvailable } from './SocialAuth'
 import { Consent } from './Legal'
 import { useAdoptAccount } from './LiveAuth'
 import { backendConfigured } from '@/shared/api/supabase'
@@ -124,8 +124,10 @@ export function SelfRegisterScreen({ onSignIn, onConfirm }: {
       <AuthButton type="submit" disabled={!ready}>{busy ? 'Creating…' : 'Sign up'}</AuthButton>
 
       {/* The quick way: the provider vouches for the email, so there is no code to type. */}
-      <AuthDivider>Or continue with</AuthDivider>
-      <SocialButtons />
+      {socialSignInAvailable && <>
+        <AuthDivider>Or continue with</AuthDivider>
+        <SocialButtons />
+      </>}
 
       {onSignIn && <AuthSwitch prompt="Already have an account?" action="Sign in" onClick={onSignIn} />}
     </form>

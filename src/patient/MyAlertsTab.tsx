@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useApp, isActiveAlert } from '@/shared/state/AppContext'
-import { Page, AlertStatusPill } from '@/shared'
+import { Page, AlertStatusPill, SaveError, useSave } from '@/shared'
 import { usePatient } from './usePatient'
 import type { AppAlert } from '@/shared/lib/types'
 import { ago } from '@/shared/lib/vitals'
@@ -40,7 +40,9 @@ function AlertCard({ alert, openVital, onLog, onMessage }: {
   onLog: (vitalId: string) => void
   onMessage: () => void
 }) {
-  const { now, resolveAlert } = useApp()
+  const { now } = useApp()
+  const { cancelSos } = usePatient()
+  const save = useSave()
   const v = useAlertView()(alert)
   const tone = v.danger
     ? { bar: 'bg-red-500', tile: 'bg-red-50', value: 'text-red-600' }
@@ -96,7 +98,10 @@ function AlertCard({ alert, openVital, onLog, onMessage }: {
 
         {/* actions: one main button, the rest quiet */}
         {alert.type === 'sos' ? (
-          <button onClick={() => resolveAlert(alert.id, 'Patient marked safe')} className={outline}>I’m safe now · cancel SOS</button>
+          <>
+            <button onClick={() => save.run(() => cancelSos(alert.id))} disabled={save.busy} className={outline}>{save.busy ? 'Cancelling…' : 'I’m safe now · cancel SOS'}</button>
+            <SaveError message={save.error} />
+          </>
         ) : (
           <div className="flex flex-col gap-2">
             {v.def && (
@@ -178,7 +183,7 @@ export function MyAlertsTab({ openVital, onLog, go }: {
                   <p className="text-xs font-semibold text-gray-800 truncate">
                     {v.name}{a.type !== 'sos' && <> · <span className="font-mono">{v.value}</span> {v.unit}</>}
                   </p>
-                  <p className="text-[11px] text-emerald-700">{a.resolutionReason}{a.resolutionNote ? `: ${a.resolutionNote}` : ''}</p>
+                  <p className="text-[11px] text-emerald-700 leading-snug">{a.resolutionReason}{a.resolutionNote ? `: ${a.resolutionNote}` : ''}</p>
                   <p className="text-[10px] text-gray-400">{nameOf(a.resolvedBy, 'You')} · {a.resolvedAt}</p>
                 </div>
               </div>

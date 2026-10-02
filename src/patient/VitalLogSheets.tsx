@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useApp, isActiveAlert } from '@/shared/state/AppContext'
-import { BottomSheet, SheetButton, levelStyle } from '@/shared'
+import { BottomSheet, SheetButton, SaveError, useSave, levelStyle } from '@/shared'
 import type { PatientUser, VitalDef } from '@/shared/lib/types'
 import {
   evaluate, alertIsFor, latestValid, targetRange, validateReading, unitView, groupOf, VITAL_GROUPS,
@@ -25,7 +25,7 @@ const CONTEXT_TAGS = ['Resting', 'Before meal', 'After meal', 'After exercise', 
 
 /**
  * The open warning on a vital that a fresh in-range reading would clear,
- * with how long is left. Mirrors the rule in AppContext.logReading.
+ * with how long is left. Mirrors the rule the backend applies when a reading is saved.
  */
 export function useSelfClear() {
   const { currentUser, alerts, now } = useApp()
@@ -75,14 +75,16 @@ export function useVitalLog() {
 function ResultSheet({ result, onClose }: { result: Result; onClose: () => void }) {
   const { currentUser, sendAlertNow } = useApp()
   const [sent, setSent] = useState(false)
+  const save = useSave()
   const alerted = result.alerted || sent
+  const sendNow = async () => { if ((await save.run(() => sendAlertNow(currentUser!.id, result.readingId))).ok) setSent(true) }
   return (
     <BottomSheet open onClose={onClose}
       title={result.cleared ? '✓ Alert cleared'
         : result.level === 'critical' ? '⚠ Critical reading'
         : alerted ? 'Sent to your doctor' : '▲ Please re-measure'}
       footer={!alerted && !result.cleared
-        ? <><SheetButton tone="ghost" onClick={onClose}>I'll re-measure</SheetButton><SheetButton tone="danger" onClick={() => { sendAlertNow(currentUser!.id, result.readingId); setSent(true) }}>Send to doctor now</SheetButton></>
+        ? <><SheetButton tone="ghost" onClick={onClose}>I'll re-measure</SheetButton><SheetButton tone="danger" disabled={save.busy} onClick={sendNow}>{save.busy ? 'Sending…' : 'Send to doctor now'}</SheetButton></>
         : <SheetButton onClick={onClose}>OK</SheetButton>}>
       <div className="text-sm text-gray-700 leading-relaxed">
         <p className="font-bold text-gray-900 mb-1 font-mono">{result.name}: {result.value}</p>
@@ -92,8 +94,9 @@ function ResultSheet({ result, onClose }: { result: Result; onClose: () => void 
           ? <p>Your doctor has been alerted immediately. If you feel unwell — chest pain, breathlessness, confusion — use SOS or call 999.</p>
           : alerted
             ? <p>This reading was out of range again, so your doctor has been notified. You'll see their response under My Alerts.</p>
-            : <p>This reading is outside your target range. Rest for 5 minutes and measure again within {SELF_CLEAR_WINDOW_MIN} minutes — an in-range reading clears the alert. Otherwise your doctor reviews it.</p>}
+            : <p>This reading is outside your target range and has been saved. Rest for 5 minutes and measure again: if the next reading is out of range too, it goes to your doctor. You can also send this one now.</p>}
       </div>
+      <SaveError message={save.error} className="mt-3" />
     </BottomSheet>
   )
 }
@@ -113,6 +116,7 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
   const [value, setValue] = useState('')
   const [note, setNote] = useState('')
   const [result, setResult] = useState<Result | null>(null)
+  const saving = useSave()
   const def = vitalDefs.find(v => v.id === vitalId)
   if (!def) return null
   if (result) return <ResultSheet result={result} onClose={onClose} />
@@ -132,11 +136,12 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
   const siblings = vitalDefs.filter(v => v.active && v.id !== def.id && patient.trackedVitalIds.includes(v.id) && groupOf(v.id) === group?.id)
 
   /** Saves, then closes; `then` runs instead of closing when the reading needs no follow-up. */
-  const save = (then: () => void = onClose) => {
+  const save = async (then: () => void = onClose) => {
     if (!value.trim() || error) return
-    const res = logReading(patient.id, { id: `rd_${Date.now()}`, vitalId, value: canon, loggedAt: '', note: note.trim() || undefined })
-    const cleared = clearing && res.level === 'normal'
-    if (res.level !== 'normal' || cleared) setResult({ ...res, name: def.name, value: `${u.value(canon)} ${u.unit}`, cleared })
+    const saved = await saving.run(() => logReading(patient.id, { id: `rd_${Date.now()}`, vitalId, value: canon, loggedAt: '', note: note.trim() || undefined }))
+    if (!saved.ok) return   // nothing was saved: the sheet stays open with what was typed and says why
+    const res = saved.value
+    if (res.level !== 'normal' || res.cleared) setResult({ ...res, name: def.name, value: `${u.value(canon)} ${u.unit}` })
     else then()
   }
   /** Moving on keeps what was typed: a reading in the box is saved first. */
@@ -146,7 +151,7 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
     <BottomSheet open onClose={onClose} title={`${def.icon} Log ${def.name}`}
       subtitle={`${u.unit} · target ${range.min}–${range.max}${last ? ` · last ${u.value(last.value)}${lastAt ? `, ${ago(lastAt, now)}` : ''}` : ''}`}
       footer={<><SheetButton tone="ghost" onClick={onClose}>Cancel</SheetButton>
-        <SheetButton disabled={!value.trim() || !!error} onClick={() => save()}>Save Reading</SheetButton></>}>
+        <SheetButton disabled={!value.trim() || !!error || saving.busy} onClick={() => save()}>{saving.busy ? 'Saving…' : 'Save Reading'}</SheetButton></>}>
       {clearing && (
         <div className="mb-3 px-3 py-2 rounded-xl bg-amber-50 border border-amber-100">
           <p className="text-[11px] text-amber-700 font-semibold">
@@ -166,6 +171,7 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
       {error && (
         <div className="mt-3 text-center text-xs font-semibold px-4 py-2.5 rounded-xl bg-gray-50 text-gray-600 border border-gray-200">{error}</div>
       )}
+      <SaveError message={saving.error} className="mt-3 text-center" />
       {lvl && (
         <div className={`mt-3 text-center text-xs font-semibold px-4 py-2.5 rounded-xl border ${levelStyle(lvl).chip}`}>
           {lvl === 'normal'
@@ -196,7 +202,7 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
             {siblings.map(s => {
               const sLast = latestValid(patient, s.id)
               return (
-                <button key={s.id} type="button" disabled={!!error} onClick={() => moveOn(() => onSwitch(s.id))}
+                <button key={s.id} type="button" disabled={!!error || saving.busy} onClick={() => moveOn(() => onSwitch(s.id))}
                   className="flex items-center gap-1.5 rounded-full border border-gray-200 bg-white py-1 pl-2 pr-2.5 text-[11px] font-semibold text-gray-800 transition-all hover:border-teal-300 active:scale-95 disabled:opacity-50">
                   <span aria-hidden="true">{s.icon}</span>
                   {s.name}
@@ -204,7 +210,7 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
                 </button>
               )
             })}
-            <button type="button" disabled={!!error} onClick={() => moveOn(() => onLogGroup(group.id))}
+            <button type="button" disabled={!!error || saving.busy} onClick={() => moveOn(() => onLogGroup(group.id))}
               className="rounded-full bg-teal-700 px-3 py-1 text-[11px] font-bold text-white transition-transform active:scale-95 disabled:opacity-50">
               Log the group together
             </button>
@@ -231,6 +237,8 @@ export function LogAllSheet({ onClose, onSaved, groupId }: {
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [openGroup, setOpenGroup] = useState<string | null>(null)
   const [result, setResult] = useState<Result | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState('')
   if (result) return <ResultSheet result={result} onClose={onClose} />
 
   const groups = VITAL_GROUPS
@@ -242,7 +250,8 @@ export function LogAllSheet({ onClose, onSaved, groupId }: {
   const filled = entered.length
   const hasErrors = Object.keys(errors).length > 0
 
-  const save = () => {
+  const save = async () => {
+    if (busy) return
     const errs: Record<string, string> = {}
     entered.forEach(d => { const u = unitView(d, patient); const e = validateReading(d, u.toCanonical(values[d.id]), u.unit); if (e) errs[d.id] = e })
     setErrors(errs)
@@ -251,14 +260,31 @@ export function LogAllSheet({ onClose, onSaved, groupId }: {
       setOpenGroup(groups.find(g => g.vitals.some(v => errs[v.id]))?.id ?? null)
       return
     }
+    // One reading at a time, so each is graded against the one before it. A reading that was saved leaves the form;
+    // one that was refused stays, with the reason, and nothing is lost.
+    setBusy(true); setFailure('')
     let worst: Result | null = null
+    let savedCount = 0
+    const refusedBy: Record<string, string> = {}
     for (const d of entered) {
       const u = unitView(d, patient)
       const value = u.toCanonical(values[d.id])
-      const res = logReading(patient.id, { id: `rd_${Date.now()}_${d.id}`, vitalId: d.id, value, loggedAt: '' })
+      const saved = await logReading(patient.id, { id: `rd_${Date.now()}_${d.id}`, vitalId: d.id, value, loggedAt: '' })
+      if (!saved.ok) { refusedBy[d.id] = saved.error; continue }
+      savedCount++
+      setValues(prev => { const n = { ...prev }; delete n[d.id]; return n })
+      const res = saved.value
       if (res.level === 'critical' || (res.level === 'warning' && !worst)) worst = { ...res, name: d.name, value: `${u.value(value)} ${u.unit}` }
     }
-    onSaved?.(filled)
+    setBusy(false)
+    if (savedCount) onSaved?.(savedCount)
+    const refusedCount = Object.keys(refusedBy).length
+    if (refusedCount) {
+      setErrors(refusedBy)
+      setOpenGroup(groups.find(g => g.vitals.some(v => refusedBy[v.id]))?.id ?? null)
+      setFailure(savedCount ? `${savedCount} saved. ${refusedCount} could not be saved: see below.` : 'Nothing was saved. Check the readings below and try again.')
+      return
+    }
     if (worst) setResult(worst)
     else onClose()
   }
@@ -267,10 +293,11 @@ export function LogAllSheet({ onClose, onSaved, groupId }: {
     <BottomSheet open onClose={onClose} title={only ? `${only.icon} Log ${only.label}` : '🩺 Log Your Vitals'}
       subtitle={only ? `${only.hint}. Empty fields are skipped.` : 'Fill what you have — empty fields are skipped.'}
       footer={<><SheetButton tone="ghost" onClick={onClose}>Cancel</SheetButton>
-        <SheetButton disabled={filled === 0} onClick={save}>
-          {hasErrors ? 'Fix errors to save' : filled > 0 ? `Save ${filled} reading${filled > 1 ? 's' : ''}` : 'Save Readings'}
+        <SheetButton disabled={filled === 0 || busy} onClick={save}>
+          {busy ? 'Saving…' : hasErrors ? 'Fix errors to save' : filled > 0 ? `Save ${filled} reading${filled > 1 ? 's' : ''}` : 'Save Readings'}
         </SheetButton></>}>
       {tracked.length === 0 && <p className="text-xs text-gray-400">You aren't tracking any vitals yet.</p>}
+      <SaveError message={failure} className="mb-3" />
 
       {/* progress */}
       {tracked.length > 0 && (

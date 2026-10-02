@@ -14,7 +14,7 @@ import { EditProfileSheet, ChangePasswordSheet, ThemeFontSheet, HelpSupportSheet
  * Pass children to inject role-specific sections between details and sign-out.
  */
 export function ProfileCard({ children }: { children?: React.ReactNode }) {
-  const { currentUser, setCurrentUser } = useApp()
+  const { currentUser, setCurrentUser, live } = useApp()
   const [showEdit, setShowEdit]         = useState(false)
   const [showPw, setShowPw]             = useState(false)
   const [showTheme, setShowTheme]       = useState(false)
@@ -103,7 +103,8 @@ export function ProfileCard({ children }: { children?: React.ReactNode }) {
         <SettingsRow icon="✏️" label="Edit Profile" onClick={() => setShowEdit(true)} />
         <SettingsRow icon="🔒" label="Change Password" onClick={() => setShowPw(true)} />
         <SettingsRow icon="🎨" label="Theme & Font" onClick={() => setShowTheme(true)} />
-        <SettingsRow icon="📧" label="Messages from mCare" onClick={() => setShowMail(true)} />
+        {/* Demo mode shows the emails mCare would send. In live mode they go to the person's real inbox. */}
+        {!live && <SettingsRow icon="📧" label="Messages from mCare" onClick={() => setShowMail(true)} />}
         <SettingsRow icon="💬" label="Help & Support" onClick={() => setShowHelp(true)} />
         <SettingsRow icon="🚫" label="Deactivate Account" onClick={() => setShowDeactivate(true)} danger last />
       </div>

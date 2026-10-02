@@ -178,7 +178,7 @@ export function HomeTab({ go, openVital, onLog }: {
             <div key={r.key} className={`bg-white rounded-xl px-3.5 py-3 flex items-center gap-3 shadow-sm ${r.tone === 'late' ? 'border-l-4 border-red-400' : r.tone === 'soon' ? 'border-l-4 border-amber-400' : ''}`}>
               {r.kind === 'med' || r.kind === 'meal' ? (
                 // quick tick; the row body opens the full form
-                <button onClick={() => { day.toggle(r); toast.show(`${r.title} ${r.kind === 'med' ? 'taken' : 'logged'}`) }} aria-label={`Mark ${r.title} done`}
+                <button onClick={async () => { if ((await day.toggle(r)).ok) toast.show(`${r.title} ${r.kind === 'med' ? 'taken' : 'logged'}`) }} aria-label={`Mark ${r.title} done`}
                   className="w-7 h-7 rounded-full flex-shrink-0 border-2 border-gray-200 active:bg-emerald-500 active:border-emerald-500 transition-all" />
               ) : (
                 <button onClick={() => setOpenItem(r)} aria-label={r.kind === 'vitals' ? 'Log vitals' : `Open ${r.title}`}

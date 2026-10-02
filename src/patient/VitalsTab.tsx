@@ -44,7 +44,7 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital, go }: {
   go?: (tab: string) => void
 }) {
   const { currentUser, vitalDefs, now } = useApp()
-  const { doctor, setTrackedVitals, status, error, reload } = usePatient()
+  const { doctor, setTrackedVitals, canStopTracking, status, error, reload } = usePatient()
   const patient = currentUser as PatientUser
   const { vitals: vitalsDue } = useDaySchedule()
   const log = useVitalLog()
@@ -78,13 +78,14 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital, go }: {
   const tracked = activeVitals.filter(v => patient.trackedVitalIds.includes(v.id))
   const doctorName = doctor?.name
 
+  /** A vital the doctor set, or any tracked vital once a doctor is assigned: only the doctor removes it. */
+  const lockedOn = (id: string) => patient.trackedVitalIds.includes(id) && !canStopTracking(id)
   const toggleVital = (id: string) => {
-    if (patient.thresholds[id]) return  // doctor-assigned, locked
-    if (patient.assignedDoctorId && patient.trackedVitalIds.includes(id)) return // doctor's plan: only the doctor removes
+    if (lockedOn(id)) return
     const next = patient.trackedVitalIds.includes(id)
       ? patient.trackedVitalIds.filter(v => v !== id)
       : [...patient.trackedVitalIds, id]
-    setTrackedVitals(next)
+    void setTrackedVitals(next)   // a refused save is reported by the banner at the top of the portal
   }
 
   const statusOf = (v: VitalDef): Status => {
@@ -422,12 +423,12 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital, go }: {
         /* My Vitals — selection with lock logic */
         <div className="flex flex-col gap-2 @2xl:grid @2xl:grid-cols-2 @2xl:gap-3 @5xl:grid-cols-3">
           <p className="text-xs text-gray-500 px-1 col-span-full">
-            Toggle additional vitals to track. Doctor-assigned ones are locked.
+            Switch on the vitals you want to track.{patient.assignedDoctorId ? ' Once you track one, only your doctor can remove it.' : ' The ones your doctor sets are locked.'}
           </p>
           {activeVitals.map(v => {
             const isOn     = patient.trackedVitalIds.includes(v.id)
             const thr      = patient.thresholds[v.id]
-            const isLocked = !!thr
+            const isLocked = lockedOn(v.id)
             const u        = unitView(v, patient)
             const shown    = u.range(thr ?? { min: v.normalMin, max: v.normalMax })
             return (

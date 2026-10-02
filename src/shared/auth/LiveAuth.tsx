@@ -17,16 +17,13 @@ import {
 /** Seconds before another email can be requested (the backend refuses sooner). */
 const RESEND_WAIT = 60
 
-/** Opens the app for an account the backend has just signed in. */
+/**
+ * Opens the app for an account the backend has just signed in. The store loads the person's record
+ * first (the sign-in screen shows "Loading your record…" meanwhile) and records the consent given on the sign-up form.
+ */
 export function useAdoptAccount() {
-  const { users, addUser, updateUser, setCurrentUser } = useApp()
-  return (account: AppUser) => {
-    const known = users.find(u => u.id === account.id)
-    if (!known) addUser(account)
-    const acceptedAt = takeConsent()
-    if (acceptedAt) updateUser(account.id, { termsAcceptedAt: acceptedAt })
-    setCurrentUser(account)
-  }
+  const { signIn } = useApp()
+  return (account: AppUser) => signIn(account, { acceptedTermsAt: takeConsent() })
 }
 
 /** Counts down the wait before "Resend". `restart()` begins a new wait. */

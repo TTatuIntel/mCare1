@@ -270,6 +270,8 @@ export function VitalHistory({
                           {r.note ? ` · “${r.note}”` : ''}
                         </p>
                         {r.invalid && r.invalidReason && <p className="text-[10px] text-gray-400 truncate">Marked invalid — {r.invalidReason}</p>}
+                        {/* A corrected reading says so, and keeps what was first entered. */}
+                        {r.correctedFrom && <p className="text-[10px] text-gray-400 truncate">Corrected · first entered as <span className="font-mono">{formatReadingValue(def, r.correctedFrom, unit)}</span></p>}
                       </div>
                       <div className="text-right flex-shrink-0">
                         {level === 'normal'

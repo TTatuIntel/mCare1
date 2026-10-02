@@ -97,13 +97,13 @@ export function DocumentViewer({ docId, onBack, onLink, onOpenDoc }: {
   const counts = doc.links.reduce<Record<string, number>>((m, l) => ({ ...m, [l.kind]: (m[l.kind] ?? 0) + 1 }), {})
   const countText = Object.entries(counts).map(([k, n]) => `${n} ${k}${n > 1 ? 's' : ''}`).join(' · ')
 
-  const doCorrect = () => {
-    const id = correctReport(doc.id, reason)
+  const doCorrect = async () => {
+    const id = await correctReport(doc.id, reason)
     setSheet(null); setReason('')
     if (id) { toast.show('Correction drafted — review, then release'); onOpenDoc(id) }
   }
-  const doSupport = () => {
-    const res = requestSupportAccess(doc.id, reason)
+  const doSupport = async () => {
+    const res = await requestSupportAccess(doc.id, reason)
     if (!res.ok) return setErr(res.error ?? 'Not permitted')
     setSheet(null); setReason(''); setErr('')
   }

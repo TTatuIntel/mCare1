@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
-import { BottomSheet, SheetButton, Field, inputCls, Pill } from '@/shared'
+import { BottomSheet, SheetButton, Field, inputCls, Pill, SaveError, useSave } from '@/shared'
 import type { PatientUser } from '@/shared/lib/types'
-import { DAILY_MEALS, clock, countdown, apptWhen, TONE_PILL, type ScheduleItem } from '@/shared/lib/schedule'
+import { clock, countdown, apptWhen, TONE_PILL, type ScheduleItem } from '@/shared/lib/schedule'
 import { useDaySchedule } from './useDaySchedule'
 import { usePatient } from './usePatient'
 import { LogAllSheet } from './VitalLogSheets'
@@ -57,14 +57,13 @@ function Details({ rows }: { rows: [string, React.ReactNode][] }) {
 
 const textareaCls = `${inputCls} resize-none`
 
-/** Sends a note to the assigned doctor; returns false when there is no care team. */
+/** Sends a note to the assigned doctor. Resolves false when there is no care team or it could not be sent. */
 function useCareNote() {
   const { currentUser, sendMessage } = useApp()
   const patient = currentUser as PatientUser
-  return (text: string) => {
+  return async (text: string) => {
     if (!patient.assignedDoctorId || !text.trim()) return false
-    sendMessage(patient.id, patient.assignedDoctorId, text.trim())
-    return true
+    return (await sendMessage(patient.id, patient.assignedDoctorId, text.trim())).ok
   }
 }
 
@@ -74,23 +73,26 @@ function MedSheet({ item, onClose, go, onDone }: SheetProps) {
   const day = useDaySchedule()
   const sendNote = useCareNote()
   const [note, setNote] = useState('')
+  const save = useSave()
   const rx = patient.prescriptions.find(r => r.id === item.refId)
   if (!rx) return null
   const slots = day.items.filter(x => x.kind === 'med' && x.refId === rx.id)
   const prescriber = nameOf(rx.doctorId, 'Your doctor')
 
-  const submit = () => {
-    day.toggle(item)
-    const shared = !item.done && note.trim() && sendNote(`💊 ${rx.medication} (${clock(item.slot)} dose): ${note.trim()}`)
-    onDone(item.done ? `${rx.medication} marked not taken` : `${rx.medication} taken${shared ? ' · note sent to care team' : ''}`)
+  const submit = async () => {
+    const wasDone = item.done
+    if (!(await save.run(() => day.toggle(item))).ok) return
+    const shared = !wasDone && !!note.trim() && await sendNote(`💊 ${rx.medication} (${clock(item.slot)} dose): ${note.trim()}`)
+    onDone(wasDone ? `${rx.medication} marked not taken` : `${rx.medication} taken${shared ? ' · note sent to care team' : ''}`)
     onClose()
   }
 
   return (
     <BottomSheet open onClose={onClose} title={`💊 ${rx.medication}`} subtitle={`${rx.dosage} · ${rx.frequency}`}
       footer={<div className="flex gap-2"><SheetButton tone="ghost" onClick={() => { onClose(); go('medicine') }}>All meds</SheetButton>
-        <SheetButton tone={item.done ? 'danger' : 'success'} onClick={submit}>{item.done ? 'Undo' : 'Mark as taken'}</SheetButton></div>}>
+        <SheetButton tone={item.done ? 'danger' : 'success'} disabled={save.busy} onClick={submit}>{save.busy ? 'Saving…' : item.done ? 'Undo' : 'Mark as taken'}</SheetButton></div>}>
       <StatusBanner item={item} />
+      <SaveError message={save.error} className="mb-3" />
       <Details rows={[
         ['Purpose', rx.purpose || '—'],
         ['Dose', rx.dosage],
@@ -120,25 +122,29 @@ function MedSheet({ item, onClose, go, onDone }: SheetProps) {
 
 /* ─── Meal ─── */
 function MealSheet({ item, onClose, go, onDone }: SheetProps) {
-  const { currentUser, mealsDone, toggleMeal } = useApp()
-  const patient = currentUser as PatientUser
-  const meal = DAILY_MEALS.find(m => m.id === item.refId)!
+  const { mealsDone, toggleMeal } = useApp()
+  const { patient, todaysMeals } = usePatient()
+  const meal = todaysMeals.meals.find(m => m.id === item.refId)
   const [asPlanned, setAsPlanned] = useState(true)
   const [ate, setAte] = useState('')
+  const save = useSave()
+  if (!meal) return null
   const logged = mealsDone.find(m => m.patientId === patient.id && m.mealId === meal.id && item.done)
 
-  const submit = () => {
-    toggleMeal(patient.id, meal.id, !item.done && !asPlanned ? ate.trim() : undefined)
-    onDone(item.done ? `${meal.name} un-logged` : `${meal.name} logged`)
+  const submit = async () => {
+    const wasDone = item.done
+    if (!(await save.run(() => toggleMeal(patient.id, meal.id, !wasDone && !asPlanned ? ate.trim() : undefined))).ok) return
+    onDone(wasDone ? `${meal.name} un-logged` : `${meal.name} logged`)
     onClose()
   }
 
   return (
     <BottomSheet open onClose={onClose} title={`${meal.icon} ${meal.name}`} subtitle={`${clock(meal.at)} · ${meal.kcal} kcal planned`}
       footer={<div className="flex gap-2"><SheetButton tone="ghost" onClick={() => { onClose(); go('meals') }}>Meal plan</SheetButton>
-        <SheetButton tone={item.done ? 'danger' : 'success'} disabled={!item.done && !asPlanned && !ate.trim()} onClick={submit}>
-          {item.done ? 'Undo' : 'Log meal'}</SheetButton></div>}>
+        <SheetButton tone={item.done ? 'danger' : 'success'} disabled={save.busy || (!item.done && !asPlanned && !ate.trim())} onClick={submit}>
+          {save.busy ? 'Saving…' : item.done ? 'Undo' : 'Log meal'}</SheetButton></div>}>
       <StatusBanner item={item} />
+      <SaveError message={save.error} className="mb-3" />
       <Details rows={[['Planned', meal.foods], ['Energy', `${meal.kcal} kcal`], ...(logged?.note ? [['You ate', logged.note] as [string, string]] : [])]} />
       {!item.done && (
         <Field label="What did you eat?">
@@ -159,29 +165,32 @@ function MealSheet({ item, onClose, go, onDone }: SheetProps) {
 
 /* ─── Appointment ─── */
 function ApptSheet({ item, onClose, go, onDone }: SheetProps) {
-  const { appointments, updateAppointment } = useApp()
-  const { nameOf } = usePatient()
+  const { nameOf, appointments, cancelAppointment, acceptNewTime } = usePatient()
   const sendNote = useCareNote()
   const [note, setNote] = useState('')
   const [confirmCancel, setConfirmCancel] = useState(false)
+  const save = useSave()
   const a = appointments.find(x => x.id === item.refId)
   if (!a) return null
   const w = apptWhen(a)
   const doctor = nameOf(a.doctorId, 'Your doctor')
   const proposed = a.status === 'rescheduled'
 
-  const act = (fn: () => void, msg: string) => { fn(); onDone(msg); onClose() }
-  const accept = () => act(() => updateAppointment(a.id, {
-    status: 'approved', preferredDate: a.rescheduledTo ?? a.preferredDate, preferredTime: a.rescheduledTime ?? a.preferredTime,
-  }), 'New time accepted')
-  const cancel = () => act(() => updateAppointment(a.id, { status: 'cancelled' }), 'Appointment cancelled')
-  const send = () => act(() => sendNote(`📅 Re: ${a.title} (${w.date} ${w.time}): ${note.trim()}`), 'Note sent to your care team')
+  /** Runs the save; the sheet closes and reports only once it has gone through. */
+  const finish = async (ok: boolean, msg: string) => { if (ok) { onDone(msg); onClose() } }
+  const accept = async () => finish((await save.run(() => acceptNewTime(a))).ok, 'New time accepted')
+  const cancel = async () => finish((await save.run(() => cancelAppointment(a.id))).ok, 'Appointment cancelled')
+  const send = async () => {
+    const sent = await save.run(async () => (await sendNote(`📅 Re: ${a.title} (${w.date} ${w.time}): ${note.trim()}`))
+      ? { ok: true as const, value: undefined } : { ok: false as const, error: 'The note could not be sent. Check your connection and try again.' })
+    await finish(sent.ok, 'Note sent to your care team')
+  }
 
   const footer = confirmCancel
-    ? <div className="flex gap-2"><SheetButton tone="ghost" onClick={() => setConfirmCancel(false)}>Keep it</SheetButton><SheetButton tone="danger" onClick={cancel}>Yes, cancel</SheetButton></div>
+    ? <div className="flex gap-2"><SheetButton tone="ghost" onClick={() => setConfirmCancel(false)}>Keep it</SheetButton><SheetButton tone="danger" disabled={save.busy} onClick={cancel}>{save.busy ? 'Cancelling…' : 'Yes, cancel'}</SheetButton></div>
     : proposed
-      ? <div className="flex gap-2"><SheetButton tone="ghost" onClick={() => setConfirmCancel(true)}>Decline</SheetButton><SheetButton tone="success" onClick={accept}>Accept new time</SheetButton></div>
-      : <div className="flex gap-2"><SheetButton tone="ghost" onClick={() => { onClose(); go('appts') }}>All visits</SheetButton><SheetButton disabled={!note.trim()} onClick={send}>Send note</SheetButton></div>
+      ? <div className="flex gap-2"><SheetButton tone="ghost" onClick={() => setConfirmCancel(true)}>Decline</SheetButton><SheetButton tone="success" disabled={save.busy} onClick={accept}>{save.busy ? 'Saving…' : 'Accept new time'}</SheetButton></div>
+      : <div className="flex gap-2"><SheetButton tone="ghost" onClick={() => { onClose(); go('appts') }}>All visits</SheetButton><SheetButton disabled={!note.trim() || save.busy} onClick={send}>{save.busy ? 'Sending…' : 'Send note'}</SheetButton></div>
 
   return (
     <BottomSheet open onClose={onClose} title={`📅 ${a.title}`} subtitle={`${w.date} · ${w.time} · ${countdown(item.inMin)}`} footer={footer}>
@@ -199,12 +208,13 @@ function ApptSheet({ item, onClose, go, onDone }: SheetProps) {
         ['Reason', a.reason || '—'],
         ...(a.approvalNote ? [['Note', a.approvalNote] as [string, string]] : []),
       ]} />
+      <SaveError message={save.error} className="mb-3" />
       {confirmCancel ? (
         <p className="text-xs text-red-600 bg-red-50 rounded-xl px-3 py-2.5">Cancel this appointment? Your doctor will be notified.</p>
       ) : !proposed && (
         <>
           <Field label="Note for your doctor (optional)">
-            <textarea rows={2} value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. I'll bring my BP log" className={textareaCls} />
+            <textarea rows={2} value={note} maxLength={500} onChange={e => setNote(e.target.value)} placeholder="e.g. I'll bring my BP log" className={textareaCls} />
           </Field>
           <button onClick={() => setConfirmCancel(true)} className="text-[11px] font-bold text-red-500">Cancel appointment</button>
         </>

@@ -1,15 +1,19 @@
 /**
- * Document store — stands in for the documents API.
+ * Document store: the one place screens read and change documents.
  *
- * Every read and write goes through the access policy in documents.ts,
- * so screens only ever receive what the signed-in user is allowed to see.
- * Raw state never leaves this hook.
+ * Demo mode keeps documents in memory, and the access policy in documents.ts
+ * plays the server. Live mode holds what the backend returned for the
+ * signed-in person (the database has already applied its own access rules)
+ * and sends every change to it; the same policy then only decides which
+ * buttons to show. Raw state never leaves this hook.
  */
 import { useRef, useState } from 'react'
 import type {
   AppUser, AdminUser, DoctorUser, PatientUser, VitalDef, AppAlert, Prescription, NotifKind, VitalsReportInclude,
-  MedicalDocument, DocEvent, DocAction, DocCategory, DocVisibility, ShareLink, SupportGrant, DocBackup,
+  MedicalDocument, DocEvent, DocAction, DocCategory, DocVisibility, ShareLink, SupportGrant, DocBackup, Outcome,
 } from '@/shared/lib/types'
+import * as docApi from '@/shared/api/documentActions'
+import { appBaseUrl } from '@/shared/email/emailTemplate'
 import {
   docAccess, resolveDoc, canUploadFor, canSign, canRelease, canCorrect, canDelete, canRestore, canShare,
   isTreatingDoctor, inspectFile, hashBuffer, fnv1a, opaqueId, buildVitalsReport, runPolicySelfTests, isOfficial,
@@ -61,30 +65,37 @@ export interface DocumentApi {
   deleteDocument: (id: string) => void
   restoreDocument: (id: string) => void
   purgeExpired: () => number
-  generateVitalsReport: (patientId: string, days: number, interpretation?: string, include?: VitalsReportInclude) => string | null
+  /** Drafts a vitals report from the record. Resolves with the new document id. */
+  generateVitalsReport: (patientId: string, days: number, interpretation?: string, include?: VitalsReportInclude) => Promise<string | null>
   /** Doctors: save (or clear) the handwritten signature stamped onto reports they sign. */
   setMySignature: (dataUrl: string | undefined) => void
   /** The signing clinician's interpretation & plan. Editable only while the report is unreleased. */
   setReportInterpretation: (id: string, text: string) => void
   signDocument: (id: string) => void
   releaseDocument: (id: string) => void
-  correctReport: (id: string, reason: string) => string | null
+  correctReport: (id: string, reason: string) => Promise<string | null>
   filePrescription: (patientId: string, rx: Prescription) => void
   markDocsSeen: (patientId: string) => void
   unseenDocs: (patientId: string) => number
   docEventsFor: (docId: string) => DocEvent[]
   shareLinksFor: (patientId: string) => ShareLink[]
-  createShareLink: (docIds: string[], recipient: string, ttlHours: number, oneTime: boolean) => ShareLink | null
+  createShareLink: (docIds: string[], recipient: string, ttlHours: number, oneTime: boolean) => Promise<ShareLink | null>
+  /** The address to send to the recipient. Empty for a link made in an earlier session: its token is shown only once. */
+  shareLinkUrl: (link: ShareLink) => string
   revokeShareLink: (id: string) => void
   openShareLink: (token: string) => { ok: true; docs: MedicalDocument[]; link: ShareLink } | { ok: false; error: string }
   supportGrantFor: (docId: string) => SupportGrant | undefined
-  requestSupportAccess: (docId: string, reason: string) => { ok: boolean; error?: string }
+  requestSupportAccess: (docId: string, reason: string) => Promise<{ ok: boolean; error?: string }>
   docBackups: DocBackup[]
   createDocBackup: () => void
   testDocBackup: (id: string) => void
   restoreDocBackup: (id: string) => number
   runDocSelfTests: () => SelfTest[]
   docPolicyCtx: () => PolicyCtx
+  /** The file's bytes as a data URL, fetched from storage if they are not here yet. Null when it cannot be opened. */
+  loadDocumentFile: (id: string) => Promise<string | null>
+  /** Live mode: replaces what is held with a fresh load from the backend. */
+  hydrateDocuments: (docs: MedicalDocument[], events: DocEvent[], shares: ShareLink[]) => void
 }
 
 interface Deps {
@@ -95,6 +106,10 @@ interface Deps {
   notify: (userId: string, kind: NotifKind, title: string, body: string, link?: string) => void
   logAudit: (action: string, detail: string) => void
   updateUser: (id: string, patch: Partial<AppUser>) => void
+  /** True when documents live on the backend. */
+  live: boolean
+  /** Live mode: run one change against the backend, then reload. */
+  run: <T>(job: () => Promise<T>) => Promise<Outcome<T>>
 }
 
 const readAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
@@ -116,7 +131,40 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
   const timers = useRef(new Map<string, ReturnType<typeof setInterval>>())
   const lastView = useRef(new Map<string, number>())
 
-  const { notify, logAudit } = deps
+  const { notify, logAudit, live, run } = deps
+  /** Tokens of the share links made in this session. The server keeps only a hash, so they cannot be read back later. */
+  const shareTokens = useRef(new Map<string, string>())
+  const fileLoads = useRef(new Map<string, Promise<string | null>>())
+
+  const hydrateDocuments: DocumentApi['hydrateDocuments'] = (nextDocs, nextEvents, nextShares) => {
+    // Files already fetched stay in hand, so a reload does not blank an open document.
+    const loaded = new Map(docsRef.current.filter(d => d.file?.dataUrl).map(d => [d.id, d.file!]))
+    const merged = nextDocs.map(d => {
+      const had = loaded.get(d.id)
+      return d.file && had && had.sha256 === d.file.sha256 ? { ...d, file: { ...d.file, dataUrl: had.dataUrl } } : d
+    })
+    docsRef.current = merged
+    sharesRef.current = nextShares.map(x => ({ ...x, token: shareTokens.current.get(x.id) ?? '' }))
+    setDocs(merged); setEvents(nextEvents); setShares(sharesRef.current)
+  }
+
+  /** Fetches a document's file once and keeps it with the document. */
+  const loadDocumentFile: DocumentApi['loadDocumentFile'] = (id) => {
+    const d = docsRef.current.find(x => x.id === id)
+    if (!d?.file) return Promise.resolve(null)
+    if (d.file.dataUrl) return Promise.resolve(d.file.dataUrl)
+    if (!live || !d.file.path) return Promise.resolve(null)
+    const running = fileLoads.current.get(id)
+    if (running) return running
+    const { path, mime } = d.file
+    const load = docApi.downloadFile(path, mime).then(dataUrl => {
+      setDocs(prev => prev.map(x => x.id === id && x.file ? { ...x, file: { ...x.file, dataUrl } } : x))
+      return dataUrl
+    }, () => null).finally(() => fileLoads.current.delete(id))
+    fileLoads.current.set(id, load)
+    return load
+  }
+
   const me = (): AppUser | null => deps.usersRef.current.find(u => u.id === deps.currentUserId) ?? null
   const userName = (id?: string) => deps.usersRef.current.find(u => u.id === id)?.name ?? 'Unknown'
   const ctx = (): PolicyCtx => ({ users: deps.usersRef.current, grants: grantsRef.current, now: Date.now() })
@@ -180,6 +228,12 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
     }
     const key = `${u?.id}:${id}`
     const recent = Date.now() - (lastView.current.get(key) ?? 0) < 5 * MIN
+    if (live) {
+      // The server writes the history entry (and re-checks access) and holds the file.
+      if (!recent) { lastView.current.set(key, Date.now()); docApi.recordAccess(id, 'view').catch(() => {}) }
+      void loadDocumentFile(id)
+      return { ok: true, doc: res.doc }
+    }
     if (!recent) {
       lastView.current.set(key, Date.now())
       logEvent(res.doc, 'view')
@@ -191,6 +245,7 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
   const recordDownload = (id: string) => {
     const res = resolveDoc(me(), id, docsRef.current, ctx())
     if (!res.ok) return false
+    if (live) { docApi.recordAccess(id, 'download').catch(() => {}); return true }
     logEvent(res.doc, 'download')
     if (me()?.role !== 'patient') logAudit('Downloaded document', `${catLabel(res.doc)} · ${userName(res.doc.patientId)}`)
     return true
@@ -248,6 +303,27 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
     const sha = await hashBuffer(buf)
     const key = `${input.patientId}:${sha}`
 
+    if (live) {
+      if (old) return { ok: false, error: 'Replacing a released document with a new file is not available yet. Use Correct on the report instead.' }
+      const twin = docsRef.current.find(d => d.patientId === input.patientId && d.file?.sha256 === sha && !d.deletedAt)
+      if (twin) return { ok: false, error: `This file is already in the library as "${twin.title}".`, duplicateOf: twin.id }
+      const pt = deps.usersRef.current.find(x => x.id === input.patientId) as PatientUser | undefined
+      const clinician = u!.role === 'doctor'
+      const saved = await run(async () => {
+        const id = await docApi.uploadDocument({
+          patientId: input.patientId, title: input.title.trim() || check.name, category: input.category,
+          origin: clinician ? 'clinician_upload' : 'patient_upload', documentDate: input.documentDate || dayKey(),
+          description: input.description,
+          visibility: clinician ? 'care_team' : input.visibility ?? (pt?.docPrefs?.privateByDefault ? 'private' : 'care_team'),
+          links: input.appointmentId ? [{ kind: 'appointment', id: input.appointmentId, label: 'Related appointment' }] : [],
+          file: { name: check.name, mime: check.mime, size: input.file.size, sha256: sha, bytes: buf },
+        })
+        if (clinician && input.releaseNow) await docApi.release(id)
+        return id
+      })
+      return saved.ok ? { ok: true, docId: saved.value } : { ok: false, error: saved.error }
+    }
+
     // Idempotency: the same file for the same patient maps to one record.
     const same = docsRef.current.find(d => d.upload?.idempotencyKey === key && !d.deletedAt)
     if (same?.upload?.state === 'failed') { retryUpload(same.id); return { ok: true, docId: same.id, resumed: true } }
@@ -303,6 +379,7 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
   const setDocVisibility = (id: string, visibility: DocVisibility) => {
     const d = find(id), u = me()
     if (!d || !u || u.id !== d.patientId || d.origin !== 'patient_upload' || d.visibility === visibility) return
+    if (live) { void run(() => docApi.setVisibility(id, visibility)); return }
     patch(id, x => ({ ...x, visibility }))
     logEvent(d, 'visibility', visibility === 'private' ? 'Made private' : 'Shared with care team')
     logAudit('Changed document visibility', `${u.name} · ${catLabel(d)} → ${visibility === 'private' ? 'private' : 'care team'}`)
@@ -321,6 +398,7 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
   const deleteDocument = (id: string) => {
     const d = find(id), u = me()
     if (!d || !canDelete(u, d, ctx())) return
+    if (live) { void run(() => docApi.softDelete(id)); return }
     patch(id, x => ({ ...x, deletedAt: Date.now(), deletedBy: u!.id }))
     logEvent(d, 'delete')
     logAudit('Deleted document', `${catLabel(d)} · ${userName(d.patientId)} (recoverable ${DOC_RETENTION_DAYS} days)`)
@@ -329,6 +407,7 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
   const restoreDocument = (id: string) => {
     const d = find(id), u = me()
     if (!d || !canRestore(u, d, ctx())) return
+    if (live) { void run(() => docApi.restore(id)); return }
     patch(id, x => ({ ...x, deletedAt: undefined, deletedBy: undefined }))
     logEvent(d, 'restore')
     logAudit('Restored document', `${catLabel(d)} · ${userName(d.patientId)}`)
@@ -339,7 +418,7 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
   /** Permanently removes documents past the retention window. Full admins only. */
   const purgeExpired = () => {
     const u = me() as AdminUser | null
-    if (!u || u.role !== 'admin' || u.isAssistant) return 0
+    if (!u || u.role !== 'admin' || u.isAssistant || live) return 0   // live mode: the database's scheduled job purges
     const cutoff = Date.now() - DOC_RETENTION_DAYS * DAY
     const gone = docsRef.current.filter(d => d.deletedAt && d.deletedAt < cutoff)
     if (!gone.length) return 0
@@ -349,12 +428,16 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
   }
 
   /* ─── Clinical lifecycle ─── */
-  const generateVitalsReport = (patientId: string, days: number, interpretation?: string, include?: VitalsReportInclude) => {
+  const generateVitalsReport = async (patientId: string, days: number, interpretation?: string, include?: VitalsReportInclude) => {
     const u = me()
     const pt = deps.usersRef.current.find(x => x.id === patientId) as PatientUser | undefined
     if (!u || !pt || !isTreatingDoctor(u, patientId, deps.usersRef.current)) return null
     const t = Date.now()
     const { body, links } = buildVitalsReport(pt, deps.vitalDefs, deps.alertsRef.current, days, t, interpretation, include)
+    if (live) {
+      const saved = await run(() => docApi.createReport(patientId, `Vitals Report — last ${days} days`, body, links, dayKey(new Date(t))))
+      return saved.ok ? saved.value : null
+    }
     const id = opaqueId('doc')
     const doc: MedicalDocument = {
       id, patientId, title: `Vitals Report — last ${days} days`, category: 'vitals_report', origin: 'system_generated',
@@ -373,7 +456,7 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
     if (!u || u.role !== 'doctor') return
     if (dataUrl && (!dataUrl.startsWith('data:image/png;base64,') || dataUrl.length > 400_000)) return
     deps.updateUser(u.id, { signature: dataUrl } as Partial<AppUser>)
-    logAudit(dataUrl ? 'Updated signature' : 'Removed signature', 'Applies to reports signed from now on')
+    if (!live) logAudit(dataUrl ? 'Updated signature' : 'Removed signature', 'Applies to reports signed from now on')
   }
 
   const setReportInterpretation = (id: string, text: string) => {
@@ -381,6 +464,7 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
     if (!d || d.body?.type !== 'vitals' || d.status === 'released' || !canRelease(u, d, ctx())) return
     const interpretation = text.trim() || undefined
     if ((d.body.interpretation ?? undefined) === interpretation) return
+    if (live) { const body = { ...d.body, interpretation }; void run(() => docApi.setReportBody(id, body)); return }
     // Changing the words after signing voids the signature — it must be signed again.
     patch(id, x => x.body?.type === 'vitals'
       ? { ...x, body: { ...x.body, interpretation }, ...(x.status === 'signed' ? { status: 'draft' as const, signedBy: undefined, signedAt: undefined, signatureImage: undefined } : {}) }
@@ -391,6 +475,7 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
   const signDocument = (id: string) => {
     const d = find(id), u = me()
     if (!d || !canSign(u, d, ctx())) return
+    if (live) { void run(() => docApi.sign(id)); return }
     patch(id, x => ({ ...x, status: 'signed', signedBy: u!.id, signedAt: stamp(), signatureImage: signatureOf(u!.id) }))
     logEvent(d, 'sign')
     logAudit('Signed document', `${catLabel(d)}${d.version > 1 ? ` v${d.version}` : ''} · ${userName(d.patientId)}`)
@@ -415,12 +500,13 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
   const releaseDocument = (id: string) => {
     const d = find(id), u = me()
     if (!d || !u || !canRelease(u, d, ctx())) return
+    if (live) { void run(() => docApi.release(id)); return }
     if (d.status === 'draft') logEvent(d, 'sign', 'Signed on release')
     releaseInternal(id, u.id)
   }
 
   /** Start a corrected version of a released report. The original stays current until the correction is released. */
-  const correctReport = (id: string, reason: string) => {
+  const correctReport = async (id: string, reason: string) => {
     const old = find(id), u = me()
     if (!old || !u || !reason.trim() || !canCorrect(u, old, docsRef.current, ctx())) return null
     const pt = deps.usersRef.current.find(x => x.id === old.patientId) as PatientUser
@@ -428,6 +514,15 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
     const rebuilt = old.body?.type === 'vitals'
       ? buildVitalsReport(pt, deps.vitalDefs, deps.alertsRef.current, old.body.periodDays, t, old.body.interpretation, old.body.include)
       : { body: old.body, links: old.links }
+    if (live) {
+      const saved = await run(async () => {
+        const draft = await docApi.correct(id, reason.trim())
+        // The correction starts as a copy; a vitals report is rebuilt from the record as it stands now.
+        if (rebuilt.body && old.body?.type === 'vitals') await docApi.setReportBody(draft, rebuilt.body, rebuilt.links)
+        return draft
+      })
+      return saved.ok ? saved.value : null
+    }
     const nid = opaqueId('doc')
     const doc: MedicalDocument = {
       ...old, id: nid, createdAt: stamp(new Date(t)), at: t, createdBy: u.id, documentDate: dayKey(new Date(t)),
@@ -444,6 +539,7 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
 
   /** Prescriptions are signed at the moment of prescribing, so they file straight into the library. */
   const filePrescription = (patientId: string, rx: Prescription) => {
+    if (live) return   // filed by the database when the prescription is saved
     const t = Date.now()
     const id = opaqueId('doc')
     const doc: MedicalDocument = {
@@ -464,6 +560,7 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
 
   const markDocsSeen = (patientId: string) => {
     if (deps.currentUserId !== patientId || !docsRef.current.some(d => unseenFilter(d, patientId))) return
+    if (live) docApi.markSeen(docsRef.current.filter(d => unseenFilter(d, patientId)).map(d => d.id)).catch(() => {})
     setDocs(prev => prev.map(d => unseenFilter(d, patientId) ? { ...d, seenByPatient: true } : d))
   }
   const unseenDocs = (patientId: string) => docs.filter(d => unseenFilter(d, patientId)).length
@@ -480,11 +577,27 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
   /* ─── External sharing ─── */
   const shareLinksFor = (patientId: string) => deps.currentUserId === patientId ? shares.filter(s => s.patientId === patientId) : []
 
-  const createShareLink = (docIds: string[], recipient: string, ttlHours: number, oneTime: boolean) => {
+  const shareLinkUrl = (link: ShareLink) => (link.token ? `${appBaseUrl()}?share=${link.token}` : '')
+
+  const createShareLink = async (docIds: string[], recipient: string, ttlHours: number, oneTime: boolean) => {
     const u = me()
     const list = docIds.map(find).filter((d): d is MedicalDocument => !!d)
     if (!u || !recipient.trim() || list.length === 0 || !list.every(d => canShare(u, d, ctx()))) return null
     const t = Date.now()
+    if (live) {
+      const ids = list.map(d => d.id)
+      const known = new Set(sharesRef.current.map(x => x.id))
+      const saved = await run(() => docApi.createShareLink(ids, recipient, ttlHours, oneTime))
+      if (!saved.ok) return null
+      // The reload brought the new row; its token exists only in this answer, so keep it for this session.
+      const row = sharesRef.current.find(x => !known.has(x.id) && x.recipient === recipient.trim())
+      const link: ShareLink = row
+        ? { ...row, token: saved.value }
+        : { id: opaqueId('shr'), token: saved.value, patientId: u.id, docIds: ids, recipient: recipient.trim(), at: t, createdAt: stamp(new Date(t)), expiresAt: t + ttlHours * 3_600_000, oneTime }
+      shareTokens.current.set(link.id, saved.value)
+      setShares(prev => prev.map(x => x.id === link.id ? link : x))
+      return link
+    }
     const link: ShareLink = {
       id: opaqueId('shr'), token: opaqueId('tok').slice(4) + opaqueId('x').slice(2), patientId: u.id, docIds: list.map(d => d.id),
       recipient: recipient.trim(), at: t, createdAt: stamp(new Date(t)), expiresAt: t + ttlHours * 3_600_000, oneTime,
@@ -498,6 +611,7 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
   const revokeShareLink = (id: string) => {
     const s = sharesRef.current.find(x => x.id === id)
     if (!s || s.patientId !== deps.currentUserId || s.revokedAt) return
+    if (live) { void run(() => docApi.revokeShareLink(id)); return }
     setShares(prev => prev.map(x => x.id === id ? { ...x, revokedAt: Date.now() } : x))
     s.docIds.map(find).forEach(d => d && logEvent(d, 'share_revoke', s.recipient))
     logAudit('Revoked share link', `${userName(s.patientId)} → ${s.recipient}`)
@@ -520,11 +634,15 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
   /* ─── Admin support access ─── */
   const supportGrantFor = (docId: string) => grants.find(g => g.docId === docId && g.adminId === deps.currentUserId && g.expiresAt > Date.now())
 
-  const requestSupportAccess = (docId: string, reason: string) => {
+  const requestSupportAccess = async (docId: string, reason: string) => {
     const d = find(docId), u = me() as AdminUser | null
     if (!d || !u || u.role !== 'admin' || u.isAssistant) return { ok: false, error: 'Only a full Admin can open document content for support.' }
     if (d.deletedAt) return { ok: false, error: 'Restore the document first.' }
     if (reason.trim().length < 10) return { ok: false, error: 'Describe the support case (at least 10 characters).' }
+    if (live) {
+      const saved = await run(() => docApi.requestSupportAccess(docId, reason.trim()))
+      return saved.ok ? { ok: true } : { ok: false, error: saved.error }
+    }
     const t = Date.now()
     const g: SupportGrant = { id: opaqueId('sg'), adminId: u.id, docId, reason: reason.trim(), at: t, expiresAt: t + SUPPORT_ACCESS_MIN * MIN }
     setGrants(prev => [g, ...prev])
@@ -584,10 +702,11 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
     deleteDocument, restoreDocument, purgeExpired,
     generateVitalsReport, setMySignature, setReportInterpretation,signDocument, releaseDocument, correctReport, filePrescription,
     markDocsSeen, unseenDocs, docEventsFor,
-    shareLinksFor, createShareLink, revokeShareLink, openShareLink,
+    shareLinksFor, createShareLink, shareLinkUrl, revokeShareLink, openShareLink,
     supportGrantFor, requestSupportAccess,
     docBackups: backups, createDocBackup, testDocBackup, restoreDocBackup,
     runDocSelfTests: () => runPolicySelfTests(),
     docPolicyCtx: ctx,
+    loadDocumentFile, hydrateDocuments,
   }
 }

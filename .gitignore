@@ -3,6 +3,8 @@ dist/
 build/
 .cache/
 .env*
+# Local mCare backend: database, keys and uploaded files (npm run backend)
+supabase/.data/
 .vite/
 vite.config.*.timestamp-*
 *.tsbuildinfo

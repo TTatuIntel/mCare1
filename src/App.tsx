@@ -8,6 +8,10 @@ import { VerificationScreen } from '@/shared/auth/VerificationScreen'
 import { DoctorStatusScreen } from '@/shared/auth/DoctorStatusScreen'
 import { SuspendedScreen } from '@/shared/auth/SuspendedScreen'
 
+/** Set when the page was opened from a patient's share link: the visitor sees those documents, not the sign-in page. */
+const SHARE_TOKEN = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('share')
+const SharedDocuments = lazy(() => import('@/shared/documents/SharedDocuments').then(m => ({ default: m.SharedDocuments })))
+
 // Each portal is its own chunk. They are fetched quietly while the user is
 // on the sign-in screen, so signing in is normally instant; only on a slow
 // network does the sign-in screen stay up under the loading popup.
@@ -74,7 +78,9 @@ function Router() {
   const target = screenFor(currentUser)
   // React renders the next screen in the background; if its code is still
   // loading, `shown` keeps the current screen until it is ready.
-  const shown = useDeferredValue(target)
+  const deferred = useDeferredValue(target)
+  // Signed out: go to the sign-in page at once. A portal must never be drawn without its user, even for one frame.
+  const shown = currentUser ? deferred : target
   const Screen = SCREENS[shown]
   return (
     <>
@@ -90,7 +96,7 @@ export default function App() {
     <AppProvider>
       <PhoneShell>
         <Suspense fallback={<Loading label="Loading…" />}>
-          <Router />
+          {SHARE_TOKEN ? <SharedDocuments token={SHARE_TOKEN} /> : <Router />}
         </Suspense>
       </PhoneShell>
     </AppProvider>

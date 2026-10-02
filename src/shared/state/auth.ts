@@ -6,7 +6,8 @@ import type { AuthProvider } from '@/shared/lib/types'
 
 /* ─── Password policy ───────────────────────────────────────────────── */
 
-export const MIN_PASSWORD_LEN = 5
+/** Supabase Auth refuses anything shorter than 6; a health record deserves 8. */
+export const MIN_PASSWORD_LEN = 8
 
 /** Rejected outright — these are the passwords attackers try first. */
 const COMMON_PASSWORDS = [

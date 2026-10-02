@@ -4,13 +4,13 @@ import { Avatar, Pill } from '@/shared/ui/primitives'
 import { BottomSheet } from '@/shared/ui/BottomSheet'
 import { Loading } from '@/shared/ui/Loader'
 import type { AppUser } from '@/shared/lib/types'
-import { backendConfigured } from '@/shared/api/supabase'
+import { backendConfigured, checkBackend } from '@/shared/api/supabase'
 import { mayHaveSession, resumeBackendSession, returningFromProvider, returningToReset, signInWithEmail } from '@/shared/api/authBackend'
 import { AuthShell } from './AuthShell'
 import { AuthButton, AuthDivider, AuthField, AuthHeading, AuthSwitch, IconInput, PasswordInput, authInputCls } from './authKit'
 import { ForgotPassword } from './ForgotPassword'
 import { ConfirmEmail, LiveRecovery, useAdoptAccount } from './LiveAuth'
-import { SocialButtons } from './SocialAuth'
+import { SocialButtons, socialSignInAvailable } from './SocialAuth'
 import { SelfRegisterScreen } from './SelfRegisterScreen'
 import { WelcomeScreen } from './WelcomeScreen'
 
@@ -22,6 +22,9 @@ type View = 'welcome' | 'signin' | 'register' | 'forgot' | 'confirm'
 /** Signed-out flow on one page: the card swaps between Welcome, Sign in, Create account and Forgot password. */
 export function LoginScreen() {
   const adopt = useAdoptAccount()
+  const { entering, enterError, retryEnter } = useApp()
+  /** Live mode: the backend cannot be reached, said before anyone types a password. */
+  const [backendDown, setBackendDown] = useState('')
   const [view, setView] = useState<View>('welcome')
   // Live mode: someone already signed in, or coming back from a provider or an emailed link, is let in here.
   const [resuming, setResuming] = useState(returningFromProvider || mayHaveSession)
@@ -43,14 +46,24 @@ export function LoginScreen() {
       else if (session.ok) adopt(session.user)
       else if (session.error) { setNotice(session.error); setView('signin') }
     })
+    checkBackend().then(health => { if (!cancelled && health.mode === 'live' && !health.ok) setBackendDown(health.error) })
     return () => { cancelled = true }
     // Runs once: it reads the session this page loaded with.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  // A record that could not be loaded is explained on the sign-in card, never on a blank portal.
+  useEffect(() => { if (enterError && view === 'welcome') setView('signin') }, [enterError]) // eslint-disable-line react-hooks/exhaustive-deps
+  const problem = enterError || backendDown
 
   return (
     <AuthShell welcome={view === 'welcome'} entrance onHome={() => setView('welcome')}>
-      <Loading when={resuming} label="Signing you in…" />
+      <Loading when={resuming || entering} label={entering ? 'Loading your record…' : 'Signing you in…'} />
+      {problem && view !== 'welcome' && (
+        <div role="alert" className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">
+          <p className="font-semibold">{problem}</p>
+          {enterError && <button type="button" onClick={retryEnter} className="mt-1 font-bold text-teal-700 underline-offset-4 hover:underline">Try again</button>}
+        </div>
+      )}
       {/* Welcome fills the height left under the tour, so no band of white is left at the foot. */}
       <div key={view} className={`screen-in ${view === 'welcome' ? 'flex flex-1 flex-col' : ''}`}>
         {view === 'welcome' && (
@@ -141,8 +154,10 @@ function SignInForm({ initialDemoOpen, initialEmail, notice, onRegister, onForgo
 
       <AuthButton type="submit" disabled={!ready}>{busy ? 'Signing in…' : 'Sign In'}</AuthButton>
 
-      <AuthDivider>Or continue with</AuthDivider>
-      <SocialButtons />
+      {socialSignInAvailable && <>
+        <AuthDivider>Or continue with</AuthDivider>
+        <SocialButtons />
+      </>}
 
       <AuthSwitch prompt="New to mCare?" action="Create an account" onClick={onRegister} />
       {!backendConfigured && (

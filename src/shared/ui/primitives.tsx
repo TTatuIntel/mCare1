@@ -121,9 +121,9 @@ export function PageTitle({ title, action, onAction, meta }: {
 }
 
 /* ─── AddButton ─────────────────────────────────────────────────────── */
-export function AddButton({ onClick, color = 'bg-teal-700' }: { onClick: () => void; color?: string }) {
+export function AddButton({ onClick, color = 'bg-teal-700', label = 'Add' }: { onClick: () => void; color?: string; /** What a screen reader announces. */ label?: string }) {
   return (
-    <button onClick={onClick} className={`w-8 h-8 ${color} rounded-full flex items-center justify-center text-white text-xl leading-none shadow`}>
+    <button onClick={onClick} aria-label={label} className={`w-8 h-8 ${color} rounded-full flex items-center justify-center text-white text-xl leading-none shadow`}>
       +
     </button>
   )

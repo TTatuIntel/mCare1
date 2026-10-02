@@ -35,6 +35,8 @@ const DOCK_REACH = 1.6
  * and asks for the name and email it would hand back.
  */
 const PROVIDERS = SOCIAL_PROVIDERS.filter(p => providerAvailable(p.id))
+/** False when no provider can be used (the local backend): the "Or continue with" row is then left out. */
+export const socialSignInAvailable = PROVIDERS.length > 0
 /** Six fit one row in demo mode; live mode shows the connected ones only. */
 const GRID = PROVIDERS.length === SOCIAL_PROVIDERS.length ? 'grid-cols-6' : 'grid-cols-4'
 

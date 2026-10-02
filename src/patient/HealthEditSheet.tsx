@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
-import { BottomSheet, SheetButton } from '@/shared'
+import { BottomSheet, SheetButton, SaveError, useSave } from '@/shared'
 import type { HealthProfile } from '@/shared/lib/types'
 import { usePatient } from './usePatient'
 import { healthOf, suggestedVitals, type HealthSection } from '@/shared/lib/health'
@@ -18,6 +18,7 @@ export function HealthEditSheet({ section, onClose }: { section: HealthSection; 
   const { patient, saveHealth } = usePatient()
   const saved = healthOf(patient)
   const [draft, setDraft] = useState<HealthProfile>(saved)
+  const saving = useSave()
 
   const valid = section === 'conditions' ? !!draft.noConditions || draft.conditions.length > 0
     : section === 'allergies' ? !!draft.noKnownAllergies || draft.allergies.length > 0
@@ -30,14 +31,13 @@ export function HealthEditSheet({ section, onClose }: { section: HealthSection; 
     .map(v => vitalDefs.find(d => d.id === v && d.active))
     .filter(d => !!d)
 
-  const save = () => {
-    saveHealth(draft, newVitals.map(d => d.id))
-    onClose()
+  const save = async () => {
+    if ((await saving.run(() => saveHealth(draft, newVitals.map(d => d.id)))).ok) onClose()
   }
 
   return (
     <BottomSheet open onClose={onClose} title={TITLES[section].title} subtitle={TITLES[section].subtitle}
-      footer={<><SheetButton tone="ghost" onClick={onClose}>Cancel</SheetButton><SheetButton disabled={!valid} onClick={save}>Save</SheetButton></>}>
+      footer={<><SheetButton tone="ghost" onClick={onClose}>Cancel</SheetButton><SheetButton disabled={!valid || saving.busy} onClick={save}>{saving.busy ? 'Saving…' : 'Save'}</SheetButton></>}>
       {section === 'about' && (
         <AboutFields sex={draft.sex} bloodType={draft.bloodType} onChange={v => setDraft(d => ({ ...d, ...v }))} />
       )}
@@ -54,6 +54,7 @@ export function HealthEditSheet({ section, onClose }: { section: HealthSection; 
       {section === 'allergies' && (
         <AllergiesFields value={draft} onChange={v => setDraft(d => ({ ...d, ...v }))} />
       )}
+      <SaveError message={saving.error} className="mt-3" />
     </BottomSheet>
   )
 }

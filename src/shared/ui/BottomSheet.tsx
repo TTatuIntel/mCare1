@@ -1,6 +1,7 @@
 /** Bottom sheet + the form controls that live inside it. Pinned to the bottom of the screen on mobile; a centred dialog on tablet and web (see `.sheet-up` in index.css). */
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import type { Outcome } from '@/shared/lib/types'
 
 /* ─── BottomSheet: always pinned to the bottom of the phone screen ─── */
 export function BottomSheet({ open, onClose, title, subtitle, children, footer }: {
@@ -97,6 +98,39 @@ export function Field({ label, children }: { label: string; children: React.Reac
   )
 }
 export const inputCls = 'w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-teal-400'
+
+/* ─── Saving ─── */
+/**
+ * Runs a form's save: `busy` while it is on its way, `error` if it was refused.
+ * A second tap while busy does nothing, so a slow connection cannot save twice.
+ *
+ *   const save = useSave()
+ *   const submit = async () => { if ((await save.run(() => requestAppointment(form))).ok) onClose() }
+ *   <SaveError message={save.error} />
+ *   <SheetButton disabled={save.busy} onClick={submit}>{save.busy ? 'Saving…' : 'Save'}</SheetButton>
+ */
+export function useSave() {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const running = useRef(false)
+  const run = async <T,>(job: () => Promise<Outcome<T>>): Promise<Outcome<T>> => {
+    if (running.current) return { ok: false, error: '' }
+    running.current = true
+    setBusy(true); setError('')
+    const result = await job()
+    running.current = false
+    setBusy(false)
+    if (!result.ok) setError(result.error)
+    return result
+  }
+  return { busy, error, run, clear: () => setError('') }
+}
+
+/** Why a save did not go through, shown beside the form that tried it. */
+export function SaveError({ message, className = '' }: { message?: string; className?: string }) {
+  if (!message) return null
+  return <p role="alert" className={`text-xs font-semibold text-red-700 bg-red-50 border border-red-100 rounded-xl px-3 py-2 ${className}`}>{message}</p>
+}
 
 /* ─── Toast ─── */
 export function useToast() {

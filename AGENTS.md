@@ -23,11 +23,11 @@ No other files belong at the top of `src/`. Every source file lives in one of th
 
 - `src/shared/` - Everything used by more than one role
   - `index.ts` - The shared UI kit. Import UI from `@/shared` (e.g. `import { PageTitle, Pill } from '@/shared'`)
-  - `state/` - `AppContext` (app state and actions) and `auth`
+  - `state/` - `AppContext` (app state and actions, in live and demo mode), `demoData` (the sample people of demo mode; never used in live mode) and `auth`
   - `lib/` - `types` and `vitals` (domain types and pure helpers)
   - `documents/` - Medical documents: store, seed data, DocKit, viewer, and upload/share sheets
   - `email/` - `emailTemplate` (the one branded layout and the catalogue of every email mCare sends) and `Mailbox` (in-app view of sent emails). Never build email HTML anywhere else; send through `notify()` or the builders in `emailTemplate`. The logo image is `public/brand/mcare-logo.png`
-  - `api/` - `supabase` (the backend connection; demo mode when no keys are set)
+  - `api/` - `supabase` (the backend connection; demo mode when no keys are set), `authBackend` (sign-in), `records` (reads everything the signed-in person may see), `actions` and `documentActions` (one function per change; each throws an `ApiError` whose message can be shown as it is)
   - `ui/` - Primitives, BottomSheet/Field/Toast, alerts, vitals widgets, chat, notifications, and the home-screen kit (`home.tsx`)
   - `layout/` - PhoneShell, StatusBar, `PortalShell` (screen frame + NavBar for every portal), logo, loading
   - `profile/` - ProfileCard and account settings sheets (the same for every role)
@@ -47,7 +47,10 @@ Import rules: use `@/…` for anything in another folder and `./…` within the 
 - Charts measure their own width (`useElementWidth` from `@/shared`); don't hard-code an SVG width.
 - Every home screen uses `PortalHeader`, then a `HeroCard`, then a `QuickGrid`, then `NoticeCard`s, all from `@/shared`.
 - Other screens are wrapped in `Page` (title row, card spacing, loading and error states), or start with `BackHeader` for detail views. Use `EmptyState` for empty lists. `PageTitle` is the older form; prefer `Page`.
-- Patient screens read and change the patient's record only through `usePatient()` (`src/patient/usePatient.ts`). Never call `updateUser` or read the `users` list from a patient screen; add a named action to the hook instead. Each action maps to one future API endpoint.
+- Patient screens read and change the patient's record only through `usePatient()` (`src/patient/usePatient.ts`). Never call `updateUser` or read the `users` list from a patient screen; add a named action to the hook instead. Each action is one request to the backend (noted beside it).
+- Saving: every action that saves returns a promise of `{ ok: true, value }` or `{ ok: false, error }` (`Outcome` in `lib/types`), in live and in demo mode, and never throws. In a form, run it through `useSave()` and show `<SaveError>` (both from `@/shared`): disable the button while `busy`, and close the sheet or show a success message only once `ok`. Never say "saved" before the save has come back.
+- Live and demo: screens never check which mode is running. `AppContext` loads the record from the backend at sign-in (live) or from `demoData` (demo); a new action needs both a live branch (`run(() => api.something())`) and the in-memory one. Never put sample people or sample numbers in a screen: show an `EmptyState`.
+- Access rules, clinical rules (grading, alerts), notifications and the audit trail belong to the database (`supabase/migrations`), not to a screen. A screen may hide a button the person cannot use; it must not be the only thing stopping them.
 - Brand teal (`teal-700`) is the only colour for action buttons. Blue, purple and amber mark status or role only.
 - Fonts: use the `font-display` class for headings and `font-mono` for numbers. Never use inline `fontFamily`.
 - Put UI you would reuse in `src/shared/ui/` instead of redefining it inside a screen.
@@ -58,7 +61,12 @@ Import rules: use `@/…` for anything in another folder and `./…` within the 
 
 ## Backend
 
-The backend is Supabase (Postgres), not Laravel. Schema and access rules live in `supabase/migrations/`. After changing a migration run `node supabase/tests/rules.test.mjs`. Add new numbered migrations instead of editing ones already applied.
+The backend is Supabase (Postgres), not Laravel. Schema and access rules live in `supabase/migrations/`. Add new numbered migrations instead of editing ones already applied.
+
+- Local database: `npm run backend` (`supabase/dev/server.mjs`) runs the migrations on a real Postgres engine (PGlite, data in `supabase/.data`) and serves the Supabase API the app uses. It writes `.env.local`, which puts the app in live mode; delete that file for demo mode. `npm run backend:seed` creates the labelled test accounts. The dev server forwards `/auth/v1`, `/rest/v1` and `/storage/v1` to it (`vite.config.ts`), so a phone on the same network needs only port 8443. Setup and phone testing: `docs/local-setup.md`.
+- Tests: `npm test` runs `supabase/tests/rules.test.mjs` (every access and clinical rule, as each kind of user) and `supabase/tests/api.test.mjs` (the same workflows through the HTTP API with the real client). `npm run test:ui` drives the patient portal in a headless browser. Run `npm test` after changing a migration, and `npm run typecheck` after changing `src/`.
+- PGlite and Playwright are installed with `npm i --no-save …` so `package.json` and `pnpm-lock.yaml` stay unchanged.
+- Relationships, access rules and what the database automates: `docs/database.md`. What the patient module does and what is still open: `docs/patient-module.md`.
 
 ## Dependencies
 

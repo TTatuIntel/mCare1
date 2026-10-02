@@ -4,7 +4,7 @@ import { RESOLUTION_REASONS } from '@/shared/lib/types'
 import type { AppAlert } from '@/shared/lib/types'
 import { dayKey } from '@/shared/lib/vitals'
 import { Pill } from './primitives'
-import { BottomSheet, SheetButton, Field, inputCls } from './BottomSheet'
+import { BottomSheet, SheetButton, Field, inputCls, SaveError, useSave } from './BottomSheet'
 
 /* ─── Alert status pill ─── */
 export function AlertStatusPill({ alert }: { alert: AppAlert }) {
@@ -27,23 +27,24 @@ export function ResolveAlertSheet({ alert, patientName, onClose }: { alert: AppA
   const [date, setDate] = useState('')
   const [time, setTime] = useState('')
   const [recheckSent, setRecheckSent] = useState(false)
-  useEffect(() => { setReason(''); setNote(''); setScheduling(false); setDate(''); setTime(''); setRecheckSent(false) }, [alert?.id])
+  const save = useSave()
+  useEffect(() => { setReason(''); setNote(''); setScheduling(false); setDate(''); setTime(''); setRecheckSent(false); save.clear() }, [alert?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!alert) return null
   const needsNote = reason === 'Other'
   const ok = !!reason && (!needsNote || note.trim().length > 0)
-  const submit = () => { if (!ok) return; resolveAlert(alert.id, reason, note); onClose() }
+  const submit = async () => { if (ok && (await save.run(() => resolveAlert(alert.id, reason, note))).ok) onClose() }
   const doctorId = currentUser?.role === 'doctor' ? currentUser.id : undefined
-  const confirmSchedule = () => {
+  const confirmSchedule = async () => {
     if (!doctorId || !date || !time) return
-    scheduleFollowUp(alert.patientId, doctorId, date, time, note, alert.id)
-    onClose()
+    if ((await save.run(() => scheduleFollowUp(alert.patientId, doctorId, date, time, note, alert.id))).ok) onClose()
   }
-  const sendRecheck = () => { requestRecheck(alert.id); setRecheckSent(true) }
+  const sendRecheck = async () => { if ((await save.run(() => requestRecheck(alert.id))).ok) setRecheckSent(true) }
+  const critical = alert.severity === 'danger'
 
   return (
     <BottomSheet open onClose={onClose} title="Resolve Alert"
       subtitle="Choose a reason, or handle it a different way below. The alert stays in the patient's history either way."
-      footer={<><SheetButton tone="ghost" onClick={onClose}>Cancel</SheetButton><SheetButton tone="success" disabled={!ok} onClick={submit}>Mark Resolved</SheetButton></>}>
+      footer={<><SheetButton tone="ghost" onClick={onClose}>Cancel</SheetButton><SheetButton tone="success" disabled={!ok || save.busy} onClick={submit}>{save.busy ? 'Saving…' : 'Mark Resolved'}</SheetButton></>}>
       <div className={`rounded-xl px-3 py-2.5 mb-4 ${alert.severity === 'danger' ? 'bg-red-50' : 'bg-amber-50'}`}>
         <p className="text-sm font-bold text-gray-900">{alert.type === 'sos' ? `SOS · ${alert.value}` : `${alert.vitalName}: ${alert.value} ${alert.unit}`}</p>
         <p className="text-[10px] text-gray-500">{patientName} · {alert.loggedAt}</p>
@@ -67,7 +68,9 @@ export function ResolveAlertSheet({ alert, patientName, onClose }: { alert: AppA
         <button onClick={sendRecheck} disabled={recheckSent || !!alert.recheckRequestedAt}
           className={`text-left px-3 py-2.5 rounded-xl text-xs font-semibold border-2 ${recheckSent || alert.recheckRequestedAt ? 'border-gray-100 bg-gray-50 text-gray-400' : 'border-blue-100 bg-blue-50 text-blue-700'}`}>
           🔁 {recheckSent || alert.recheckRequestedAt ? 'Re-check requested — waiting for a new reading' : 'Ask patient to record a new reading'}
-          <span className="block text-[10px] font-normal mt-0.5 opacity-80">Auto-resolves if the new reading is back in range.</span>
+          <span className="block text-[10px] font-normal mt-0.5 opacity-80">{critical
+            ? 'A critical alert is not closed by a number alone: the new reading comes back to you to resolve.'
+            : 'A warning closes by itself if the new reading is back in range.'}</span>
         </button>
 
         {!scheduling ? (
@@ -90,6 +93,7 @@ export function ResolveAlertSheet({ alert, patientName, onClose }: { alert: AppA
             </div>
           </div>
         )}
+        <SaveError message={save.error} />
       </div>
     </BottomSheet>
   )

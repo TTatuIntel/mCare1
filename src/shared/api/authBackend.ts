@@ -11,7 +11,7 @@ import type { User } from '@supabase/supabase-js'
 import type {
   AccountStatus, AdminUser, AppUser, ApprovalStatus, AssistantPerm, AuthProvider, DoctorUser, PatientUser,
 } from '@/shared/lib/types'
-import { backendConfigured, getSupabase } from './supabase'
+import { backendConfigured, getSupabase, localBackend } from './supabase'
 
 export type SocialProvider = Exclude<AuthProvider, 'email'>
 
@@ -20,8 +20,8 @@ const BACKEND_ID: Partial<Record<SocialProvider, 'google' | 'apple' | 'facebook'
   google: 'google', apple: 'apple', facebook: 'facebook', x: 'twitter',
 }
 
-/** Whether a provider button should be offered: all of them in demo mode, the connected ones in live mode. */
-export const providerAvailable = (p: SocialProvider) => !backendConfigured || !!BACKEND_ID[p]
+/** Whether a provider button should be offered: all of them in demo mode, the connected ones on a hosted project, none on the local backend. */
+export const providerAvailable = (p: SocialProvider) => !backendConfigured || (!localBackend && !!BACKEND_ID[p])
 
 const landedOn = typeof window === 'undefined' ? '' : window.location.hash + window.location.search
 /** True when this page load is a provider or an emailed link sending the person back to us. Read once, before the URL is cleaned. */

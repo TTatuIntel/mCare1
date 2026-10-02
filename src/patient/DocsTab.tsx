@@ -16,7 +16,7 @@ import { ReportRequestSheet } from './ReportRequest'
 export function DocsTab({ go }: { go: (t: string) => void }) {
   const {
     currentUser, users, documentsFor, retryUpload, discardUpload, markDocsSeen, setDocPrivacyDefault, shareLinksFor, recordDownload, now,
-    getDocument, reportRequests,
+    getDocument, reportRequests, loadDocumentFile,
   } = useApp()
   const patient = currentUser as PatientUser
   const [openId, setOpenId] = useState<string | null>(null)
@@ -49,7 +49,21 @@ export function DocsTab({ go }: { go: (t: string) => void }) {
     const docs = settled.filter(e => e.level === 'content').map(e => e.doc).filter(d => recordDownload(d.id))
     if (!docs.length) return
     setZipping(true)
-    try { downloadBlob(await loader.track(buildLibraryZip(docs, users, patient.name), 'Preparing your documents…'), `mcare-documents-${dayKey()}.zip`) }
+    try {
+      const zip = async () => {
+        // Stored files are fetched first, so the zip holds the originals and not just their names.
+        const withFiles = await Promise.all(docs.map(async d => {
+          if (!d.file || d.file.dataUrl) return d
+          const dataUrl = await loadDocumentFile(d.id)
+          return dataUrl ? { ...d, file: { ...d.file, dataUrl } } : d
+        }))
+        const missing = withFiles.filter(d => d.file && !d.file.dataUrl && !d.body).length
+        if (missing) toast.show(`${missing} file${missing > 1 ? 's' : ''} could not be fetched`)
+        return buildLibraryZip(withFiles, users, patient.name)
+      }
+      downloadBlob(await loader.track(zip(), 'Preparing your documents…'), `mcare-documents-${dayKey()}.zip`)
+    }
+    catch { toast.show('The zip could not be prepared. Try again.') }
     finally { setZipping(false) }
   }
 

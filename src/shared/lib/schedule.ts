@@ -4,18 +4,18 @@
  * patient view all derive from buildDaySchedule(), so a tick in one place
  * shows up everywhere.
  */
-import type { PatientUser, Prescription, MedDose, MealDone, Appointment } from './types'
+import type { PatientUser, Prescription, MedDose, MealDone, Appointment, PlannedMeal } from './types'
 import { dayKey, latestValid, checkInStatus } from './vitals'
 
 /* ─── Schedule data ─────────────────────────────────────────────────── */
-// `at` = minutes after midnight
-export const DAILY_MEALS = [
+// The standard meal plan, followed until the treating doctor sets a personal one (meal_plans). `at` = minutes after midnight
+export const DAILY_MEALS: PlannedMeal[] = [
   { id: 'breakfast', name: 'Breakfast', at: 7 * 60 + 30,  foods: 'Oatmeal with banana, black coffee', kcal: 320, icon: '🌅' },
   { id: 'lunch',     name: 'Lunch',     at: 12 * 60 + 45, foods: 'Grilled chicken salad, water',       kcal: 480, icon: '☀️' },
   { id: 'snack',     name: 'Snack',     at: 15 * 60 + 15, foods: 'Greek yogurt, mixed nuts',           kcal: 210, icon: '🍎' },
   { id: 'dinner',    name: 'Dinner',    at: 19 * 60,      foods: 'Brown rice, steamed veggies, fish',  kcal: 560, icon: '🌙' },
 ]
-export type Meal = typeof DAILY_MEALS[number]
+export type Meal = PlannedMeal
 
 // Default dose times per prescription frequency. Frequencies not listed here
 // ('As needed', 'Weekly') have no daily slots and are logged on demand.
@@ -52,11 +52,12 @@ export const TONE_PILL: Record<Tone, string> = { done: 'green', late: 'red', soo
 export const doseSlots = (rx: Prescription) => DOSE_TIMES[rx.frequency] ?? []
 export const minuteOfDay = (now: number) => { const d = new Date(now); return d.getHours() * 60 + d.getMinutes() }
 
-/** Effective date/time of an appointment (the new slot when rescheduled). */
+/** Effective date/time of an appointment (the new slot when rescheduled). A visit with no set time counts from 9:00 AM. */
 export const apptWhen = (a: Appointment) => {
   const date = a.status === 'rescheduled' ? a.rescheduledTo ?? a.preferredDate : a.preferredDate
   const time = a.status === 'rescheduled' ? a.rescheduledTime ?? a.preferredTime : a.preferredTime
-  const at = new Date(`${date} ${time || '9:00 AM'}`).getTime()
+  const clockTime = /^d{1,2}:d{2}s*(AM|PM)$/i.test(time?.trim() ?? '') ? time.trim() : '9:00 AM'
+  const at = new Date(`${date} ${clockTime}`).getTime()
   return { date, time, at: Number.isNaN(at) ? null : at }
 }
 
@@ -91,7 +92,7 @@ export const isDoseTaken = (doses: MedDose[], patientId: string, rxId: string, s
 // Picks the upcoming item if there is one, else the most overdue.
 const pickNext = (xs: ScheduleItem[]) => xs.find(x => x.inMin >= 0) ?? xs[0]
 
-export function buildDaySchedule(patient: PatientUser, doses: MedDose[], mealsDone: MealDone[], now: number, appointments: Appointment[] = []): DaySchedule {
+export function buildDaySchedule(patient: PatientUser, doses: MedDose[], mealsDone: MealDone[], now: number, appointments: Appointment[] = [], meals: PlannedMeal[] = DAILY_MEALS): DaySchedule {
   const day = dayKey()
   const nowMin = minuteOfDay(now)
   const mk = (x: Omit<ScheduleItem, 'inMin' | 'tone'>): ScheduleItem => {
@@ -103,12 +104,12 @@ export function buildDaySchedule(patient: PatientUser, doses: MedDose[], mealsDo
     const slots = doseSlots(rx)
     return slots.map((slot, i) => mk({
       key: `${rx.id}@${slot}`, kind: 'med', refId: rx.id, slot, icon: '💊', title: rx.medication,
-      sub: `${clock(slot)}${slots.length > 1 ? ` · dose ${i + 1} of ${slots.length}` : ''} · ${rx.purpose}`,
+      sub: `${clock(slot)}${slots.length > 1 ? ` · dose ${i + 1} of ${slots.length}` : ''}${rx.purpose ? ` · ${rx.purpose}` : ''}`,
       done: isDoseTaken(doses, patient.id, rx.id, slot, day),
     }))
   })
   const logged = new Set(mealsDone.filter(m => m.patientId === patient.id && m.day === day).map(m => m.mealId))
-  const mealItems = DAILY_MEALS.map(m => mk({
+  const mealItems = meals.map(m => mk({
     key: m.id, kind: 'meal', refId: m.id, slot: m.at, icon: m.icon, title: m.name,
     sub: `${clock(m.at)} · ${m.foods}`, done: logged.has(m.id),
   }))
@@ -152,7 +153,7 @@ export function buildDaySchedule(patient: PatientUser, doses: MedDose[], mealsDo
   return {
     items, due,
     doses: { taken: medItems.filter(x => x.done).length, total: medItems.length },
-    meals: { logged: logged.size, total: DAILY_MEALS.length, kcal: DAILY_MEALS.filter(m => logged.has(m.id)).reduce((s, m) => s + m.kcal, 0) },
+    meals: { logged: meals.filter(m => logged.has(m.id)).length, total: meals.length, kcal: meals.filter(m => logged.has(m.id)).reduce((s, m) => s + m.kcal, 0) },
     nextMed: pickNext(dueMeds),
     nextMeal: pickNext(dueMeals),
     nextAppt: apptItems.sort(byTime)[0],

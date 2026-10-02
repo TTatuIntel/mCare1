@@ -59,10 +59,10 @@ export function ReportBuilderSheet({ patient, open, onClose, onCreated, request 
     }
   }, [preview]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const create = () => {
+  const create = async () => {
     const id = request
-      ? fulfillReportRequest(request.id, { days, interpretation: interp, include })
-      : generateVitalsReport(patient.id, days, interp, include)
+      ? await fulfillReportRequest(request.id, { days, interpretation: interp, include })
+      : await generateVitalsReport(patient.id, days, interp, include)
     if (id) { onClose(); onCreated(id) }
   }
 

@@ -1,10 +1,50 @@
 import { useEffect, useRef, useState } from 'react'
+import { useApp } from '@/shared/state/AppContext'
 import { NavBar } from './NavBar'
 
 /** Scroll movement (px) smaller than this is ignored, so the floating button doesn't flicker. */
 const SCROLL_JITTER = 6
 /** The floating button stays open until the screen has scrolled this far (px). */
 const COMPACT_AFTER = 32
+
+/** How long a "could not save" message stays up before it clears itself. */
+const SAVE_ERROR_MS = 8000
+
+/**
+ * What the person must know about the connection, above every screen:
+ * a save that was refused, being offline, or the backend not answering.
+ * Nothing is shown while everything is working.
+ */
+function ConnectionBanner() {
+  const { live, online, sync, saveError, clearSaveError, refresh } = useApp()
+  useEffect(() => {
+    if (!saveError) return
+    const t = setTimeout(clearSaveError, SAVE_ERROR_MS)
+    return () => clearTimeout(t)
+  }, [saveError]) // eslint-disable-line react-hooks/exhaustive-deps
+  const loadedAt = sync.at ? new Date(sync.at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : null
+  const stale = live && (!online || !!sync.error)
+  if (!saveError && !stale) return null
+  return (
+    <div className="flex flex-col gap-1.5 mb-2" aria-live="polite">
+      {saveError && (
+        <div role="alert" className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+          <p className="flex-1"><span className="font-bold">Not saved.</span> {saveError}</p>
+          <button onClick={clearSaveError} aria-label="Dismiss" className="font-bold text-red-700 px-1">✕</button>
+        </div>
+      )}
+      {stale && (
+        <div role="status" className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <p className="flex-1">
+            <span className="font-bold">{online ? 'mCare cannot be reached.' : 'You are offline.'}</span>{' '}
+            {loadedAt ? `Showing what was loaded at ${loadedAt}.` : ''} Changes cannot be saved until the connection is back.
+          </p>
+          {online && <button onClick={() => { void refresh() }} disabled={sync.refreshing} className="font-bold text-teal-700 flex-shrink-0 disabled:opacity-50">{sync.refreshing ? 'Trying…' : 'Retry'}</button>}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export type NavItem = {
   id: string; label: string; icon: string; badge?: number
@@ -66,6 +106,7 @@ export function PortalShell({ screen, animKey, nav, onSelect, homeId, fill, hide
           style={{ scrollbarWidth: 'none' }}
         >
           <div className={`mx-auto w-full ${narrow || fill ? 'max-w-2xl' : 'max-w-5xl'} ${fill ? 'flex-1 min-h-0 flex flex-col' : ''}`}>
+            <ConnectionBanner />
             {!inNav && !hideBack && (
               <button onClick={() => onSelect(homeId)} className="text-xs text-teal-700 font-semibold mb-1">← Home</button>
             )}

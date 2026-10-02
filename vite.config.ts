@@ -7,6 +7,15 @@ import siteConfiguration from './.figma/make/site.json'
 import packageJson from './package.json'
 
 
+/**
+ * The local mCare backend (`npm run backend`, supabase/dev/server.mjs) listens on this machine only.
+ * The app reaches it through these three paths on the dev server, so `VITE_SUPABASE_URL=/` works
+ * from the laptop and from a phone on the same network without the phone ever needing the backend's port.
+ * Unused when VITE_SUPABASE_URL points at a hosted Supabase project.
+ */
+const backendUrl = process.env.MCARE_BACKEND_URL || `http://127.0.0.1:${process.env.MCARE_BACKEND_PORT || 54321}`
+const backendProxy = Object.fromEntries(['/auth/v1', '/rest/v1', '/storage/v1'].map(path => [path, { target: backendUrl, changeOrigin: false }]))
+
 // Vite config — https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   // .figma/make/deploy-preview passes `--mode development` for cached-preview builds.
@@ -37,6 +46,7 @@ react(),
       host: process.env.FIGMA_DEV_SERVER_HOST || '0.0.0.0',
       port: parseInt(process.env.PORT || '8443'),
       strictPort: true,
+      proxy: backendProxy,
       watch: {
         ignored: [
           '**/.figma/**',
@@ -46,6 +56,7 @@ react(),
     preview: {
       host: process.env.FIGMA_DEV_SERVER_HOST || '0.0.0.0',
       port: parseInt(process.env.PORT || '8443'),
+      proxy: backendProxy,
     },
   }
 })

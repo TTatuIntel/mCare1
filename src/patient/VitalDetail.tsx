@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import {
   BackHeader, BottomSheet, SheetButton, VitalChart, VitalHistory, ReadingFilterChips, readingMatches, InsightNotes,
-  levelStyle, TREND_ARROW, type ReadingFilter,
+  SaveError, useSave, levelStyle, TREND_ARROW, type ReadingFilter,
 } from '@/shared'
 import type { PatientUser } from '@/shared/lib/types'
 import {
@@ -47,6 +47,7 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
   const patient = currentUser as PatientUser
   const [range, setRange] = useState<{ preset: Preset; from: string; to: string }>({ preset: '30d', from: '', to: '' })
   const [correcting, setCorrecting] = useState<{ id: string; value: string } | null>(null)
+  const saving = useSave()
   /** One filter for both the chart and the list. */
   const [filter, setFilter] = useState<ReadingFilter>('all')
   const [tab, setTab] = useState<'trend' | 'history'>('trend')
@@ -364,7 +365,7 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
             <VitalHistory embedded className="" patient={patient} def={def} unit={u.unit} rows={rows} total={all.length}
               latestId={latest?.id} focusId={focus} caption={`From ${periodLabel}`} filter={filter} onFilter={setFilter}
               action={r => !r.invalid && canCorrect(r) && (
-                <button onClick={() => setCorrecting({ id: r.id, value: u.value(r.value) })} className="block ml-auto mt-1 text-[10px] text-teal-700 font-bold underline">Correct</button>
+                <button onClick={() => { saving.clear(); setCorrecting({ id: r.id, value: u.value(r.value) }) }} className="block ml-auto mt-1 text-[10px] text-teal-700 font-bold underline">Correct</button>
               )}
               onShowAll={() => setRange({ preset: 'all', from: '', to: '' })} />
           </div>
@@ -453,12 +454,17 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
       <BottomSheet open={!!correcting} onClose={() => setCorrecting(null)} title="Correct reading"
         subtitle="You can fix a typo within 15 minutes of logging it."
         footer={<><SheetButton tone="ghost" onClick={() => setCorrecting(null)}>Cancel</SheetButton>
-          <SheetButton disabled={!correcting || !!correctionError}
-            onClick={() => { if (correcting) correctReading(patient.id, correcting.id, u.toCanonical(correcting.value)); setCorrecting(null) }}>Save</SheetButton></>}>
+          <SheetButton disabled={!correcting || !!correctionError || saving.busy}
+            onClick={async () => {
+              if (!correcting) return
+              // Past the 15 minutes the backend refuses, and says so here.
+              if ((await saving.run(() => correctReading(patient.id, correcting.id, u.toCanonical(correcting.value)))).ok) setCorrecting(null)
+            }}>{saving.busy ? 'Saving…' : 'Save'}</SheetButton></>}>
         <input value={correcting?.value ?? ''} onChange={e => setCorrecting(c => (c ? { ...c, value: e.target.value } : c))} inputMode={def.id === 'bp' ? 'text' : 'decimal'}
           aria-label={`${def.name} in ${u.unit}`}
           className="w-full text-center text-3xl font-black bg-gray-50 border-2 border-gray-200 rounded-2xl py-4 outline-none focus:border-teal-400 font-mono" />
         {correctionError && <p className="text-xs text-red-500 mt-2">{correctionError}</p>}
+        <SaveError message={saving.error} className="mt-2" />
       </BottomSheet>
     </div>
   )

@@ -18,6 +18,8 @@ export function ChatThread({ meId, otherId, otherName, subtitle, fill, quickRepl
   const { messages, sendMessage, markMessagesRead, now } = useApp()
   const [text, setText] = useState('')
   const [away, setAway] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [failed, setFailed] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const thread = messages.filter(m => (m.fromId === meId && m.toId === otherId) || (m.fromId === otherId && m.toId === meId))
@@ -44,7 +46,17 @@ export function ChatThread({ meId, otherId, otherName, subtitle, fill, quickRepl
     el.style.height = `${el.scrollHeight}px`
   }, [text])
 
-  const send = (body: string) => { const v = body.trim(); if (!v) return; sendMessage(meId, otherId, v); setText('') }
+  const send = async (body: string) => {
+    const v = body.trim()
+    if (!v || sending) return
+    setSending(true); setFailed('')
+    const typed = text
+    setText('')
+    const res = await sendMessage(meId, otherId, v)
+    setSending(false)
+    // Not sent: what was typed goes back in the box, and the reason is shown.
+    if (!res.ok) { setText(typed || v); setFailed(res.error) }
+  }
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter sends with a keyboard; on a touch keyboard it starts a new line and the button sends.
     if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
@@ -154,6 +166,7 @@ export function ChatThread({ meId, otherId, otherName, subtitle, fill, quickRepl
           </div>
         )}
 
+        {failed && <p role="alert" className="mx-3 mt-2 rounded-xl bg-red-50 border border-red-100 px-3 py-1.5 text-[11px] font-semibold text-red-700">Not sent. {failed}</p>}
         <div className="p-2.5 flex items-end gap-2">
           <div className="flex-1 min-w-0 flex bg-gray-50 border border-gray-200 rounded-3xl px-4 py-2.5 transition-colors focus-within:border-teal-400 focus-within:bg-white">
             <textarea ref={inputRef} rows={1} value={text} onChange={e => setText(e.target.value)} onKeyDown={onKeyDown}
@@ -161,7 +174,7 @@ export function ChatThread({ meId, otherId, otherName, subtitle, fill, quickRepl
               className="flex-1 min-w-0 max-h-28 resize-none bg-transparent text-sm leading-5 outline-none placeholder:text-gray-400"
               style={{ scrollbarWidth: 'none' }} />
           </div>
-          <button onClick={() => { send(text); inputRef.current?.focus() }} disabled={!text.trim()} aria-label="Send"
+          <button onClick={() => { send(text); inputRef.current?.focus() }} disabled={!text.trim() || sending} aria-label="Send"
             className={`w-11 h-11 rounded-full flex items-center justify-center flex-shrink-0 transition-all ${text.trim() ? 'bg-teal-700 text-white shadow-sm active:scale-95' : 'bg-gray-100 text-gray-300'}`}>
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />

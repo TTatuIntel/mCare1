@@ -5,8 +5,6 @@ import type { ShareLink } from '@/shared/lib/types'
 import { canShare, SHARE_TTL_HOURS, DOC_CATEGORIES } from './documents'
 import { ago } from '@/shared/lib/vitals'
 
-const linkUrl = (s: ShareLink) => `https://mcare.app/s/${s.token}`
-
 function linkState(s: ShareLink, now: number): { label: string; color: string; live: boolean } {
   if (s.revokedAt) return { label: 'Revoked', color: 'gray', live: false }
   if (s.oneTime && s.usedAt) return { label: 'Used', color: 'gray', live: false }
@@ -23,7 +21,9 @@ function linkState(s: ShareLink, now: number): { label: string; color: string; l
 export function ShareSheet({ open, onClose, patientId, preselect }: {
   open: boolean; onClose: () => void; patientId: string; preselect?: string[]
 }) {
-  const { currentUser, documentsFor, docPolicyCtx, shareLinksFor, createShareLink, revokeShareLink, openShareLink, now } = useApp()
+  const { currentUser, documentsFor, docPolicyCtx, shareLinksFor, createShareLink, shareLinkUrl, revokeShareLink, openShareLink, now, live } = useApp()
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState(false)
   const [picked, setPicked] = useState<string[]>([])
   const [recipient, setRecipient] = useState('')
   const [ttl, setTtl] = useState<number>(24)
@@ -38,16 +38,23 @@ export function ShareSheet({ open, onClose, patientId, preselect }: {
   }, [open])
 
   const ctx = docPolicyCtx()
-  const shareable = documentsFor(patientId).filter(e => canShare(currentUser, e.doc, ctx))
+  const allowed = documentsFor(patientId).filter(e => canShare(currentUser, e.doc, ctx))
+  // A link carries report content. An uploaded file stays in private storage, which a person without an account cannot reach.
+  const shareable = live ? allowed.filter(e => !!e.doc.body) : allowed
+  const filesLeftOut = allowed.length - shareable.length
   const links = shareLinksFor(patientId)
   const toggle = (id: string) => setPicked(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id])
 
-  const create = () => {
-    const link = createShareLink(picked, recipient, ttl, oneTime)
+  const create = async () => {
+    if (busy) return
+    setBusy(true); setFailed(false)
+    const link = await createShareLink(picked, recipient, ttl, oneTime)
+    setBusy(false)
     if (link) setCreated(link)
+    else setFailed(true)
   }
   const copy = (s: ShareLink) => {
-    navigator.clipboard?.writeText(linkUrl(s)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }).catch(() => {})
+    navigator.clipboard?.writeText(shareLinkUrl(s)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }).catch(() => {})
   }
   const tryOpen = (s: ShareLink) => {
     const res = openShareLink(s.token)
@@ -59,16 +66,17 @@ export function ShareSheet({ open, onClose, patientId, preselect }: {
       subtitle="Creates a secure link that expires. You can revoke it at any time, and you're notified when it's opened."
       footer={created
         ? <SheetButton onClick={onClose}>Done</SheetButton>
-        : <><SheetButton tone="ghost" onClick={onClose}>Close</SheetButton><SheetButton disabled={!picked.length || !recipient.trim()} onClick={create}>Create link</SheetButton></>}>
+        : <><SheetButton tone="ghost" onClick={onClose}>Close</SheetButton><SheetButton disabled={!picked.length || !recipient.trim() || busy} onClick={create}>{busy ? 'Creating…' : 'Create link'}</SheetButton></>}>
 
       {created ? (
         <div className="bg-teal-50 border border-teal-100 rounded-2xl p-3 mb-4">
           <p className="text-xs font-bold text-teal-800">Link ready for {created.recipient}</p>
-          <p className="text-[11px] text-teal-700 break-all mt-1 font-mono">{linkUrl(created)}</p>
+          <p className="text-[11px] text-teal-700 break-all mt-1 font-mono select-all">{shareLinkUrl(created)}</p>
+          {live && <p className="text-[10px] text-teal-700 mt-1">Copy it now. For your safety mCare does not keep the link, so it cannot be shown again.</p>}
           <p className="text-[10px] text-teal-600 mt-1">{created.docIds.length} document{created.docIds.length > 1 ? 's' : ''} · expires in {ttl} h{created.oneTime ? ' · works once' : ''}</p>
           <div className="flex gap-2 mt-2">
             <button onClick={() => copy(created)} className="text-[11px] font-bold text-white bg-teal-700 px-3 py-1 rounded-full">{copied ? '✓ Copied' : 'Copy link'}</button>
-            <button onClick={() => tryOpen(created)} className="text-[11px] font-bold text-teal-700 bg-white border border-teal-200 px-3 py-1 rounded-full">Open as recipient (demo)</button>
+            {!live && <button onClick={() => tryOpen(created)} className="text-[11px] font-bold text-teal-700 bg-white border border-teal-200 px-3 py-1 rounded-full">Open as recipient (demo)</button>}
           </div>
           {preview && <p className="text-[10px] text-gray-600 mt-2">{preview}</p>}
         </div>
@@ -77,6 +85,7 @@ export function ShareSheet({ open, onClose, patientId, preselect }: {
           <Field label={`Documents to share (${picked.length})`}>
             <div className="flex flex-col gap-1 max-h-44 overflow-y-auto" style={{ scrollbarWidth: 'none' }}>
               {shareable.length === 0 && <p className="text-xs text-gray-400">No documents can be shared yet.</p>}
+              {filesLeftOut > 0 && <p className="text-[10px] text-gray-400">{filesLeftOut} uploaded file{filesLeftOut > 1 ? 's are' : ' is'} not listed: links carry reports only. Download a file to send it yourself.</p>}
               {shareable.map(({ doc }) => (
                 <label key={doc.id} className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${picked.includes(doc.id) ? 'border-teal-300 bg-teal-50' : 'border-gray-100'}`}>
                   <input type="checkbox" checked={picked.includes(doc.id)} onChange={() => toggle(doc.id)} />
@@ -106,6 +115,7 @@ export function ShareSheet({ open, onClose, patientId, preselect }: {
             </div>
             <Toggle on={oneTime} onChange={() => setOneTime(v => !v)} />
           </div>
+          {failed && <p role="alert" className="text-xs font-semibold text-red-700 bg-red-50 border border-red-100 rounded-xl px-3 py-2 mb-3">The link could not be created. Check your connection and try again.</p>}
         </>
       )}
 
@@ -123,8 +133,8 @@ export function ShareSheet({ open, onClose, patientId, preselect }: {
                 <p className="text-[10px] text-gray-400 mt-0.5">{s.docIds.length} document{s.docIds.length > 1 ? 's' : ''} · created {ago(s.at, now)}{s.usedAt ? ` · opened ${ago(s.usedAt, now)}` : ''}</p>
                 {st.live && (
                   <div className="flex gap-3 mt-1.5">
-                    <button onClick={() => copy(s)} className="text-[11px] font-bold text-teal-700">Copy</button>
-                    <button onClick={() => tryOpen(s)} className="text-[11px] font-bold text-gray-500">Test open</button>
+                    {shareLinkUrl(s) && <button onClick={() => copy(s)} className="text-[11px] font-bold text-teal-700">Copy</button>}
+                    {!live && <button onClick={() => tryOpen(s)} className="text-[11px] font-bold text-gray-500">Test open</button>}
                     <button onClick={() => revokeShareLink(s.id)} className="text-[11px] font-bold text-red-500">Revoke</button>
                   </div>
                 )}

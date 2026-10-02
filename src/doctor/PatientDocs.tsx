@@ -109,7 +109,7 @@ export function PatientDocs({ patient, openId, setOpenId, onLink, buildOpen, set
       <BottomSheet open={!!declining} onClose={() => setDeclining(null)} title="Decline report request"
         subtitle="The patient is notified with your reason."
         footer={<><SheetButton tone="ghost" onClick={() => setDeclining(null)}>Cancel</SheetButton>
-          <SheetButton tone="danger" disabled={declineReason.trim().length < 5} onClick={() => { declineReportRequest(declining!, declineReason); setDeclining(null); toast.show('Request declined') }}>Decline</SheetButton></>}>
+          <SheetButton tone="danger" disabled={declineReason.trim().length < 5} onClick={async () => { const ok = (await declineReportRequest(declining!, declineReason)).ok; setDeclining(null); if (ok) toast.show('Request declined') }}>Decline</SheetButton></>}>
         <Field label="Reason *">
           <textarea rows={3} value={declineReason} onChange={e => setDeclineReason(e.target.value)} className={`${inputCls} resize-none`}
             placeholder="e.g. Not enough readings yet — please log for 7 more days." />

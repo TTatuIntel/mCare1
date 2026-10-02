@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
-import { Avatar, Field, Toggle, inputCls } from '@/shared'
-import type { BiologicalSex, BloodType } from '@/shared/lib/types'
+import { Avatar, Field, Toggle, inputCls, SaveError, useSave } from '@/shared'
+import type { BiologicalSex, BloodType, Outcome } from '@/shared/lib/types'
 import { calcAge } from '@/shared/lib/vitals'
 import { healthOf, sexLabel, suggestedVitals } from '@/shared/lib/health'
 import { readSquarePhoto } from '@/shared/lib/photo'
@@ -40,6 +40,7 @@ export default function HealthSetup() {
 
   const [step, setStep] = useState(0)
   const [finished, setFinished] = useState(false)
+  const saving = useSave()
 
   const [dob, setDob] = useState(patient.dob ?? '')
   const [photo, setPhoto] = useState(patient.avatar?.photo)
@@ -70,31 +71,34 @@ export default function HealthSetup() {
 
   const saveHealth = () => saveHealthProfile({ ...about, ...cond, ...allergy })
 
-  const save = (id: StepId) => {
+  /** Saves one step. The patient moves on only once it is saved, so nothing they typed is lost unnoticed. */
+  const save = async (id: StepId): Promise<Outcome> => {
     if (id === 'about') {
-      saveAbout(dob, { gradient: patient.avatar?.gradient ?? 'teal', emoji: patient.avatar?.emoji ?? '', photo })
-      saveHealth()
+      const about = await saveAbout(dob, { gradient: patient.avatar?.gradient ?? 'teal', emoji: patient.avatar?.emoji ?? '', photo })
+      return about.ok ? saveHealth() : about
     }
     if (id === 'conditions') {
-      saveHealth()
+      const saved = await saveHealth()
+      if (!saved.ok) return saved
       const fresh = [...suggestions.keys()].filter(v => !applied.current.has(v) && activeVitals.some(d => d.id === v))
       fresh.forEach(v => applied.current.add(v))
       if (fresh.length) setTracked(t => [...new Set([...t, ...fresh])])
+      return saved
     }
-    if (id === 'allergies') saveHealth()
+    if (id === 'allergies') return saveHealth()
     if (id === 'kin') {
       // Next of kin goes first, so the SOS sheet offers to call them.
-      saveEmergencyContact({
+      return saveEmergencyContact({
         id: existingKin?.id, name: kin.name.trim(),
         relationship: kin.relationship || 'Next of kin', phone: kin.phone.trim(), nextOfKin: true,
       })
     }
-    if (id === 'tracking') setTrackedVitals(tracked)
+    return setTrackedVitals(tracked)
   }
 
-  const next = () => {
+  const next = async () => {
     if (!valid[current.id]) return
-    save(current.id)
+    if (!(await saving.run(() => save(current.id))).ok) return
     setSkipped(s => s.filter(id => id !== current.id))
     advance()
   }
@@ -104,6 +108,7 @@ export default function HealthSetup() {
   }
   /** Moves on without saving this step. Tracking has nothing to leave blank: it keeps the vitals already chosen. */
   const skip = () => {
+    saving.clear()
     if (current.id !== 'tracking') setSkipped(s => [...new Set([...s, current.id])])
     advance()
   }
@@ -206,8 +211,9 @@ export default function HealthSetup() {
             })}
           </div>
         </div>
-        <footer className="sticky bottom-0 bg-white/95 backdrop-blur px-5 pt-3 pb-6 border-t border-gray-100">
-          <AuthButton onClick={completeSetup}>Go to my dashboard</AuthButton>
+        <footer className="sticky bottom-0 bg-white/95 backdrop-blur px-5 pt-3 pb-6 border-t border-gray-100 flex flex-col gap-2">
+          <SaveError message={saving.error} />
+          <AuthButton onClick={() => saving.run(completeSetup)} disabled={saving.busy}>{saving.busy ? 'Opening…' : 'Go to my dashboard'}</AuthButton>
         </footer>
       </div>
     )
@@ -226,8 +232,8 @@ export default function HealthSetup() {
             : <button onClick={signOut} className="text-[11px] font-semibold text-gray-400">Sign out</button>}
           <p className="text-[11px] font-semibold text-gray-400">Step <span className="font-mono">{step + 1}</span> of <span className="font-mono">{STEPS.length}</span></p>
           {/* Leaves the whole setup for the dashboard; what was entered so far is already saved. */}
-          <button onClick={skipSetup}
-            className="group flex items-center gap-1 rounded-full bg-teal-50 py-1 pl-2.5 pr-2 text-[11px] font-bold text-teal-700 transition-all hover:bg-teal-100 active:scale-95">
+          <button onClick={() => saving.run(skipSetup)} disabled={saving.busy}
+            className="group flex items-center gap-1 rounded-full bg-teal-50 py-1 pl-2.5 pr-2 text-[11px] font-bold text-teal-700 transition-all hover:bg-teal-100 active:scale-95 disabled:opacity-50">
             Finish later
             <svg className="w-3 h-3 transition-transform group-hover:translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
           </button>
@@ -294,7 +300,8 @@ export default function HealthSetup() {
       </main>
 
       <footer className="sticky bottom-0 bg-white/95 backdrop-blur px-5 pt-3 pb-6 border-t border-gray-100 flex flex-col gap-2">
-        <AuthButton onClick={next} disabled={!valid[current.id]}>{step === STEPS.length - 1 ? 'Finish' : 'Continue'}</AuthButton>
+        <SaveError message={saving.error} />
+        <AuthButton onClick={next} disabled={!valid[current.id] || saving.busy}>{saving.busy ? 'Saving…' : step === STEPS.length - 1 ? 'Finish' : 'Continue'}</AuthButton>
         <AuthSkip onClick={skip}>Skip this step</AuthSkip>
       </footer>
     </div>

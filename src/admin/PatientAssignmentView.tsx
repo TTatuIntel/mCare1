@@ -14,16 +14,16 @@ export default function PatientAssignmentView({ patient, onBack }: { patient: Pa
   const [showReject, setShowReject] = useState(false)
   const toast = useToast()
 
-  const doAssign = (doctorId: string) => {
-    if (picker === 'alternative') {
-      resolvePatientRequest(patient.id, false, rejectNote.trim(), doctorId)
+  const doAssign = async (doctorId: string) => {
+    const alternative = picker === 'alternative'
+    setPicker(null)
+    if (alternative) {
+      if (!(await resolvePatientRequest(patient.id, false, rejectNote.trim(), doctorId)).ok) return
       setShowReject(false); setRejectNote('')
       toast.show('Request declined and an alternative doctor assigned.')
-    } else {
-      assignPatientToDoctor(patient.id, doctorId)
+    } else if ((await assignPatientToDoctor(patient.id, doctorId)).ok) {
       toast.show('Doctor assigned successfully.')
     }
-    setPicker(null)
   }
 
   const docCard = (d: DoctorUser, extra?: React.ReactNode) => (
@@ -72,7 +72,7 @@ export default function PatientAssignmentView({ patient, onBack }: { patient: Pa
 
           {patient.doctorRequest.status === 'pending' && (!showReject ? (
             <div className="flex gap-2">
-              <button onClick={() => { resolvePatientRequest(patient.id, true); toast.show('Request approved. Doctor assigned.') }}
+              <button onClick={async () => { if ((await resolvePatientRequest(patient.id, true)).ok) toast.show('Request approved. Doctor assigned.') }}
                 className="flex-1 py-2.5 bg-emerald-500 text-white text-xs font-bold rounded-xl">Approve Request</button>
               <button onClick={() => setShowReject(true)} className="flex-1 py-2.5 bg-red-50 text-red-600 text-xs font-bold rounded-xl">Decline</button>
             </div>

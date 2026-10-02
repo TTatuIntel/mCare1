@@ -3,297 +3,151 @@ import type {
   AppUser, VitalDef, PatientUser, DoctorUser, AdminUser, AssistantPerm, Prescription, VitalReading,
   AppAlert, Appointment, PatientMessage, AppNotification, NotifKind, AuditEntry, ClinicalNote, MedDose, MealDone, ReportRequest,
   AccountStatus, SupportTicket, ResetToken, ResetChannel, AuthProvider, VitalsReportInclude, EmailContent, SentEmail, SentSms,
+  MealPlan, HydrationLog, DoctorRating, Outcome,
 } from '@/shared/lib/types'
 import { emails as mail, sms as smsText, appBaseUrl, activationLink, activationToken } from '@/shared/email/emailTemplate'
 import { RESET_TTL_MIN, MAX_RESET_ATTEMPTS, AUTH_PROVIDER_LABELS } from '@/shared/lib/types'
 import { passwordIssue } from './auth'
+import { DEMO } from './demoData'
+import { backendConfigured } from '@/shared/api/supabase'
 import { signOutBackend } from '@/shared/api/authBackend'
-import { evaluate, alertIsFor, stamp, dateLabel, dayKey, ESCALATE_AFTER_MIN, CORRECTION_WINDOW_MIN, SELF_CLEAR_WINDOW_MIN, type VitalLevel } from '@/shared/lib/vitals'
+import * as api from '@/shared/api/actions'
+import { isoClock, isoDay, latestNotificationId, loadRecords, type Records } from '@/shared/api/records'
+import { evaluate, alertIsFor, stamp, dateLabel, dayKey, targetRange, ESCALATE_AFTER_MIN, CORRECTION_WINDOW_MIN, SELF_CLEAR_WINDOW_MIN, type VitalLevel } from '@/shared/lib/vitals'
 import { useDocumentStore, type DocumentApi } from '@/shared/documents/useDocumentStore'
 import { seedDocuments } from '@/shared/documents/docSeed'
 
-/* ─── Initial mock data ─────────────────────────────────────────────── */
+/* ─── Where the record lives ──────────────────────────────────────────
+   live  a backend is configured: the record is read from and saved to the
+         database, as the signed-in person (shared/api/records + actions).
+         Nothing below invents data; the lists start empty and are filled
+         by what the database allows this person to see.
+   demo  no backend: the sample data in ./demoData is kept in memory, and
+         the same actions change it here in the browser.
+   Screens do not know which one is running. */
+const LIVE = backendConfigured
 
-const NOW = Date.now()
+const NOW = DEMO.now
 const MIN = 60_000
-const HR = 60 * MIN
-const DAY = 24 * HR
-const at = (msAgo: number) => ({ at: NOW - msAgo, loggedAt: stamp(new Date(NOW - msAgo)) })
 
-export const INITIAL_VITAL_DEFS: VitalDef[] = [
-  { id: 'bp',   name: 'Blood Pressure',   unit: 'mmHg',  normalMin: 90,  normalMax: 130, criticalMin: 80,  criticalMax: 180, hardMin: 50, hardMax: 260, diaNormalMin: 60, diaNormalMax: 90, diaCriticalMin: 40, diaCriticalMax: 120, icon: '🫀', active: true },
-  { id: 'hr',   name: 'Heart Rate',       unit: 'bpm',   normalMin: 60,  normalMax: 100, criticalMin: 40,  criticalMax: 130, hardMin: 20, hardMax: 250, icon: '💓', active: true  },
-  { id: 'gluc', name: 'Blood Glucose',    unit: 'mg/dL', normalMin: 70,  normalMax: 140, criticalMin: 54,  criticalMax: 250, hardMin: 20, hardMax: 600, icon: '🩸', active: true, unitOptions: ['mg/dL', 'mmol/L'] },
-  { id: 'temp', name: 'Temperature',      unit: '°F',    normalMin: 97,  normalMax: 99,  criticalMin: 95,  criticalMax: 103, hardMin: 86, hardMax: 110, icon: '🌡️', active: true, unitOptions: ['°F', '°C'] },
-  { id: 'spo2', name: 'SpO₂',            unit: '%',     normalMin: 95,  normalMax: 100, criticalMin: 90,  criticalMax: 101, hardMin: 50, hardMax: 100, icon: '🫁', active: true  },
-  { id: 'wt',   name: 'Weight',           unit: 'kg',    normalMin: 40,  normalMax: 150, criticalMin: 30,  criticalMax: 200, hardMin: 2,  hardMax: 350, icon: '⚖️', active: true, unitOptions: ['kg', 'lb'] },
-  { id: 'ht',   name: 'Height',           unit: 'cm',    normalMin: 50,  normalMax: 250, criticalMin: 30,  criticalMax: 280, hardMin: 20, hardMax: 300, icon: '📏', active: false, unitOptions: ['cm', 'in'] },
-  { id: 'rr',   name: 'Respiratory Rate', unit: '/min',  normalMin: 12,  normalMax: 20,  criticalMin: 8,   criticalMax: 30,  hardMin: 4,  hardMax: 60,  icon: '🌬️', active: false },
-  { id: 'chol', name: 'Cholesterol',      unit: 'mg/dL', normalMin: 0,   normalMax: 200, criticalMin: -1,  criticalMax: 300, hardMin: 50, hardMax: 600, icon: '🧪', active: false },
-]
+const START = LIVE
+  ? { users: [] as AppUser[], vitalDefs: [] as VitalDef[], alerts: [] as AppAlert[], appointments: [] as Appointment[],
+      messages: [] as PatientMessage[], clinicalNotes: [] as ClinicalNote[], notifications: [] as AppNotification[], audit: [] as AuditEntry[] }
+  : DEMO
 
-const r = (id: string, vitalId: string, value: string, msAgo: number): VitalReading => ({ id, vitalId, value, ...at(msAgo) })
-
-/** Older, in-range history (newest first) so week/month trends have real shape. Deterministic, no randomness. */
-const history = (vitalId: string, fromDay: number, toDay: number, stepDays: number, value: (i: number) => string): VitalReading[] =>
-  Array.from({ length: Math.floor((toDay - fromDay) / stepDays) + 1 }, (_, i) =>
-    r(`h_${vitalId}_${i}`, vitalId, value(i), (fromDay + i * stepDays) * DAY + 2 * HR))
-const wobble = (i: number, amp: number) => Math.sin(i * 1.9) * amp
-
-const p1: PatientUser = {
-  id: 'p1', name: 'James Mwangi', email: 'james@example.com', phone: '+254 712 345 678',
-  role: 'patient', status: 'active', createdAt: 'Sep 1, 2026', verificationCode: '482931', password: 'mcare123',
-  assignedDoctorId: 'd1',
-  trackedVitalIds: ['bp', 'hr', 'gluc', 'temp', 'spo2', 'wt'],
-  thresholds: {
-    bp:   { min: 90,  max: 140 },
-    hr:   { min: 55,  max: 100 },
-    gluc: { min: 70,  max: 180 },
-    temp: { min: 97,  max: 99  },
-    spo2: { min: 93,  max: 100 },
-    wt:   { min: 70,  max: 95  },
-  },
-  targetLog: [{ vitalId: 'hr', at: NOW - 12 * DAY, from: { min: 60, max: 100 }, to: { min: 55, max: 100 }, by: 'd1' }],
-  prescriptions: [
-    { id: 'rx1', medication: 'Metformin 500mg',   dosage: '500mg', frequency: 'Twice daily', purpose: 'Blood sugar control', prescribedAt: 'Sep 10, 2026', doctorId: 'd1', active: true  },
-    { id: 'rx2', medication: 'Lisinopril 10mg',   dosage: '10mg',  frequency: 'Once daily',  purpose: 'Blood pressure',      prescribedAt: 'Sep 10, 2026', doctorId: 'd1', active: true  },
-    { id: 'rx3', medication: 'Atorvastatin 20mg', dosage: '20mg',  frequency: 'Once at night', purpose: 'Cholesterol',       prescribedAt: 'Sep 10, 2026', doctorId: 'd1', active: true  },
-    { id: 'rx4', medication: 'Aspirin 81mg',      dosage: '81mg',  frequency: 'Once daily',  purpose: 'Cardioprotection',    prescribedAt: 'Sep 10, 2026', doctorId: 'd1', active: false },
-  ],
-  readings: [
-    r('rd1', 'bp',   '142/91', 12 * MIN),
-    r('rd2', 'hr',   '72',     12 * MIN),
-    r('rd3', 'gluc', '210',    3 * HR),
-    r('rd4', 'temp', '98.2',   21 * HR),
-    r('rd5', 'spo2', '98',     12 * MIN),
-    r('rd6', 'wt',   '78.4',   12 * MIN),
-    r('rd1a', 'bp',  '138/88', 1 * DAY),
-    r('rd3a', 'gluc', '176',   1 * DAY),
-    r('rd1b', 'bp',  '135/86', 2 * DAY),
-    r('rd3b', 'gluc', '162',   2 * DAY),
-    r('rd1c', 'bp',  '131/84', 3 * DAY),
-    r('rd3c', 'gluc', '150',   3 * DAY),
-    r('rd1d', 'bp',  '128/82', 4 * DAY),
-    r('rd2a', 'hr',  '75',     1 * DAY),
-    r('rd2b', 'hr',  '70',     2 * DAY),
-    ...history('bp',   5, 30, 1, i => `${Math.round(127 - i * 0.25 + wobble(i, 3))}/${Math.round(81 - i * 0.15 + wobble(i + 1, 2))}`),
-    ...history('hr',   3, 30, 1, i => String(Math.round(72 + wobble(i, 4)))),
-    ...history('gluc', 4, 30, 1, i => String(Math.round(145 - i * 0.6 + wobble(i, 10)))),
-    ...history('temp', 1, 30, 1, i => (98.3 + wobble(i, 0.3)).toFixed(1)),
-    ...history('spo2', 1, 30, 1, i => String(Math.min(100, Math.round(97 + wobble(i, 1.4))))),
-    ...history('wt',   7, 28, 7, i => (78.4 + (i + 1) * 0.35).toFixed(1)),
-  ],
-  doctorNote: 'Blood pressure significantly elevated. Monitor BP twice daily. Reduce sodium intake and follow up in 3 days.',
-  emergencyContacts: [{ id: 'ec1', name: 'Mary Mwangi', relationship: 'Spouse', phone: '+254 711 000 111', nextOfKin: true }],
-  dob: '1968-04-12',
-  health: {
-    sex: 'male', bloodType: 'O+',
-    conditions: ['High blood pressure', 'Type 2 diabetes', 'High cholesterol'],
-    allergies: [{ id: 'al1', substance: 'Penicillin', severity: 'severe', reaction: 'Hives and facial swelling' }],
-  },
-}
-
-const p2: PatientUser = {
-  id: 'p2', name: 'Grace Otieno', email: 'grace@example.com', phone: '+254 722 345 678',
-  role: 'patient', status: 'unverified', createdAt: 'Sep 28, 2026', verificationCode: '719284', password: 'mcare123',
-  trackedVitalIds: ['bp', 'hr'], thresholds: {}, prescriptions: [], readings: [],
-  // Demo: verifying this account walks through the new-patient health setup.
-  profileSetup: 'pending',
-}
-
-const p3: PatientUser = {
-  id: 'p3', name: 'Samuel Kariuki', email: 'samuel@example.com', phone: '+254 733 345 678',
-  role: 'patient', status: 'active', createdAt: 'Aug 10, 2026', verificationCode: '391847', password: 'mcare123',
-  assignedDoctorId: 'd1',
-  trackedVitalIds: ['bp', 'hr', 'spo2'],
-  thresholds: { bp: { min: 85, max: 130 }, hr: { min: 60, max: 110 }, spo2: { min: 92, max: 100 } },
-  prescriptions: [
-    { id: 'rx5', medication: 'Amlodipine 5mg', dosage: '5mg', frequency: 'Once daily', purpose: 'Blood pressure', prescribedAt: 'Sep 5, 2026', doctorId: 'd1', active: true },
-  ],
-  readings: [
-    r('rd7', 'bp',   '128/85', 25 * MIN),
-    r('rd8', 'hr',   '88',     25 * MIN),
-    r('rd9', 'spo2', '89',     25 * MIN),
-    r('rd9a', 'spo2', '93',    1 * DAY),
-    r('rd9b', 'spo2', '95',    2 * DAY),
-    r('rd9c', 'spo2', '96',    3 * DAY),
-  ],
-  doctorNote: 'SpO₂ borderline low. Patient to rest and avoid exertion. Follow up in 48 hours if reading stays below 93%.',
-  emergencyContacts: [],
-}
-
-const p4: PatientUser = {
-  id: 'p4', name: 'Aisha Njeri', email: 'aisha@example.com', phone: '+254 744 345 678',
-  role: 'patient', status: 'active', createdAt: 'Sep 18, 2026', verificationCode: '552211', password: 'mcare123',
-  trackedVitalIds: ['bp', 'gluc'], thresholds: {}, prescriptions: [],
-  readings: [r('rd10', 'bp', '118/76', 2 * HR), r('rd11', 'gluc', '98', 2 * HR)],
-  doctorRequest: { doctorId: 'd1', requestedAt: 'Sep 28, 2026', status: 'pending' },
-  emergencyContacts: [],
-}
-
-const d1: DoctorUser = {
-  id: 'd1', name: 'Dr. Amara Osei', email: 'amara@knh.go.ke', phone: '+254 700 111 222',
-  role: 'doctor', status: 'active', createdAt: 'Jan 15, 2026', verificationCode: '112233', password: 'mcare123',
-  specialty: 'Cardiology', licenseNo: 'KMC-2019-04821', hospital: 'Kenyatta National Hospital',
-  approvalStatus: 'approved', approvedBy: 'a1', approvedAt: 'Jan 16, 2026', assignedPatientIds: ['p1', 'p3'],
-}
-
-const d2: DoctorUser = {
-  id: 'd2', name: 'Dr. Kwame Asante', email: 'kwame@aghospital.org', phone: '+254 700 222 333',
-  role: 'doctor', status: 'pending_approval', createdAt: 'Sep 20, 2026', verificationCode: '334455', password: 'mcare123',
-  specialty: 'Internal Medicine', licenseNo: 'GHC-2020-07732', hospital: 'Aga Khan Hospital',
-  approvalStatus: 'pending', assignedPatientIds: [],
-}
-
-const d3: DoctorUser = {
-  id: 'd3', name: 'Dr. Rehema Okoye', email: 'rehema@nbihosp.com', phone: '+254 700 333 444',
-  role: 'doctor', status: 'pending_approval', createdAt: 'Sep 15, 2026', verificationCode: '445566', password: 'mcare123',
-  specialty: 'Endocrinology', licenseNo: 'NGA-2018-09143', hospital: 'Nairobi Hospital',
-  approvalStatus: 'sent_back',
-  approvalNote: 'Medical licence document appears expired. Please upload a valid, current licence certificate.',
-  assignedPatientIds: [],
-}
-
-const d4: DoctorUser = {
-  id: 'd4', name: 'Dr. Bosco Maina', email: 'bosco@mpshah.com', phone: '+254 700 444 555',
-  role: 'doctor', status: 'suspended', createdAt: 'Sep 5, 2026', verificationCode: '556677', password: 'mcare123',
-  specialty: 'General Practice', licenseNo: 'KMC-2021-11234', hospital: 'MP Shah Hospital',
-  approvalStatus: 'rejected',
-  approvalNote: 'Credentials could not be verified with Kenya Medical Council. Application rejected.',
-  assignedPatientIds: [],
-}
-
-const d5: DoctorUser = {
-  id: 'd5', name: 'Dr. Lillian Wanjiru', email: 'lillian@knh.go.ke', phone: '+254 700 555 666',
-  role: 'doctor', status: 'active', createdAt: 'Feb 2, 2026', verificationCode: '667788', password: 'mcare123',
-  specialty: 'Endocrinology', licenseNo: 'KMC-2017-02211', hospital: 'Kenyatta National Hospital',
-  approvalStatus: 'approved', approvedBy: 'a1', approvedAt: 'Feb 3, 2026', assignedPatientIds: [],
-}
-
-const a1: AdminUser = {
-  id: 'a1', name: 'System Admin', email: 'admin@matendocare.com', phone: '+254 700 000 001',
-  role: 'admin', status: 'active', createdAt: 'Jan 1, 2026', verificationCode: '000000', password: 'mcare123',
-  isAssistant: false, permissions: [],
-}
-
-const a2: AdminUser = {
-  id: 'a2', name: 'Zainab Hassan', email: 'zainab@matendocare.com', phone: '+254 700 000 002',
-  role: 'assistant', status: 'active', createdAt: 'Mar 1, 2026', verificationCode: '111111', password: 'mcare123',
-  isAssistant: true,
-  permissions: ['assign_healthworkers', 'approve_patient_requests', 'handle_support', 'monitor_patients'],
-}
-
-const INITIAL_USERS: AppUser[] = [p1, p2, p3, p4, d1, d2, d3, d4, d5, a1, a2]
-
-const alertSeed = (id: string, patientId: string, vitalName: string, value: string, unit: string, severity: 'danger' | 'warning', msAgo: number, readingId: string): AppAlert => ({
-  id, patientId, vitalName, value, unit, severity, readingId, type: 'vital', status: 'open', resolved: false, ...at(msAgo),
-})
-
-const INITIAL_ALERTS: AppAlert[] = [
-  alertSeed('al1', 'p1', 'Blood Pressure', '142/91', 'mmHg', 'warning', 12 * MIN, 'rd1'),
-  alertSeed('al2', 'p3', 'SpO₂', '89', '%', 'danger', 25 * MIN, 'rd9'),
-  alertSeed('al3', 'p1', 'Blood Glucose', '210', 'mg/dL', 'warning', 3 * HR, 'rd3'),
-]
-
-const INITIAL_APPOINTMENTS: Appointment[] = [
-  { id: 'ap1', patientId: 'p1', doctorId: 'd1', title: 'Cardiology Consultation', reason: 'Follow up on elevated blood pressure readings', preferredDate: 'Oct 4, 2026', preferredTime: '9:00 AM', location: 'Kenyatta National Hospital', status: 'approved', createdAt: 'Sep 20, 2026' },
-  { id: 'ap2', patientId: 'p3', doctorId: 'd1', title: 'Diabetic Review', reason: 'Monthly glucose and weight check', preferredDate: 'Oct 10, 2026', preferredTime: '11:00 AM', status: 'requested', createdAt: 'Sep 25, 2026' },
-  { id: 'ap3', patientId: 'p1', doctorId: 'd1', title: 'General Check-up', reason: 'Routine monitoring and medication review', preferredDate: 'Oct 28, 2026', preferredTime: '10:00 AM', status: 'requested', createdAt: 'Sep 27, 2026' },
-  { id: 'ap4', patientId: 'p3', doctorId: 'd1', title: 'SpO₂ Follow-up', reason: 'SpO₂ has been consistently low, need evaluation', preferredDate: 'Oct 2, 2026', preferredTime: '2:00 PM', status: 'rescheduled', rescheduledTo: 'Oct 5, 2026', rescheduledTime: '3:00 PM', rescheduledReason: 'Doctor unavailable Oct 2 — rescheduled to Oct 5.', createdAt: 'Sep 22, 2026' },
-]
-
-const INITIAL_MESSAGES: PatientMessage[] = [
-  { id: 'msg1', fromId: 'd1', toId: 'p1', content: 'Your blood pressure is significantly elevated. Please reduce sodium intake, rest well, and monitor twice daily.', sentAt: stamp(new Date(NOW - 40 * MIN)), read: true },
-  { id: 'msg2', fromId: 'p1', toId: 'd1', content: 'Thank you doctor. I will follow your advice and monitor closely.', sentAt: stamp(new Date(NOW - 30 * MIN)), read: true },
-  { id: 'msg3', fromId: 'd1', toId: 'p3', content: 'Samuel, your SpO₂ dropped. Please rest and avoid strenuous activity. Contact me if it stays below 93%.', sentAt: stamp(new Date(NOW - 20 * MIN)), read: false },
-]
-
-const INITIAL_NOTES: ClinicalNote[] = [
-  { id: 'cn1', patientId: 'p1', authorId: 'd1', content: p1.doctorNote!, createdAt: stamp(new Date(NOW - 1 * DAY)), at: NOW - DAY },
-  { id: 'cn2', patientId: 'p3', authorId: 'd1', content: p3.doctorNote!, createdAt: stamp(new Date(NOW - 20 * MIN)), at: NOW - 20 * MIN },
-]
-
-const notifSeed = (id: string, userId: string, kind: NotifKind, title: string, body: string, msAgo: number, link?: string, read = false): AppNotification =>
-  ({ id, userId, kind, title, body, link, read, at: NOW - msAgo, createdAt: stamp(new Date(NOW - msAgo)) })
-
-const INITIAL_NOTIFS: AppNotification[] = [
-  notifSeed('n1', 'd1', 'alert', 'Critical: Samuel Kariuki', 'SpO₂ 89% — below critical limit', 25 * MIN, 'alerts'),
-  notifSeed('n2', 'd1', 'alert', 'Warning: James Mwangi', 'Blood Pressure 142/91 mmHg', 12 * MIN, 'alerts'),
-  notifSeed('n3', 'p1', 'message', 'New message from Dr. Amara Osei', 'Your blood pressure is significantly elevated…', 40 * MIN, 'messages', true),
-  notifSeed('n4', 'p3', 'message', 'New message from Dr. Amara Osei', 'Samuel, your SpO₂ dropped…', 20 * MIN, 'messages'),
-  notifSeed('n5', 'a1', 'assignment', 'Doctor request: Aisha Njeri', 'Requested Dr. Amara Osei', 1 * DAY, 'assign'),
-  notifSeed('n6', 'a2', 'assignment', 'Doctor request: Aisha Njeri', 'Requested Dr. Amara Osei', 1 * DAY, 'assign'),
-]
-
-const INITIAL_AUDIT: AuditEntry[] = [
-  { id: 'au1', actorId: 'a1', action: 'Approved doctor', detail: 'Dr. Amara Osei', at: NOW - 200 * DAY, createdAt: 'Jan 16, 2026' },
-  { id: 'au2', actorId: 'a1', action: 'Rejected doctor', detail: 'Dr. Bosco Maina — credentials not verified', at: NOW - 20 * DAY, createdAt: 'Sep 9, 2026' },
-  { id: 'au3', actorId: 'a1', action: 'Suspended user', detail: 'Dr. Bosco Maina', at: NOW - 20 * DAY, createdAt: 'Sep 9, 2026' },
-]
+/** How often live mode asks "has anything changed for me?" and how often it reloads regardless. */
+const CHECK_EVERY_MS = 15_000
+const RELOAD_EVERY_MS = 120_000
 
 /* ─── Context ───────────────────────────────────────────────────────── */
 
-export interface LogResult { level: VitalLevel; alerted: boolean; readingId: string }
+export interface LogResult {
+  level: VitalLevel
+  /** An alert was raised and the care team has been told. */
+  alerted: boolean
+  readingId: string
+  /** This reading closed an open warning (re-measured in range). */
+  cleared?: boolean
+}
+
+/** Every action that saves resolves with how it went, in both modes. */
+type Saved<T = void> = Promise<Outcome<T>>
+const done = <T = void,>(value?: T): Saved<T> => Promise.resolve({ ok: true, value: value as T })
+const refused = <T = void,>(error: string): Saved<T> => Promise.resolve({ ok: false, error })
+
+export interface SyncState {
+  /** When the data on screen was last loaded from the backend. */
+  at: number | null
+  refreshing: boolean
+  /** Set while the backend cannot be reached; what is on screen is the last successful load. */
+  error?: string
+}
 
 /** Documents come from the document store (useDocumentStore.ts); every read there is access-checked. */
 interface Ctx extends DocumentApi {
   now: number
+  /** True when the record lives on the backend; false in demo mode. */
+  live: boolean
   currentUser: AppUser | null
+  /** Signs out with `null`. To sign someone in, use `signIn`. */
   setCurrentUser: (u: AppUser | null) => void
+  /** Opens the app for an account. In live mode its record is loaded first; `entering` is true meanwhile. */
+  signIn: (account: AppUser, opts?: { acceptedTermsAt?: number }) => void
+  entering: boolean
+  /** Why the record could not be loaded at sign-in, or why the session ended. */
+  enterError?: string
+  retryEnter: () => void
+  sync: SyncState
+  online: boolean
+  /** Live mode: reload the record now. */
+  refresh: () => Promise<void>
+  /** Live mode: run one change against the backend, then reload. Resolves with the outcome; never throws. */
+  run: <T>(job: () => Promise<T>) => Saved<T>
+  /** The last save that failed, for the banner every portal shows. */
+  saveError?: string
+  clearSaveError: () => void
   users: AppUser[]
   vitalDefs: VitalDef[]
   setVitalDefs: React.Dispatch<React.SetStateAction<VitalDef[]>>
-  updateUser: (id: string, patch: Partial<AppUser>) => void
+  updateUser: (id: string, patch: Partial<AppUser>) => Saved
   addUser: (u: AppUser, opts?: { invited?: boolean }) => void
   getDoctors: () => DoctorUser[]
   getPatients: () => PatientUser[]
   getAdmins: () => AdminUser[]
-  updateAssistantPerms: (id: string, perms: AssistantPerm[]) => void
-  assignPatientToDoctor: (patientId: string, doctorId: string | null) => void
-  resolvePatientRequest: (patientId: string, approve: boolean, note?: string, alternativeDoctorId?: string) => void
-  setUserStatus: (id: string, status: AccountStatus) => void
-  decideDoctor: (id: string, status: 'approved' | 'sent_back' | 'rejected', note?: string) => void
+  updateAssistantPerms: (id: string, perms: AssistantPerm[]) => Saved
+  assignPatientToDoctor: (patientId: string, doctorId: string | null) => Saved
+  resolvePatientRequest: (patientId: string, approve: boolean, note?: string, alternativeDoctorId?: string) => Saved
+  setUserStatus: (id: string, status: AccountStatus) => Saved
+  decideDoctor: (id: string, status: 'approved' | 'sent_back' | 'rejected', note?: string) => Saved
   // Clinical
-  addPrescription: (patientId: string, rx: Prescription) => void
-  setPrescriptionActive: (patientId: string, rxId: string, active: boolean) => void
-  logReading: (patientId: string, reading: VitalReading) => LogResult
-  correctReading: (patientId: string, readingId: string, value: string) => void
-  invalidateReading: (patientId: string, readingId: string, reason: string) => void
-  sendAlertNow: (patientId: string, readingId: string) => void
-  setDoctorNote: (patientId: string, note: string) => void
-  setUnitPref: (patientId: string, vitalId: string, unit: string) => void
+  addPrescription: (patientId: string, rx: Prescription) => Saved
+  setPrescriptionActive: (patientId: string, rxId: string, active: boolean) => Saved
+  logReading: (patientId: string, reading: VitalReading) => Saved<LogResult>
+  correctReading: (patientId: string, readingId: string, value: string) => Saved
+  invalidateReading: (patientId: string, readingId: string, reason: string) => Saved
+  sendAlertNow: (patientId: string, readingId: string) => Saved
+  setDoctorNote: (patientId: string, note: string) => Saved
+  setUnitPref: (patientId: string, vitalId: string, unit: string) => Saved
   /** Set a patient's personal target range for a vital, and record the change. */
-  setThreshold: (patientId: string, vitalId: string, range: { min: number; max: number }) => void
-  setCriticalThreshold: (patientId: string, vitalId: string, range: { min: number; max: number } | null) => void
+  setThreshold: (patientId: string, vitalId: string, range: { min: number; max: number }) => Saved
+  setCriticalThreshold: (patientId: string, vitalId: string, range: { min: number; max: number } | null) => Saved
   clinicalNotes: ClinicalNote[]
   doses: MedDose[]
-  toggleDose: (patientId: string, rxId: string, slot: number) => void
+  toggleDose: (patientId: string, rxId: string, slot: number) => Saved
   mealsDone: MealDone[]
-  toggleMeal: (patientId: string, mealId: string, note?: string) => void
+  toggleMeal: (patientId: string, mealId: string, note?: string) => Saved
+  /** Meal plans set by doctors. A patient without one follows the standard plan. */
+  mealPlans: MealPlan[]
+  hydration: HydrationLog[]
+  setHydration: (patientId: string, glasses: number) => Saved
+  ratings: DoctorRating[]
+  rateDoctor: (patientId: string, doctorId: string, rating: number, comment?: string) => Saved
   // Alerts
   alerts: AppAlert[]
-  raiseSOS: (patientId: string, message: string) => void
-  acknowledgeAlert: (alertId: string) => void
-  resolveAlert: (alertId: string, reason: string, note?: string) => void
-  escalateAlert: (alertId: string) => void
-  requestRecheck: (alertId: string) => void
-  scheduleFollowUp: (patientId: string, doctorId: string, date: string, time: string, note: string | undefined, alertId?: string) => void
+  raiseSOS: (patientId: string, message: string) => Saved
+  acknowledgeAlert: (alertId: string) => Saved
+  resolveAlert: (alertId: string, reason: string, note?: string) => Saved
+  escalateAlert: (alertId: string) => Saved
+  requestRecheck: (alertId: string) => Saved
+  /** A monitor asks the treating doctor to respond to an open alert. */
+  chaseDoctor: (alertId: string) => Saved
+  scheduleFollowUp: (patientId: string, doctorId: string, date: string, time: string, note: string | undefined, alertId?: string) => Saved
   // Appointments
   appointments: Appointment[]
-  addAppointment: (appt: Appointment) => void
-  updateAppointment: (apptId: string, patch: Partial<Appointment>) => void
+  addAppointment: (appt: Appointment) => Saved
+  updateAppointment: (apptId: string, patch: Partial<Appointment>) => Saved
   reportRequests: ReportRequest[]
-  requestReport: (patientId: string, periodDays: number, reason: string) => boolean
-  /** Drafts the requested report and links it to the request; returns the new document id. */
-  /** Draft the requested report; the doctor may adjust the period and what it includes. */
-  fulfillReportRequest: (id: string, opts?: { days?: number; interpretation?: string; include?: VitalsReportInclude }) => string | null
-  declineReportRequest: (id: string, reason: string) => void
+  requestReport: (patientId: string, periodDays: number, reason: string) => Saved
+  /** Draft the requested report; the doctor may adjust the period and what it includes. Resolves with the new document id. */
+  fulfillReportRequest: (id: string, opts?: { days?: number; interpretation?: string; include?: VitalsReportInclude }) => Promise<string | null>
+  declineReportRequest: (id: string, reason: string) => Saved
   // Messages
   messages: PatientMessage[]
-  sendMessage: (fromId: string, toId: string, content: string) => void
-  markMessagesRead: (fromId: string, toId: string) => void
+  sendMessage: (fromId: string, toId: string, content: string) => Saved
+  markMessagesRead: (fromId: string, toId: string) => Saved
   // Notifications & audit
   notifications: AppNotification[]
+  /** Demo mode only. In live mode the database writes notifications in the same transaction as the change. */
   notify: (userId: string, kind: NotifKind, title: string, body: string, link?: string, opts?: { email?: boolean }) => void
   /** Every email mCare has sent, newest first. All use the one branded template (shared/email). */
   emails: SentEmail[]
@@ -305,8 +159,8 @@ interface Ctx extends DocumentApi {
   verifyByLink: (userId: string, token: string) => boolean
   resendVerification: (userId: string) => void
   sendWelcomeEmail: (userId: string) => void
-  markNotificationRead: (id: string) => void
-  markAllNotificationsRead: (userId: string) => void
+  markNotificationRead: (id: string) => Saved
+  markAllNotificationsRead: (userId: string) => Saved
   audit: AuditEntry[]
   logAudit: (action: string, detail: string) => void
   canCorrect: (reading: VitalReading) => boolean
@@ -323,8 +177,8 @@ interface Ctx extends DocumentApi {
     { ok: boolean; error?: string; user?: AppUser; isNew?: boolean }
   // Support tickets ("ask admin for help")
   supportTickets: SupportTicket[]
-  createSupportTicket: (userId: string, subject: string, message: string) => void
-  resolveSupportTicket: (ticketId: string, note?: string) => void
+  createSupportTicket: (userId: string, subject: string, message: string) => Saved
+  resolveSupportTicket: (ticketId: string, note?: string) => Saved
 }
 
 export const AppContext = createContext<Ctx | null>(null)
@@ -334,23 +188,28 @@ const uid = (p: string) => `${p}_${Date.now().toString(36)}_${(seq++).toString(3
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
-  const [users, setUsers] = useState<AppUser[]>(INITIAL_USERS)
-  const [vitalDefs, setVitalDefs] = useState<VitalDef[]>(INITIAL_VITAL_DEFS)
-  const [alerts, setAlerts] = useState<AppAlert[]>(INITIAL_ALERTS)
-  const [appointments, setAppointments] = useState<Appointment[]>(INITIAL_APPOINTMENTS)
+  const [users, setUsers] = useState<AppUser[]>(START.users)
+  const [vitalDefs, setVitalDefsState] = useState<VitalDef[]>(START.vitalDefs)
+  const [alerts, setAlerts] = useState<AppAlert[]>(START.alerts)
+  const [appointments, setAppointments] = useState<Appointment[]>(START.appointments)
   const [reportRequests, setReportRequests] = useState<ReportRequest[]>([])
-  const [messages, setMessages] = useState<PatientMessage[]>(INITIAL_MESSAGES)
-  const [notifications, setNotifications] = useState<AppNotification[]>(INITIAL_NOTIFS)
-  const [audit, setAudit] = useState<AuditEntry[]>(INITIAL_AUDIT)
-  const [clinicalNotes, setClinicalNotes] = useState<ClinicalNote[]>(INITIAL_NOTES)
+  const [messages, setMessages] = useState<PatientMessage[]>(START.messages)
+  const [notifications, setNotifications] = useState<AppNotification[]>(START.notifications)
+  const [audit, setAudit] = useState<AuditEntry[]>(START.audit)
+  const [clinicalNotes, setClinicalNotes] = useState<ClinicalNote[]>(START.clinicalNotes)
   const [doses, setDoses] = useState<MedDose[]>([])
   const [mealsDone, setMealsDone] = useState<MealDone[]>([])
+  const [mealPlans, setMealPlans] = useState<MealPlan[]>([])
+  const [hydration, setHydrationLogs] = useState<HydrationLog[]>([])
+  const [ratings, setRatings] = useState<DoctorRating[]>([])
   const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([])
   const [now, setNow] = useState(Date.now())
 
   // Always-fresh refs so callbacks never read stale state
   const usersRef = useRef(users); usersRef.current = users
   const alertsRef = useRef(alerts); alertsRef.current = alerts
+  const dosesRef = useRef(doses); dosesRef.current = doses
+  const mealsRef = useRef(mealsDone); mealsRef.current = mealsDone
 
   // currentUser is derived from the live users list — no manual syncing needed
   const currentUser = users.find(u => u.id === currentUserId) ?? null
@@ -361,24 +220,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
     (u.role === 'admin' && u.status === 'active') ||
     (u.role === 'assistant' && u.status === 'active' && (u as AdminUser).permissions.includes('monitor_patients')))
 
+  /* ─ live mode: loading and saving ───────────────────────────────────── */
+  const [entering, setEntering] = useState(false)
+  const [enterError, setEnterError] = useState<string>()
+  const [sync, setSync] = useState<SyncState>({ at: null, refreshing: false })
+  const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine)
+  const [saveError, setSaveError] = useState<string>()
+  /** The signed-in account as the sign-in service returned it. */
+  const meRef = useRef<AppUser | null>(null)
+  const pendingRef = useRef<AppUser | null>(null)
+  const loadSeq = useRef(0)
+  const newestNotif = useRef('')
+
   /* ─ notifications & audit ─ */
   /* ─ outgoing email: every message goes through the one mCare template ─ */
   // Seeded accounts still waiting to verify have their code email "already sent".
-  const [emails, setEmails] = useState<SentEmail[]>(() => INITIAL_USERS
+  const [emails, setEmails] = useState<SentEmail[]>(() => START.users
     .filter(u => u.status === 'unverified' && u.verificationCode)
     .map((u, i) => ({ id: `em_seed${i}`, userId: u.id, content: mail.verification(u, u.verificationCode, activationLink(u.id, u.verificationCode)), at: NOW - 3_600_000, createdAt: stamp(new Date(NOW - 3_600_000)) })))
   const sendEmail = (content: EmailContent, userId?: string) => {
-    if (!content.to.trim()) return
+    if (LIVE || !content.to.trim()) return   // live mode: the backend sends email
     const t = Date.now()
     // Stand-in for the mail service: keep the most recent messages so they can be read back.
     setEmails(prev => [{ id: uid('em'), userId, content, at: t, createdAt: stamp(new Date(t)) }, ...prev].slice(0, 200))
   }
   // Text messages carry the one-time code only — never a link.
-  const [texts, setTexts] = useState<SentSms[]>(() => INITIAL_USERS
+  const [texts, setTexts] = useState<SentSms[]>(() => START.users
     .filter(u => u.status === 'unverified' && u.verificationCode && u.phone.trim())
     .map((u, i) => ({ id: `sms_seed${i}`, userId: u.id, to: u.phone, text: smsText.verification(u.verificationCode), at: NOW - 3_600_000, createdAt: stamp(new Date(NOW - 3_600_000)) })))
   const sendSms = (to: string, text: string, userId?: string) => {
-    if (!to.trim()) return
+    if (LIVE || !to.trim()) return
     const t = Date.now()
     setTexts(prev => [{ id: uid('sms'), userId, to, text, at: t, createdAt: stamp(new Date(t)) }, ...prev].slice(0, 200))
   }
@@ -399,23 +270,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   /** In-app notification plus its email twin. Pass `email: false` when a dedicated email is sent instead. */
   const notify = (userId: string, kind: NotifKind, title: string, body: string, link?: string, opts: { email?: boolean } = {}) => {
+    if (LIVE) return   // written by the database, with the change that caused it
     const t = Date.now()
     setNotifications(prev => [{ id: uid('n'), userId, kind, title, body, link, read: false, at: t, createdAt: stamp(new Date(t)) }, ...prev])
     const u = findUser(userId)
     if (opts.email !== false && u?.email && u.status !== 'suspended') sendEmail(mail.notification(u, kind, title, body), u.id)
   }
-  const markNotificationRead = (id: string) => setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n))
-  const markAllNotificationsRead = (userId: string) => setNotifications(prev => prev.map(n => n.userId === userId ? { ...n, read: true } : n))
   const logAudit = (action: string, detail: string) => {
+    if (LIVE) { if (currentUserId) api.logAudit(currentUserId, action, detail).catch(() => {}); return }
     const t = Date.now()
     setAudit(prev => [{ id: uid('au'), actorId: actorId(), action, detail, at: t, createdAt: stamp(new Date(t)) }, ...prev])
   }
 
-  /* ─ escalation engine: runs every 15 s ─ */
+  /* ─ the clock; in demo mode it also runs the escalation rule the backend's scheduled job runs in live mode ─ */
   useEffect(() => {
     const tick = () => {
       const t = Date.now()
       setNow(t)
+      if (LIVE) return
       const due = alertsRef.current.filter(a =>
         a.status === 'open' && a.severity === 'danger' && t - a.at > ESCALATE_AFTER_MIN * MIN)
       if (due.length === 0) return
@@ -431,19 +303,201 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(h)
   }, [])
 
-  const updateUser = (id: string, patch: Partial<AppUser>) =>
+  const patchUser = (id: string, patch: Partial<AppUser>) =>
     setUsers(prev => prev.map(u => u.id === id ? { ...u, ...patch } as AppUser : u))
 
-  const [docSeed] = useState(() => seedDocuments(INITIAL_USERS, INITIAL_VITAL_DEFS, INITIAL_ALERTS, NOW))
-  const docStore = useDocumentStore({ currentUserId, usersRef, alertsRef, vitalDefs, notify, logAudit, updateUser }, docSeed)
+  const [docSeed] = useState(() => LIVE ? { docs: [], events: [] } : seedDocuments(DEMO.users, DEMO.vitalDefs, DEMO.alerts, NOW))
+
+  /** Live mode: one change against the backend, then a reload. Failures land in the banner and in the outcome. */
+  const run = async <T,>(job: () => Promise<T>): Saved<T> => {
+    try {
+      const value = await job()
+      await refresh()
+      return { ok: true, value }
+    } catch (e) {
+      const error = api.explain(e)
+      setSaveError(error)
+      // No answer at all: what is on screen may be out of date too, and the banner should say so now, not at the next check.
+      if (error === api.OFFLINE) setSync(s => ({ ...s, error }))
+      return { ok: false, error }
+    }
+  }
+
+  /**
+   * Live mode: save a small change that is already shown on screen (a tick, "read"), without reloading everything.
+   * If the save fails, the reload puts back what the database really holds.
+   */
+  const save = async (job: () => Promise<unknown>): Saved => {
+    try {
+      await job()
+      return { ok: true, value: undefined }
+    } catch (e) {
+      const error = api.explain(e)
+      setSaveError(error)
+      void refresh()
+      return { ok: false, error }
+    }
+  }
+
+  const docStore = useDocumentStore({
+    currentUserId, usersRef, alertsRef, vitalDefs, notify, logAudit, live: LIVE, run,
+    updateUser: (id, patch) => { void updateUser(id, patch) },
+  }, docSeed)
+
+  /** Puts a fresh load on screen. */
+  const apply = (r: Records) => {
+    setUsers(r.users); setVitalDefsState(r.vitalDefs); setAlerts(r.alerts); setAppointments(r.appointments)
+    setMessages(r.messages); setNotifications(r.notifications); setDoses(r.doses); setMealsDone(r.mealsDone)
+    setReportRequests(r.reportRequests); setClinicalNotes(r.clinicalNotes); setSupportTickets(r.supportTickets); setAudit(r.audit)
+    setMealPlans(r.mealPlans); setHydrationLogs(r.hydration); setRatings(r.ratings)
+    docStore.hydrateDocuments(r.documents, r.docEvents, r.shareLinks)
+    newestNotif.current = r.notifications[0]?.id ?? ''
+  }
+  const EMPTY: Records = {
+    users: [], vitalDefs: [], alerts: [], appointments: [], messages: [], notifications: [], doses: [], mealsDone: [], reportRequests: [],
+    clinicalNotes: [], supportTickets: [], audit: [], mealPlans: [], hydration: [], ratings: [], documents: [], docEvents: [], shareLinks: [],
+  }
+
+  /** Signs out locally. `notice` says why, when the person did not choose to. */
+  const leave = (notice?: string) => {
+    signOutBackend()
+    loadSeq.current++
+    meRef.current = null; pendingRef.current = null
+    setCurrentUserId(null)
+    if (LIVE) { apply(EMPTY); setSync({ at: null, refreshing: false }) }
+    setEnterError(notice)
+  }
+
+  const refresh = async () => {
+    const me = meRef.current
+    if (!LIVE || !me) return
+    const mine = ++loadSeq.current
+    setSync(s => ({ ...s, refreshing: true }))
+    try {
+      const records = await loadRecords(me)
+      if (mine !== loadSeq.current || meRef.current?.id !== me.id) return   // a newer load is on its way, or they signed out
+      apply(records)
+      setSync({ at: Date.now(), refreshing: false })
+    } catch (e) {
+      if (mine !== loadSeq.current) return
+      const error = api.explain(e)
+      if (/session has ended/i.test(error)) { leave(error); return }
+      setSync(s => ({ ...s, refreshing: false, error }))
+    }
+  }
+
+  const enter = async (account: AppUser, acceptedTerms: boolean) => {
+    pendingRef.current = account
+    setEntering(true); setEnterError(undefined)
+    const mine = ++loadSeq.current
+    try {
+      // Consent given on the sign-up form is recorded once the account can speak for itself.
+      if (acceptedTerms) await api.acceptTerms().catch(() => {})
+      const records = await loadRecords(account)
+      if (mine !== loadSeq.current) return
+      meRef.current = account
+      apply(records)
+      setSync({ at: Date.now(), refreshing: false })
+      setCurrentUserId(account.id)
+      pendingRef.current = null
+    } catch (e) {
+      if (mine === loadSeq.current) setEnterError(api.explain(e))
+    } finally {
+      setEntering(false)
+    }
+  }
+
+  const signIn = (account: AppUser, opts: { acceptedTermsAt?: number } = {}) => {
+    if (LIVE) { void enter(account, !!opts.acceptedTermsAt); return }
+    if (!usersRef.current.some(u => u.id === account.id)) addUser(account)
+    if (opts.acceptedTermsAt) patchUser(account.id, { termsAcceptedAt: opts.acceptedTermsAt })
+    setCurrentUserId(account.id)
+  }
+  const retryEnter = () => { if (pendingRef.current) void enter(pendingRef.current, false) }
 
   const setCurrentUser = (u: AppUser | null) => {
-    // Signing out also ends a provider session, or the next load would sign straight back in.
-    if (!u) signOutBackend()
-    setCurrentUserId(u?.id ?? null)
+    // Signing out also ends the backend session, or the next load would sign straight back in.
+    if (!u) leave()
+    else signIn(u)
   }
+
+  // Live mode: keep what is on screen current. A new notification means something changed for this person
+  // (the database writes one for every care-team action), so that is checked often and cheaply.
+  useEffect(() => {
+    if (!LIVE || !currentUserId) return
+    let stopped = false
+    const visible = () => document.visibilityState === 'visible'
+    const check = async () => {
+      if (!visible()) return
+      try {
+        const newest = await latestNotificationId()
+        if (stopped) return
+        if (newest !== newestNotif.current) await refresh()
+        else setSync(s => (s.error ? { ...s, error: undefined } : s))
+      } catch (e) {
+        if (stopped) return
+        const error = api.explain(e)
+        if (/session has ended/i.test(error)) leave(error)
+        else setSync(s => ({ ...s, error }))
+      }
+    }
+    const quick = setInterval(check, CHECK_EVERY_MS)
+    const full = setInterval(() => { if (visible()) void refresh() }, RELOAD_EVERY_MS)
+    const onVisible = () => { if (visible()) void refresh() }
+    const onOnline = () => { setOnline(true); void refresh() }
+    const onOffline = () => setOnline(false)
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
+    return () => {
+      stopped = true
+      clearInterval(quick); clearInterval(full)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
+    }
+    // refresh and leave only use refs and state setters, which never change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUserId])
+
+  /* ─ accounts ─ */
+  /** Live mode: sends each part of an account change to the table that holds it. */
+  const saveAccount = async (id: string, patch: Partial<AppUser>) => {
+    const p = patch as Partial<PatientUser> & Partial<DoctorUser> & Partial<AdminUser>
+    const profile: api.ProfileChanges = {}
+    if ('name' in p && p.name !== undefined) profile.name = p.name
+    if ('phone' in p && p.phone !== undefined) profile.phone = p.phone
+    if ('dob' in p) profile.dob = p.dob
+    if ('avatar' in p) profile.avatar = p.avatar
+    if (p.theme) profile.theme = p.theme
+    if (p.fontSize) profile.fontSize = p.fontSize
+    await api.updateProfile(id, profile)
+    if (p.termsAcceptedAt) await api.acceptTerms()
+    if (p.health) await api.saveHealth(p.health)
+    if (p.trackedVitalIds) await api.setTrackedVitals(p.trackedVitalIds, id === currentUserId ? undefined : id)
+    if (p.profileSetup) await api.setProfileSetup(id, p.profileSetup)
+    if (p.unitPrefs) await api.setUnitPrefs(id, p.unitPrefs)
+    if (p.docPrefs) await api.setDocPrivacyDefault(id, p.docPrefs.privateByDefault)
+    if (p.permissions) await api.setAssistantPerms(id, p.permissions)
+    // A doctor resubmitting after "sent back" goes through the approval queue; other detail edits are plain saves.
+    if (p.approvalStatus === 'pending') await api.resubmitDoctorApplication(p.specialty ?? '', p.licenseNo ?? '', p.hospital ?? '')
+    else if ('specialty' in p || 'licenseNo' in p || 'hospital' in p || 'signature' in p)
+      await api.setDoctorDetails(id, { specialty: p.specialty, licenseNo: p.licenseNo, hospital: p.hospital, ...('signature' in p ? { signature: p.signature ?? null } : {}) })
+  }
+
+  const updateUser = (id: string, patch: Partial<AppUser>): Saved => {
+    if (LIVE) return run(() => saveAccount(id, patch))
+    patchUser(id, patch)
+    return done()
+  }
+
   /** New accounts that still need verifying are emailed their code — as an invitation when an admin created them. */
   const addUser = (u: AppUser, opts: { invited?: boolean } = {}) => {
+    if (LIVE) {
+      // Accounts are created by the sign-in service. Inviting staff or doctors from here needs a server-side function.
+      setSaveError('Creating accounts for other people is not available yet. Ask them to sign up, then set their role.')
+      return
+    }
     setUsers(prev => [...prev, u])
     if (u.status === 'unverified' && u.verificationCode)
       sendVerification(u, u.verificationCode, opts.invited)
@@ -453,7 +507,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const u = findUser(userId)
     if (!u || u.status !== 'unverified') return
     const code = String(Math.floor(100000 + Math.random() * 900000))
-    updateUser(userId, { verificationCode: code })
+    patchUser(userId, { verificationCode: code })
     sendVerification(u, code)
   }
   /** The user tapped "Activate account" in the email. Proves the address just like typing the code. */
@@ -470,11 +524,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const getPatients = () => users.filter(u => u.role === 'patient') as PatientUser[]
   const getAdmins   = () => users.filter(u => u.role === 'admin' || u.role === 'assistant') as AdminUser[]
 
-  const updateAssistantPerms = (id: string, perms: AssistantPerm[]) => {
-    updateUser(id, { permissions: perms } as Partial<AdminUser>)
+  const updateAssistantPerms = (id: string, perms: AssistantPerm[]): Saved => {
+    if (LIVE) return run(async () => { await api.setAssistantPerms(id, perms); await api.logAudit(actorId(), 'Changed assistant permissions', `${findUser(id)?.name}: ${perms.length} granted`) })
+    patchUser(id, { permissions: perms } as Partial<AdminUser>)
     logAudit('Changed assistant permissions', `${findUser(id)?.name}: ${perms.length} granted`)
+    return done()
   }
 
+  /** Demo mode: apply a change to one patient's record held in memory. */
   const patchPatient = (patientId: string, fn: (p: PatientUser) => PatientUser) =>
     setUsers(prev => prev.map(u => u.role === 'patient' && u.id === patientId ? fn(u as PatientUser) : u))
 
@@ -491,7 +548,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return u
     })
 
-  const assignPatientToDoctor = (patientId: string, doctorId: string | null) => {
+  const assignPatientToDoctor = (patientId: string, doctorId: string | null): Saved => {
+    if (LIVE) return run(() => api.assignDoctor(patientId, doctorId))
     const pt = findUser(patientId)
     const prevDoc = (pt as PatientUser | undefined)?.assignedDoctorId
     setUsers(prev => linkPatient(prev, patientId, doctorId).map(u =>
@@ -505,12 +563,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       logAudit('Removed doctor assignment', `${pt?.name}`)
     }
     if (prevDoc && prevDoc !== doctorId) notify(prevDoc, 'assignment', 'Patient reassigned', `${pt?.name} has moved to another doctor`, 'patients')
+    return done()
   }
 
-  const resolvePatientRequest = (patientId: string, approve: boolean, note?: string, alternativeDoctorId?: string) => {
+  const resolvePatientRequest = (patientId: string, approve: boolean, note?: string, alternativeDoctorId?: string): Saved => {
+    if (LIVE) return run(() => api.decideDoctorRequest(patientId, approve, note, alternativeDoctorId))
     const pt = findUser(patientId) as PatientUser | undefined
     const reqDoc = pt?.doctorRequest?.doctorId
-    if (!pt?.doctorRequest || !reqDoc) return
+    if (!pt?.doctorRequest || !reqDoc) return refused('That request has already been answered.')
     const target = approve ? reqDoc : alternativeDoctorId ?? null
     setUsers(prev => {
       const linked = target ? linkPatient(prev, patientId, target) : prev
@@ -529,15 +589,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (target) notify(target, 'assignment', 'New patient assigned', `${pt.name} is now under your care`, 'patients')
       logAudit('Rejected doctor request', `${pt.name}${target ? ` — alternative ${docName(target)}` : ''}`)
     }
+    return done()
   }
 
-  const setUserStatus = (id: string, status: AccountStatus) => {
-    updateUser(id, { status })
+  const setUserStatus = (id: string, status: AccountStatus): Saved => {
+    if (LIVE) {
+      // Suspending your own account goes through its own rule; the session then ends.
+      if (id === currentUserId && status === 'suspended') return run(() => api.deactivateMyAccount())
+      return run(() => api.setUserStatus(id, status))
+    }
+    patchUser(id, { status })
     logAudit(status === 'suspended' ? 'Suspended user' : 'Reactivated user', findUser(id)?.name ?? id)
+    return done()
   }
 
-  const decideDoctor = (id: string, status: 'approved' | 'sent_back' | 'rejected', note?: string) => {
-    updateUser(id, {
+  const decideDoctor = (id: string, status: 'approved' | 'sent_back' | 'rejected', note?: string): Saved => {
+    if (LIVE) return run(() => api.decideDoctor(id, status, note))
+    patchUser(id, {
       approvalStatus: status,
       approvalNote: note,
       status: status === 'approved' ? 'active' : 'pending_approval',
@@ -545,58 +613,105 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } as Partial<DoctorUser>)
     const name = findUser(id)?.name ?? id
     logAudit(status === 'approved' ? 'Approved doctor' : status === 'sent_back' ? 'Sent back doctor application' : 'Rejected doctor', `${name}${note ? ` — ${note}` : ''}`)
+    return done()
+  }
+
+  /** Admins edit the vital definitions as one list; in live mode the changed list is saved as it is set. */
+  const setVitalDefs: React.Dispatch<React.SetStateAction<VitalDef[]>> = next => {
+    setVitalDefsState(prev => {
+      const value = typeof next === 'function' ? next(prev) : next
+      if (LIVE) void run(() => api.saveVitalDefs(value))
+      return value
+    })
   }
 
   /* ─ prescriptions, notes, doses ─ */
-  const addPrescription = (patientId: string, rx: Prescription) => {
+  const addPrescription = (patientId: string, rx: Prescription): Saved => {
+    if (LIVE) return run(() => api.addPrescription(patientId, rx.doctorId, rx))   // the database notifies, audits and files the document
     patchPatient(patientId, p => ({ ...p, prescriptions: [rx, ...p.prescriptions] }))
     docStore.filePrescription(patientId, rx)
     notify(patientId, 'prescription', 'New prescription', `${rx.medication} — ${rx.frequency}`, 'medicine')
     logAudit('Prescribed', `${rx.medication} for ${findUser(patientId)?.name}`)
+    return done()
   }
-  const setPrescriptionActive = (patientId: string, rxId: string, active: boolean) => {
+  const setPrescriptionActive = (patientId: string, rxId: string, active: boolean): Saved => {
+    if (LIVE) return run(() => api.setPrescriptionActive(rxId, active))
     patchPatient(patientId, p => ({ ...p, prescriptions: p.prescriptions.map(x => x.id === rxId ? { ...x, active } : x) }))
     const rx = (findUser(patientId) as PatientUser | undefined)?.prescriptions.find(x => x.id === rxId)
     if (rx && !active) notify(patientId, 'prescription', 'Medication stopped', `${rx.medication} has been discontinued by your doctor`, 'medicine')
+    return done()
   }
-  const toggleDose = (patientId: string, rxId: string, slot: number) => {
+  const toggleDose = (patientId: string, rxId: string, slot: number): Saved => {
     const day = dayKey()
     const same = (d: MedDose) => d.patientId === patientId && d.rxId === rxId && d.day === day && d.slot === slot
+    const taken = !dosesRef.current.some(same)
     setDoses(prev => prev.some(same) ? prev.filter(d => !same(d)) : [...prev, { patientId, rxId, slot, day, takenAt: stamp() }])
+    return LIVE ? save(() => api.setDose(patientId, rxId, slot, day, taken)) : done()
   }
-  const toggleMeal = (patientId: string, mealId: string, note?: string) => {
+  const toggleMeal = (patientId: string, mealId: string, note?: string): Saved => {
     const day = dayKey()
-    setMealsDone(prev => prev.some(m => m.patientId === patientId && m.mealId === mealId && m.day === day)
-      ? prev.filter(m => !(m.patientId === patientId && m.mealId === mealId && m.day === day))
-      : [...prev, { patientId, mealId, day, takenAt: stamp(), ...(note ? { note } : {}) }])
+    const same = (m: MealDone) => m.patientId === patientId && m.mealId === mealId && m.day === day
+    const eaten = !mealsRef.current.some(same)
+    setMealsDone(prev => prev.some(same) ? prev.filter(m => !same(m)) : [...prev, { patientId, mealId, day, takenAt: stamp(), ...(note ? { note } : {}) }])
+    return LIVE ? save(() => api.setMeal(patientId, mealId, day, eaten, note)) : done()
   }
-  const setDoctorNote = (patientId: string, note: string) => {
-    if (!note.trim()) return
+  const setHydration = (patientId: string, glasses: number): Saved => {
+    const day = dayKey()
+    const count = Math.max(0, Math.min(30, Math.round(glasses)))
+    setHydrationLogs(prev => [...prev.filter(h => !(h.patientId === patientId && h.day === day)), { patientId, day, glasses: count }])
+    return LIVE ? save(() => api.setHydration(patientId, day, count)) : done()
+  }
+  const rateDoctor = (patientId: string, doctorId: string, rating: number, comment?: string): Saved => {
+    if (LIVE) return run(() => api.rateDoctor(patientId, doctorId, rating, comment))
+    setRatings(prev => [...prev.filter(r => !(r.patientId === patientId && r.doctorId === doctorId)), { patientId, doctorId, rating, comment: comment?.trim() || undefined }])
+    return done()
+  }
+  const setDoctorNote = (patientId: string, note: string): Saved => {
+    if (!note.trim()) return refused('Write the note first.')
+    if (LIVE) return run(() => api.addClinicalNote(patientId, actorId(), note))
     const t = Date.now()
     setClinicalNotes(prev => [{ id: uid('cn'), patientId, authorId: actorId(), content: note.trim(), at: t, createdAt: stamp(new Date(t)) }, ...prev])
     patchPatient(patientId, p => ({ ...p, doctorNote: note.trim() }))
     notify(patientId, 'message', 'New note from your doctor', note.trim().slice(0, 80), 'vitals')
+    return done()
   }
 
-  const setUnitPref = (patientId: string, vitalId: string, unit: string) =>
+  const setUnitPref = (patientId: string, vitalId: string, unit: string): Saved => {
+    if (LIVE) {
+      const prefs = (findUser(patientId) as PatientUser | undefined)?.unitPrefs ?? {}
+      return run(() => api.setUnitPrefs(patientId, { ...prefs, [vitalId]: unit }))
+    }
     patchPatient(patientId, p => ({ ...p, unitPrefs: { ...p.unitPrefs, [vitalId]: unit } }))
+    return done()
+  }
 
-  const setThreshold = (patientId: string, vitalId: string, range: { min: number; max: number }) =>
+  const setThreshold = (patientId: string, vitalId: string, range: { min: number; max: number }): Saved => {
+    if (LIVE) return run(() => api.setThreshold(patientId, vitalId, range))
     patchPatient(patientId, p => ({
       ...p,
       thresholds: { ...p.thresholds, [vitalId]: range },
       targetLog: [...(p.targetLog ?? []), { vitalId, at: Date.now(), from: p.thresholds[vitalId], to: range, by: actorId() }],
     }))
+    return done()
+  }
 
-  const setCriticalThreshold = (patientId: string, vitalId: string, range: { min: number; max: number } | null) =>
+  const setCriticalThreshold = (patientId: string, vitalId: string, range: { min: number; max: number } | null): Saved => {
+    if (LIVE) {
+      const pt = findUser(patientId) as PatientUser | undefined
+      const def = vitalDefs.find(v => v.id === vitalId)
+      if (!pt || !def) return refused('That vital is no longer available.')
+      return run(() => api.setCriticalThreshold(patientId, vitalId, range, targetRange(pt, def)))
+    }
     patchPatient(patientId, p => {
       const next = { ...p.criticalThresholds }
       if (range) next[vitalId] = range
       else delete next[vitalId]
       return { ...p, criticalThresholds: next }
     })
+    return done()
+  }
 
-  /* ─ alert engine ─ */
+  /* ─ alert engine (demo mode; in live mode the database runs these same rules when a reading is saved) ─ */
   const createAlert = (pt: PatientUser, def: VitalDef, reading: VitalReading, severity: 'danger' | 'warning') => {
     const t = Date.now()
     const alert: AppAlert = {
@@ -612,24 +727,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
     notify(pt.id, 'alert', severity === 'danger' ? 'Critical reading — your doctor has been alerted' : 'Reading sent to your doctor', body, 'alerts')
   }
 
-  const logReading = (patientId: string, reading: VitalReading): LogResult => {
+  const logReading = (patientId: string, reading: VitalReading): Saved<LogResult> => {
+    if (LIVE) return run(async () => {
+      const saved = await api.logReading(patientId, reading.vitalId, reading.value, reading.note)
+      return { level: saved.level, alerted: saved.alerted, readingId: saved.readingId, cleared: saved.cleared }
+    })
     const pt = findUser(patientId) as PatientUser | undefined
     const def = vitalDefs.find(v => v.id === reading.vitalId)
     const t = Date.now()
-    const full: VitalReading = { ...reading, at: t, loggedAt: stamp(new Date(t)) }
+    const full: VitalReading = { ...reading, at: t, loggedAt: stamp(new Date(t)), recordedBy: actorId() }
     patchPatient(patientId, p => ({ ...p, readings: [full, ...p.readings] }))
-    if (!pt || !def) return { level: 'normal', alerted: false, readingId: full.id }
+    if (!pt || !def) return done({ level: 'normal', alerted: false, readingId: full.id })
     const level = evaluate(pt, def, full.value)
+    const label = `${def.name} ${full.value} ${def.unit}`
 
-    // A doctor asked for a re-check on this vital: a normal reading auto-resolves it.
+    // A doctor asked for a re-check on this vital. An in-range reading closes a warning;
+    // a critical alert is never closed by a number alone, so it goes back to the doctor.
     const pendingRecheck = alertsRef.current.find(a =>
       a.patientId === patientId && alertIsFor(a, def) && a.recheckRequestedAt && a.status !== 'resolved')
     if (pendingRecheck && level === 'normal') {
-      setAlerts(prev => prev.map(a => a.id === pendingRecheck.id
-        ? { ...a, value: full.value, status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: patientId, resolutionReason: 'Contacted patient, condition stable' }
-        : a))
-      notify(pendingRecheck.patientId, 'alert', 'Alert resolved', `${def.name}: new reading is back in range`, 'alerts')
-      return { level, alerted: false, readingId: full.id }
+      if (pendingRecheck.severity === 'warning') {
+        setAlerts(prev => prev.map(a => a.id === pendingRecheck.id
+          ? { ...a, status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: patientId, recheckReadingId: full.id,
+              resolutionReason: 'Re-check back in range', resolutionNote: `New reading ${label}` }
+          : a))
+        notify(pendingRecheck.patientId, 'alert', 'Alert resolved', `${def.name}: your new reading is back in range`, 'alerts')
+        return done({ level, alerted: false, readingId: full.id, cleared: true })
+      }
+      setAlerts(prev => prev.map(a => a.id === pendingRecheck.id ? { ...a, recheckReadingId: full.id } : a))
+      notify(pendingRecheck.patientId, 'alert', 'Re-check received', `${def.name}: your new reading is in range. Your doctor will review it and close the alert.`, 'alerts')
+      if (pt.assignedDoctorId) notify(pt.assignedDoctorId, 'alert', `Re-check in range: ${pt.name}`, `${label} · review and resolve the alert`, 'alerts')
+      return done({ level, alerted: false, readingId: full.id })
     }
 
     // Self-clear: a warning the patient raised themselves can be cleared by an
@@ -642,57 +770,69 @@ export function AppProvider({ children }: { children: ReactNode }) {
       t - a.at <= SELF_CLEAR_WINDOW_MIN * MIN)
     if (selfClearable && level === 'normal') {
       setAlerts(prev => prev.map(a => a.id === selfClearable.id
-        ? { ...a, value: full.value, status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: patientId, resolutionReason: 'Re-measured in range by patient' }
+        ? { ...a, status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: patientId, recheckReadingId: full.id,
+            resolutionReason: 'Re-measured in range by patient', resolutionNote: `New reading ${label}` }
         : a))
       notify(patientId, 'alert', 'Alert cleared', `${def.name}: your new reading is back in range`, 'alerts')
       if (pt.assignedDoctorId)
         notify(pt.assignedDoctorId, 'alert', `Alert cleared: ${pt.name}`,
           `${def.name} re-measured at ${full.value} ${def.unit} — back in range`, 'alerts')
-      logAudit('Alert self-cleared', `${pt.name} · ${def.name} ${full.value} ${def.unit}`)
-      return { level, alerted: false, readingId: full.id }
+      logAudit('Alert self-cleared', `${pt.name} · ${label}`)
+      return done({ level, alerted: false, readingId: full.id, cleared: true })
     }
 
-    if (level === 'normal') return { level, alerted: false, readingId: full.id }
-    if (level === 'critical') { createAlert(pt, def, full, 'danger'); return { level, alerted: true, readingId: full.id } }
+    if (level === 'normal') return done({ level, alerted: false, readingId: full.id })
+    if (level === 'critical') { createAlert(pt, def, full, 'danger'); return done({ level, alerted: true, readingId: full.id }) }
     // Warning: ask the patient to re-measure first — alert only if the previous reading (last 60 min) was also abnormal
     const prev = pt.readings.find(x => x.vitalId === def.id && !x.invalid && x.at && t - x.at < 60 * MIN)
     const repeat = prev && evaluate(pt, def, prev.value) !== 'normal'
-    if (repeat) { createAlert(pt, def, full, 'warning'); return { level, alerted: true, readingId: full.id } }
-    return { level, alerted: false, readingId: full.id }
+    if (repeat) { createAlert(pt, def, full, 'warning'); return done({ level, alerted: true, readingId: full.id }) }
+    return done({ level, alerted: false, readingId: full.id })
   }
 
-  const sendAlertNow = (patientId: string, readingId: string) => {
+  const sendAlertNow = (patientId: string, readingId: string): Saved => {
+    if (LIVE) return run(() => api.sendAlertNow(readingId))
     const pt = findUser(patientId) as PatientUser | undefined
     const rd = pt?.readings.find(x => x.id === readingId)
     const def = vitalDefs.find(v => v.id === rd?.vitalId)
-    if (!pt || !rd || !def) return
-    if (alertsRef.current.some(a => a.readingId === readingId)) return
+    if (!pt || !rd || !def) return refused('That reading could not be found.')
+    if (alertsRef.current.some(a => a.readingId === readingId)) return done()
     createAlert(pt, def, rd, evaluate(pt, def, rd.value) === 'critical' ? 'danger' : 'warning')
+    return done()
   }
 
-  const canCorrect = (reading: VitalReading) => !!reading.at && Date.now() - reading.at < CORRECTION_WINDOW_MIN * MIN
+  const canCorrect = (reading: VitalReading) =>
+    !!reading.at && Date.now() - reading.at < CORRECTION_WINDOW_MIN * MIN && (!reading.recordedBy || reading.recordedBy === currentUserId)
 
-  const correctReading = (patientId: string, readingId: string, value: string) => {
-    patchPatient(patientId, p => ({ ...p, readings: p.readings.map(x => x.id === readingId ? { ...x, value } : x) }))
+  const correctReading = (patientId: string, readingId: string, value: string): Saved => {
+    if (LIVE) return run(() => api.correctReading(readingId, value))
     const pt = findUser(patientId) as PatientUser | undefined
     const rd = pt?.readings.find(x => x.id === readingId)
     const def = vitalDefs.find(v => v.id === rd?.vitalId)
-    if (!pt || !def) return
+    patchPatient(patientId, p => ({ ...p, readings: p.readings.map(x => x.id === readingId ? { ...x, value, correctedFrom: x.correctedFrom ?? x.value } : x) }))
+    if (!pt || !def) return done()
     const level = evaluate(pt, def, value)
     setAlerts(prev => prev.map(a => a.readingId !== readingId || a.status === 'resolved' ? a
       : level === 'normal'
-        ? { ...a, value, status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: patientId, resolutionReason: 'Corrected by patient' }
+        ? { ...a, status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: patientId, resolutionReason: 'Corrected by patient',
+            resolutionNote: `Entered as ${rd?.value}, corrected to ${value} ${def.unit}` }
         : { ...a, value, severity: level === 'critical' ? 'danger' : 'warning' }))
+    return done()
   }
 
-  const invalidateReading = (patientId: string, readingId: string, reason: string) => {
+  const invalidateReading = (patientId: string, readingId: string, reason: string): Saved => {
+    if (LIVE) return run(() => api.invalidateReading(readingId, reason))
     patchPatient(patientId, p => ({ ...p, readings: p.readings.map(x => x.id === readingId ? { ...x, invalid: true, invalidReason: reason } : x) }))
     logAudit('Marked reading invalid', `${findUser(patientId)?.name} — ${reason}`)
+    return done()
   }
 
-  const raiseSOS = (patientId: string, message: string) => {
+  const raiseSOS = (patientId: string, message: string): Saved => {
+    if (LIVE) return run(async () => { await api.raiseSos(message) })
     const pt = findUser(patientId) as PatientUser | undefined
-    if (!pt) return
+    if (!pt) return refused('Account not found.')
+    // Pressing again while one is open keeps the one alert.
+    if (alertsRef.current.some(a => a.patientId === patientId && a.type === 'sos' && a.status !== 'resolved')) return done()
     const t = Date.now()
     setAlerts(prev => [{
       id: uid('sos'), patientId, type: 'sos', vitalName: 'SOS', value: message || 'Emergency help requested', unit: '',
@@ -702,18 +842,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (pt.assignedDoctorId) notify(pt.assignedDoctorId, 'sos', `SOS: ${pt.name}`, body, 'alerts')
     adminsAndMonitors().forEach(a => notify(a.id, 'sos', `SOS: ${pt.name}`, body, 'alerts'))
     logAudit('SOS raised', pt.name)
+    return done()
   }
 
-  const acknowledgeAlert = (alertId: string) => {
+  const acknowledgeAlert = (alertId: string): Saved => {
+    if (LIVE) return run(() => api.acknowledgeAlert(alertId))
     setAlerts(prev => prev.map(a => a.id === alertId && a.status !== 'resolved'
       ? { ...a, status: 'acknowledged', acknowledgedAt: stamp(), acknowledgedBy: actorId() } : a))
     const a = alertsRef.current.find(x => x.id === alertId)
     const by = findUser(actorId())
     if (a) notify(a.patientId, 'alert', 'Your alert is being reviewed', `${by?.name ?? 'Your care team'} is looking at your ${a.type === 'sos' ? 'SOS' : a.vitalName} alert`, 'alerts')
+    return done()
   }
 
-  const resolveAlert = (alertId: string, reason: string, note?: string) => {
+  const resolveAlert = (alertId: string, reason: string, note?: string): Saved => {
     const a = alertsRef.current.find(x => x.id === alertId)
+    if (!reason.trim()) return refused('Give a reason for resolving the alert.')
+    if (LIVE) {
+      // A patient closes only their own SOS ("I'm safe now"); everything else is the care team's decision.
+      const own = a?.type === 'sos' && a.patientId === currentUserId
+      return run(() => (own ? api.cancelSos(alertId) : api.resolveAlert(alertId, reason, note)))
+    }
+    if (a?.status === 'resolved') return refused('That alert is already resolved.')
     setAlerts(prev => prev.map(x => x.id === alertId
       ? { ...x, status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: actorId(), resolutionReason: reason, resolutionNote: note?.trim() || undefined }
       : x))
@@ -721,9 +871,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       notify(a.patientId, 'alert', 'Alert resolved', `${a.type === 'sos' ? 'SOS' : a.vitalName}: ${reason}`, 'alerts')
       logAudit('Resolved alert', `${findUser(a.patientId)?.name} · ${a.type === 'sos' ? 'SOS' : a.vitalName} — ${reason}`)
     }
+    return done()
   }
 
-  const escalateAlert = (alertId: string) => {
+  const escalateAlert = (alertId: string): Saved => {
+    if (LIVE) return run(() => api.escalateAlert(alertId))
     const a = alertsRef.current.find(x => x.id === alertId)
     setAlerts(prev => prev.map(x => x.id === alertId ? { ...x, status: 'escalated', escalatedAt: stamp() } : x))
     if (a) {
@@ -731,9 +883,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       adminsAndMonitors().forEach(ad => notify(ad.id, 'escalation', `Escalated by ${findUser(actorId())?.name}`, `${pt?.name} · ${a.vitalName} ${a.value} ${a.unit}`, 'alerts'))
       logAudit('Escalated alert', `${pt?.name} · ${a.vitalName}`)
     }
+    return done()
   }
 
-  const requestRecheck = (alertId: string) => {
+  const requestRecheck = (alertId: string): Saved => {
+    if (LIVE) return run(() => api.requestRecheck(alertId))
     const t = Date.now()
     setAlerts(prev => prev.map(x => x.id === alertId && x.status !== 'resolved' ? { ...x, recheckRequestedAt: t } : x))
     const a = alertsRef.current.find(x => x.id === alertId)
@@ -742,66 +896,118 @@ export function AppProvider({ children }: { children: ReactNode }) {
         `${findUser(actorId())?.name ?? 'Your doctor'} asked you to re-check your ${a.type === 'sos' ? 'condition' : a.vitalName}`, 'vitals')
       logAudit('Requested re-check', `${findUser(a.patientId)?.name} · ${a.vitalName}`)
     }
+    return done()
   }
 
-  const scheduleFollowUp = (patientId: string, doctorId: string, date: string, time: string, note: string | undefined, alertId?: string) => {
-    const t = Date.now()
-    addAppointment({
-      id: uid('ap'), patientId, doctorId, title: 'Follow-up appointment', reason: note?.trim() || 'Scheduled from alert review',
-      preferredDate: date, preferredTime: time, status: 'approved', approvalNote: note?.trim() || undefined, createdAt: stamp(new Date(t)),
+  const chaseDoctor = (alertId: string): Saved => {
+    if (LIVE) return run(() => api.chaseAlert(alertId))
+    const a = alertsRef.current.find(x => x.id === alertId)
+    const pt = a && (findUser(a.patientId) as PatientUser | undefined)
+    if (!a || !pt?.assignedDoctorId) return refused('This patient has no doctor to chase.')
+    notify(pt.assignedDoctorId, 'escalation', `Urgent: ${pt.name}`,
+      `${findUser(actorId())?.name ?? 'An administrator'} asks you to respond to ${a.type === 'sos' ? 'an SOS' : `${a.vitalName} ${a.value}`}`, 'alerts')
+    return done()
+  }
+
+  const scheduleFollowUp = (patientId: string, doctorId: string, date: string, time: string, note: string | undefined, alertId?: string): Saved => {
+    if (LIVE) return run(async () => {
+      await api.addAppointment({
+        patientId, doctorId, title: 'Follow-up appointment', reason: note?.trim() || 'Scheduled from alert review',
+        date: isoDay(date) ?? date, time: isoClock(time) ?? '', status: 'approved', approvalNote: note,
+      })
+      if (alertId) await api.resolveAlert(alertId, 'Appointment scheduled', note)
     })
-    if (alertId) resolveAlert(alertId, 'Appointment scheduled', note)
+    const t = Date.now()
+    void addAppointment({
+      id: uid('ap'), patientId, doctorId, title: 'Follow-up appointment', reason: note?.trim() || 'Scheduled from alert review',
+      preferredDate: date, preferredTime: time, status: 'approved', approvalNote: note?.trim() || undefined, createdAt: stamp(new Date(t)), at: t,
+    })
+    if (alertId) void resolveAlert(alertId, 'Appointment scheduled', note)
+    return done()
   }
 
   /* ─ appointments & messages ─ */
-  const addAppointment = (appt: Appointment) => {
+  const addAppointment = (appt: Appointment): Saved => {
+    if (LIVE) {
+      const date = isoDay(appt.preferredDate)
+      if (!date) return refused('Choose a valid date.')
+      return run(() => api.addAppointment({
+        patientId: appt.patientId, doctorId: appt.doctorId, title: appt.title, reason: appt.reason, date,
+        time: isoClock(appt.preferredTime) ?? '', location: appt.location,
+        ...(appt.status !== 'requested' ? { status: appt.status, approvalNote: appt.approvalNote } : {}),
+      }))
+    }
     setAppointments(prev => [...prev, appt])
     notify(appt.doctorId, 'appointment', 'New appointment request', `${findUser(appt.patientId)?.name} · ${appt.title} · ${appt.preferredDate}`, 'appts')
+    return done()
   }
-  const updateAppointment = (apptId: string, patch: Partial<Appointment>) => {
+  const updateAppointment = (apptId: string, patch: Partial<Appointment>): Saved => {
+    if (LIVE) return run(() => api.updateAppointment(apptId, patch))
     const ap = appointments.find(a => a.id === apptId)
     setAppointments(prev => prev.map(a => a.id === apptId ? { ...a, ...patch } : a))
     if (ap && patch.status) {
       const target = currentUserId === ap.patientId ? ap.doctorId : ap.patientId
       notify(target, 'appointment', `Appointment ${patch.status}`, `${ap.title}${patch.rescheduledTo ? ` → ${patch.rescheduledTo} ${patch.rescheduledTime ?? ''}` : ''}`, 'appts')
     }
+    return done()
   }
 
   /* ─ vitals report requests: patient asks → doctor drafts, signs and releases ─ */
-  const requestReport = (patientId: string, periodDays: number, reason: string) => {
+  const requestReport = (patientId: string, periodDays: number, reason: string): Saved => {
     const pt = findUser(patientId) as PatientUser | undefined
-    if (!pt?.assignedDoctorId) return false
+    if (!pt?.assignedDoctorId) return refused('Choose a care team first.')
+    if (LIVE) return run(() => api.requestReport(patientId, pt.assignedDoctorId!, periodDays, reason))
     const t = Date.now()
     setReportRequests(prev => [{ id: uid('rr'), patientId, doctorId: pt.assignedDoctorId!, periodDays, reason: reason.trim(), status: 'pending', at: t, createdAt: stamp(new Date(t)) }, ...prev])
     notify(pt.assignedDoctorId, 'document', `Report request: ${pt.name}`, `Vitals report for the last ${periodDays} days${reason.trim() ? ` — ${reason.trim()}` : ''}`, 'patients')
     logAudit('Requested report', `${periodDays}-day vitals report`)
-    return true
+    return done()
   }
-  const fulfillReportRequest = (id: string, opts: { days?: number; interpretation?: string; include?: VitalsReportInclude } = {}) => {
+  const fulfillReportRequest = async (id: string, opts: { days?: number; interpretation?: string; include?: VitalsReportInclude } = {}) => {
     const rq = reportRequests.find(r => r.id === id)
     if (!rq || rq.status !== 'pending') return null
-    const docId = docStore.generateVitalsReport(rq.patientId, opts.days ?? rq.periodDays, opts.interpretation, opts.include)
+    const docId = await docStore.generateVitalsReport(rq.patientId, opts.days ?? rq.periodDays, opts.interpretation, opts.include)
     if (!docId) return null
+    if (LIVE) {
+      const linked = await run(() => api.fulfilReportRequest(id, docId))
+      return linked.ok ? docId : null
+    }
     setReportRequests(prev => prev.map(r => r.id === id ? { ...r, status: 'fulfilled', docId, handledAt: stamp() } : r))
     notify(rq.patientId, 'document', 'Your report is being prepared', `Your doctor drafted your ${rq.periodDays}-day vitals report. You'll get it once it's signed.`, 'docs')
     return docId
   }
-  const declineReportRequest = (id: string, reason: string) => {
+  const declineReportRequest = (id: string, reason: string): Saved => {
+    if (LIVE) return run(() => api.declineReportRequest(id, reason))
     const rq = reportRequests.find(r => r.id === id)
-    if (!rq) return
+    if (!rq) return refused('That request could not be found.')
     setReportRequests(prev => prev.map(r => r.id === id ? { ...r, status: 'declined', declineReason: reason.trim(), handledAt: stamp() } : r))
     notify(rq.patientId, 'document', 'Report request declined', reason.trim() || 'Your doctor could not prepare this report.', 'docs')
+    return done()
   }
 
-  const sendMessage = (fromId: string, toId: string, content: string) => {
+  const sendMessage = (fromId: string, toId: string, content: string): Saved => {
+    if (!content.trim()) return refused('Write a message first.')
+    if (LIVE) return run(() => api.sendMessage(fromId, toId, content))
     setMessages(prev => [...prev, { id: uid('msg'), fromId, toId, content, sentAt: stamp(), read: false }])
     notify(toId, 'message', `New message from ${findUser(fromId)?.name ?? 'mCare'}`, content.slice(0, 80),
       findUser(toId)?.role === 'patient' ? 'messages' : 'patients')
+    return done()
   }
-  const markMessagesRead = (fromId: string, toId: string) =>
+  const markMessagesRead = (fromId: string, toId: string): Saved => {
     setMessages(prev => prev.map(m => m.fromId === fromId && m.toId === toId && !m.read ? { ...m, read: true } : m))
+    return LIVE ? save(() => api.markMessagesRead(fromId, toId)) : done()
+  }
+  const markNotificationRead = (id: string): Saved => {
+    // Shown as read at once; the save follows.
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n))
+    return LIVE ? save(() => api.markNotificationRead(id)) : done()
+  }
+  const markAllNotificationsRead = (userId: string): Saved => {
+    setNotifications(prev => prev.map(n => n.userId === userId ? { ...n, read: true } : n))
+    return LIVE ? save(() => api.markAllNotificationsRead(userId)) : done()
+  }
 
-  /* ─ account self-service: password recovery ───────────────────────────
+  /* ─ account self-service: password recovery (demo mode; live mode uses the sign-in service, see shared/auth/LiveAuth) ───
      Every password change — self-service or forgotten — is gated behind a
      one-time challenge the user must clear first: a 6-digit code they type,
      or the magic link they tap. `resetToken` holds the single outstanding
@@ -854,7 +1060,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       expiresAt: t + RESET_TTL_MIN * MIN,
       attempts: 0,
     }
-    updateUser(u.id, { resetToken: token })
+    patchUser(u.id, { resetToken: token })
     if (channel === 'sms') sendSms(u.phone, smsText.passwordReset(token.code), u.id)
     else
       sendEmail(mail.passwordReset(u, token.code, `${appBaseUrl()}?reset=${encodeURIComponent(u.id)}.${token.linkToken}`), u.id)
@@ -881,7 +1087,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!token) return { ok: false as const, error }
     if (token.code !== code.trim()) {
       const attempts = token.attempts + 1
-      updateUser(userId, { resetToken: { ...token, attempts } })
+      patchUser(userId, { resetToken: { ...token, attempts } })
       const left = MAX_RESET_ATTEMPTS - attempts
       return {
         ok: false as const,
@@ -890,7 +1096,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           : 'Too many incorrect attempts. Request a new code.',
       }
     }
-    updateUser(userId, { resetToken: { ...token, verifiedAt: Date.now() } })
+    patchUser(userId, { resetToken: { ...token, verifiedAt: Date.now() } })
     return { ok: true as const }
   }
 
@@ -900,7 +1106,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const { token, error } = liveToken(u)
     if (!token) return { ok: false as const, error }
     if (token.linkToken !== linkToken) return { ok: false as const, error: 'That link is not valid.' }
-    updateUser(userId, { resetToken: { ...token, verifiedAt: Date.now() } })
+    patchUser(userId, { resetToken: { ...token, verifiedAt: Date.now() } })
     return { ok: true as const }
   }
 
@@ -914,7 +1120,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (strength) return { ok: false as const, error: strength }
     if (u && u.password === newPw) return { ok: false as const, error: 'New password must differ from your current one.' }
 
-    updateUser(userId, {
+    patchUser(userId, {
       password: newPw,
       resetToken: undefined,          // single use — burned on success
       lastPasswordChangeAt: Date.now(),
@@ -941,7 +1147,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (strength) return { ok: false as const, error: strength }
     if (newPw === currentPw) return { ok: false as const, error: 'New password must differ from your current one.' }
 
-    updateUser(id, { password: newPw, resetToken: undefined, lastPasswordChangeAt: Date.now() })
+    patchUser(id, { password: newPw, resetToken: undefined, lastPasswordChangeAt: Date.now() })
     notify(id, 'account', 'Password changed', 'Your password was updated successfully.', undefined, { email: false })
     sendEmail(mail.passwordChanged(u), u.id)
     logAudit('Changed password', u.name)
@@ -1005,34 +1211,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }
 
   /* ─ support tickets ─ */
-  const createSupportTicket = (userId: string, subject: string, message: string) => {
+  const createSupportTicket = (userId: string, subject: string, message: string): Saved => {
+    if (LIVE) return run(() => api.createSupportTicket(userId, subject, message))
     const t = Date.now()
     const u = findUser(userId)
     setSupportTickets(prev => [{ id: uid('tix'), userId, subject, message, status: 'open', at: t, createdAt: stamp(new Date(t)) }, ...prev])
     usersRef.current
       .filter(x => (x.role === 'admin' || (x.role === 'assistant' && (x as AdminUser).permissions.includes('handle_support'))) && x.status === 'active')
       .forEach(a => notify(a.id, 'account', `Support request: ${u?.name ?? 'User'}`, subject, 'support'))
+    return done()
   }
-  const resolveSupportTicket = (ticketId: string, note?: string) => {
+  const resolveSupportTicket = (ticketId: string, note?: string): Saved => {
+    if (LIVE) return run(() => api.resolveSupportTicket(ticketId, note))
     const t = Date.now()
     setSupportTickets(prev => prev.map(x => x.id === ticketId
       ? { ...x, status: 'resolved', resolvedBy: actorId(), resolutionNote: note, resolvedAt: stamp(new Date(t)) }
       : x))
     const ticket = supportTickets.find(x => x.id === ticketId)
     if (ticket) notify(ticket.userId, 'account', 'Support request resolved', note || `"${ticket.subject}" has been resolved.`)
+    return done()
   }
 
   return (
     <AppContext.Provider value={{
       ...docStore,
-      now, currentUser, setCurrentUser,
+      now, live: LIVE, currentUser, setCurrentUser, signIn, entering, enterError, retryEnter,
+      sync, online, refresh, run, saveError, clearSaveError: () => setSaveError(undefined),
       users, vitalDefs, setVitalDefs,
       updateUser, addUser,
       getDoctors, getPatients, getAdmins,
       updateAssistantPerms, assignPatientToDoctor, resolvePatientRequest, setUserStatus, decideDoctor,
       addPrescription, setPrescriptionActive, logReading, correctReading, invalidateReading, sendAlertNow,
       setDoctorNote, setUnitPref, setThreshold, setCriticalThreshold, clinicalNotes, doses, toggleDose, mealsDone, toggleMeal,
-      alerts, raiseSOS, acknowledgeAlert, resolveAlert, escalateAlert, requestRecheck, scheduleFollowUp,
+      mealPlans, hydration, setHydration, ratings, rateDoctor,
+      alerts, raiseSOS, acknowledgeAlert, resolveAlert, escalateAlert, requestRecheck, chaseDoctor, scheduleFollowUp,
       appointments, addAppointment, updateAppointment,
       reportRequests, requestReport, fulfillReportRequest, declineReportRequest,
       messages, sendMessage, markMessagesRead,

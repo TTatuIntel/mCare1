@@ -7,7 +7,7 @@ import DoctorPicker from './DoctorPicker'
 
 /* ─── Alert monitor ───────────────────────────────────────────────── */
 export default function AlertsMonitorTab({ admin }: { admin: AdminUser }) {
-  const { alerts, users, now, notify, acknowledgeAlert, resolveAlert } = useApp()
+  const { alerts, users, now, chaseDoctor, acknowledgeAlert, resolveAlert } = useApp()
   const [filter, setFilter] = useState<'escalated' | 'all' | 'resolved'>('escalated')
   const [reassign, setReassign] = useState<string | null>(null)
   const { assignPatientToDoctor } = useApp()
@@ -52,7 +52,7 @@ export default function AlertsMonitorTab({ admin }: { admin: AdminUser }) {
             {a.status !== 'resolved' && (
               <div className="flex gap-2 mt-3 flex-wrap">
                 {doc && (
-                  <button onClick={() => { notify(doc.id, 'escalation', `Urgent: ${pt?.name}`, `Admin ${admin.name} asks you to respond to ${a.type === 'sos' ? 'an SOS' : `${a.vitalName} ${a.value}`}`, 'alerts'); toast.show(`${doc.name} has been chased`) }}
+                  <button onClick={async () => { if ((await chaseDoctor(a.id)).ok) toast.show(`${doc.name} has been chased`) }}
                     className="flex-1 py-2 bg-white text-gray-700 text-[11px] font-bold rounded-xl border border-gray-200">📣 Chase doctor</button>
                 )}
                 <button onClick={() => setReassign(a.patientId)} className="flex-1 py-2 bg-white text-blue-700 text-[11px] font-bold rounded-xl border border-blue-100">↻ Reassign</button>
@@ -67,7 +67,7 @@ export default function AlertsMonitorTab({ admin }: { admin: AdminUser }) {
       })}
       <DoctorPicker open={!!reassign} onClose={() => setReassign(null)} title="Reassign patient"
         currentId={reassign ? ptOf(reassign)?.assignedDoctorId : undefined}
-        onPick={id => { if (reassign) assignPatientToDoctor(reassign, id); setReassign(null); toast.show('Patient reassigned; new doctor notified') }} />
+        onPick={async id => { const ok = !!reassign && (await assignPatientToDoctor(reassign, id)).ok; setReassign(null); if (ok) toast.show('Patient reassigned; new doctor notified') }} />
     </div>
   )
 }

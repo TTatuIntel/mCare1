@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { BottomSheet, SheetButton, Field, inputCls, useToast } from '@/shared'
+import { BottomSheet, SheetButton, Field, inputCls, useToast, SaveError, useSave } from '@/shared'
 import { usePatient } from './usePatient'
 
 /** The periods a vitals report can cover, in days. */
@@ -20,10 +20,11 @@ export function ReportRequestSheet({ open, onClose, days = 30, onSent }: {
   const { reportRequests, requestReport } = usePatient()
   const [period, setPeriod] = useState(days)
   const [reason, setReason] = useState('')
-  useEffect(() => { if (open) setPeriod(days) }, [open, days])
+  const save = useSave()
+  useEffect(() => { if (open) { setPeriod(days); save.clear() } }, [open, days]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const submit = () => {
-    if (!requestReport(period, reason)) return
+  const submit = async () => {
+    if (!(await save.run(() => requestReport(period, reason))).ok) return
     setReason('')
     onClose()
     onSent?.()
@@ -32,7 +33,7 @@ export function ReportRequestSheet({ open, onClose, days = 30, onSent }: {
   return (
     <BottomSheet open={open} onClose={onClose} title="📊 Request a vitals report"
       subtitle="Your care team builds it from your readings, signs it, and it appears in Documents as an official document."
-      footer={<><SheetButton tone="ghost" onClick={onClose}>Cancel</SheetButton><SheetButton onClick={submit}>Send request</SheetButton></>}>
+      footer={<><SheetButton tone="ghost" onClick={onClose}>Cancel</SheetButton><SheetButton disabled={save.busy} onClick={submit}>{save.busy ? 'Sending…' : 'Send request'}</SheetButton></>}>
       <Field label="Period">
         <div className="grid grid-cols-3 gap-2">
           {REPORT_PERIODS.map(d => (
@@ -44,12 +45,13 @@ export function ReportRequestSheet({ open, onClose, days = 30, onSent }: {
         </div>
       </Field>
       <Field label="What is it for? (optional)">
-        <textarea rows={2} value={reason} onChange={e => setReason(e.target.value)} className={`${inputCls} resize-none`}
+        <textarea rows={2} value={reason} maxLength={300} onChange={e => setReason(e.target.value)} className={`${inputCls} resize-none`}
           placeholder="e.g. insurance claim, second opinion, employer" />
       </Field>
       {reportRequests.some(r => r.status === 'pending') && (
         <p className="text-[11px] text-amber-700 bg-amber-50 rounded-xl px-3 py-2">You already have a request waiting — you can still send another.</p>
       )}
+      <SaveError message={save.error} className="mt-2" />
     </BottomSheet>
   )
 }

@@ -58,25 +58,27 @@ export function PatientDetail({ patientId, onBack, initial = 'overview' }: { pat
 
   const toggleAssign = (id: string) => {
     const next = patient.trackedVitalIds.includes(id) ? patient.trackedVitalIds.filter(v => v !== id) : [...patient.trackedVitalIds, id]
-    updateUser(patient.id, { trackedVitalIds: next } as Partial<PatientUser>)
+    void updateUser(patient.id, { trackedVitalIds: next } as Partial<PatientUser>)
   }
   const startEdit = (def: VitalDef) => {
     const thr = targetRange(patient, def)
     setEditMin(String(thr.min)); setEditMax(String(thr.max)); setEditing(def.id)
   }
-  const saveThreshold = (id: string) => {
+  const saveThreshold = async (id: string) => {
     const min = Number(editMin), max = Number(editMax)
     if (isNaN(min) || isNaN(max) || min >= max) { toast.show('Min must be lower than max'); return }
-    setThreshold(patient.id, id, { min, max })
+    if (!(await setThreshold(patient.id, id, { min, max })).ok) return
     setEditing(null); toast.show('Target range saved')
   }
-  const prescribe = () => {
+  const prescribe = async () => {
     if (!rx.medication.trim() || !rx.dosage.trim()) return
-    addPrescription(patient.id, {
+    const saved = await addPrescription(patient.id, {
       id: `rx_${Date.now()}`, medication: rx.medication.trim(), dosage: rx.dosage.trim(), frequency: rx.frequency,
       purpose: rx.purpose.trim(), prescribedAt: dateLabel(), doctorId: doctor.id, active: true,
     })
-    setRx({ medication: '', dosage: '', frequency: 'Once daily', purpose: '' }); setRxOpen(false)
+    setRxOpen(false)
+    if (!saved.ok) return
+    setRx({ medication: '', dosage: '', frequency: 'Once daily', purpose: '' })
     toast.show('Prescription sent to patient')
   }
 
@@ -231,7 +233,7 @@ export function PatientDetail({ patientId, onBack, initial = 'overview' }: { pat
                     )}
                   </div>
                   <Pill color={slots.length && slots.every(s => s.done) ? 'green' : 'amber'}>{slots.filter(s => s.done).length}/{slots.length || '—'} today</Pill>
-                  <button onClick={() => { setPrescriptionActive(patient.id, x.id, false); toast.show(`${x.medication} stopped`) }}
+                  <button onClick={async () => { if ((await setPrescriptionActive(patient.id, x.id, false)).ok) toast.show(`${x.medication} stopped`) }}
                     className="text-[10px] text-red-500 font-bold ml-1">Stop</button>
                 </div>
               )
@@ -259,7 +261,7 @@ export function PatientDetail({ patientId, onBack, initial = 'overview' }: { pat
             <textarea value={note} onChange={e => setNote(e.target.value)} rows={3}
               placeholder="Observations and instructions. The latest note is shown to the patient."
               className={`${inputCls} resize-none`} />
-            <button onClick={() => { setDoctorNote(patient.id, note); setNote(''); toast.show('Note saved and shared with patient') }} disabled={!note.trim()}
+            <button onClick={async () => { if ((await setDoctorNote(patient.id, note)).ok) { setNote(''); toast.show('Note saved and shared with patient') } }} disabled={!note.trim()}
               className={`w-full mt-2 py-2.5 rounded-xl text-sm font-bold ${note.trim() ? 'bg-teal-700 text-white' : 'bg-gray-200 text-gray-400'}`}>Save Note</button>
           </div>
           <div className="bg-white rounded-2xl p-4 shadow-sm">
@@ -349,7 +351,7 @@ export function PatientDetail({ patientId, onBack, initial = 'overview' }: { pat
 
       <BottomSheet open={!!invalidFor} onClose={() => setInvalidFor(null)} title="Mark Reading Invalid"
         subtitle="The reading stays in the record but is excluded from alerts and trends."
-        footer={<><SheetButton tone="ghost" onClick={() => setInvalidFor(null)}>Cancel</SheetButton><SheetButton tone="danger" disabled={!invalidReason.trim()} onClick={() => { if (invalidFor) invalidateReading(patient.id, invalidFor, invalidReason.trim()); setInvalidFor(null); toast.show('Reading marked invalid') }}>Mark Invalid</SheetButton></>}>
+        footer={<><SheetButton tone="ghost" onClick={() => setInvalidFor(null)}>Cancel</SheetButton><SheetButton tone="danger" disabled={!invalidReason.trim()} onClick={async () => { const ok = !!invalidFor && (await invalidateReading(patient.id, invalidFor, invalidReason.trim())).ok; setInvalidFor(null); if (ok) toast.show('Reading marked invalid') }}>Mark Invalid</SheetButton></>}>
         <textarea value={invalidReason} onChange={e => setInvalidReason(e.target.value)} rows={3}
           placeholder="e.g. Cuff fitted incorrectly; patient re-measured." className={`${inputCls} resize-none`} />
       </BottomSheet>

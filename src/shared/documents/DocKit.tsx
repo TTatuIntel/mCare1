@@ -3,7 +3,7 @@
  * Every screen shows documents with these pieces so an official report,
  * a personal upload and a draft always look the same wherever they appear.
  */
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import { Pill, inputCls } from '@/shared'
 import type { MedicalDocument, DocCategory, AppUser, DocBody } from '@/shared/lib/types'
@@ -65,7 +65,7 @@ export function DocRow({ entry, onOpen, onRetry, onDiscard, patientName, isNew, 
   const busy = up && (up.state === 'uploading' || up.state === 'scanning')
   const author = users.find(u => u.id === (doc.signedBy ?? doc.createdBy))?.name
   const [dl, setDl] = useState(false)
-  const downloadable = level === 'content' && !doc.deletedAt && (!up || up.state === 'ready') && (!!doc.file?.dataUrl || !!doc.body)
+  const downloadable = level === 'content' && !doc.deletedAt && (!up || up.state === 'ready') && (!!doc.file?.dataUrl || !!doc.file?.path || !!doc.body)
   const fmt = doc.file ? formatOf(doc.file.mime, doc.file.name) : undefined
   return (
     <div className={`px-3 py-2 ${last ? '' : 'border-b border-gray-50'}`}>
@@ -400,6 +400,22 @@ function VitalsSummary({ body: b }: { body: Extract<DocBody, { type: 'vitals' }>
   )
 }
 
+/** A stored file on its way from the backend. Says so, and offers a retry if it could not be fetched. */
+function FilePending({ docId, name, thumb }: { docId: string; name: string; thumb: boolean }) {
+  const { loadDocumentFile } = useApp()
+  const [failed, setFailed] = useState(false)
+  const load = () => { setFailed(false); loadDocumentFile(docId).then(url => { if (!url) setFailed(true) }) }
+  useEffect(load, [docId]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (thumb) return <p className="text-[11px] text-gray-400 py-6 text-center">{failed ? 'Preview unavailable' : 'Loading preview…'}</p>
+  return (
+    <div className="py-10 text-center" role="status">
+      <p className="text-sm font-semibold text-gray-700">{failed ? 'The file could not be opened' : 'Opening the file…'}</p>
+      <p className="text-xs text-gray-400 mt-1 truncate">{failed ? 'Check your connection, then try again.' : name}</p>
+      {failed && <button onClick={load} className="mt-3 text-xs bg-teal-700 text-white px-5 py-2 rounded-full font-bold">Try again</button>}
+    </div>
+  )
+}
+
 /** The document's content. `thumb` is a cropped, non-interactive glimpse; `full` is the reader page. */
 export function DocBodyView({ doc, variant = 'full' }: { doc: MedicalDocument; variant?: 'thumb' | 'full' }) {
   const b = doc.body
@@ -408,6 +424,9 @@ export function DocBodyView({ doc, variant = 'full' }: { doc: MedicalDocument; v
   let inner: React.ReactNode
   if (f?.dataUrl) {
     inner = <FilePreview file={f} title={doc.title} variant={variant} />
+  } else if (f?.path && !b) {
+    // Live mode: the file is in storage and is fetched when the document is opened.
+    inner = <FilePending docId={doc.id} name={f.name} thumb={variant === 'thumb'} />
   } else if (b?.type === 'vitals') {
     inner = <VitalsSummary body={b} />
   } else if (b?.type === 'lab') {

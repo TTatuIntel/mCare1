@@ -141,6 +141,10 @@ export interface VitalReading {
   note?: string
   invalid?: boolean
   invalidReason?: string
+  /** Who entered it: the patient, or the treating doctor. */
+  recordedBy?: string
+  /** What was first saved, when a typo was corrected afterwards. */
+  correctedFrom?: string
 }
 
 export interface EmergencyContact {
@@ -374,8 +378,10 @@ export interface AppAlert {
   resolvedBy?: string
   resolutionReason?: string
   escalatedAt?: string
-  /** Set when a doctor asks the patient to log a fresh reading for this vital. A normal follow-up reading auto-resolves the alert. */
+  /** Set when a doctor asks the patient to log a fresh reading for this vital. An in-range follow-up closes a warning; a critical alert goes back to the doctor. */
   recheckRequestedAt?: number
+  /** The reading logged in answer to the re-check. */
+  recheckReadingId?: string
 }
 
 export type AlertStatus = 'open' | 'acknowledged' | 'escalated' | 'resolved'
@@ -408,6 +414,8 @@ export interface Appointment {
   rescheduledTime?: string
   rescheduledReason?: string
   createdAt: string
+  /** epoch ms the request was made, for sorting */
+  at?: number
 }
 
 /** A patient asking their care team for an official vitals report. */
@@ -433,6 +441,48 @@ export interface PatientMessage {
   sentAt: string
   read: boolean
 }
+
+/** One meal of a patient's plan. `at` is minutes after midnight. */
+export interface PlannedMeal {
+  id: string
+  name: string
+  at: number
+  foods: string
+  kcal: number
+  icon: string
+  protein?: number
+  carbs?: number
+  fat?: number
+}
+
+/** What the treating doctor set for a patient's meals. A patient without one follows the standard plan. */
+export interface MealPlan {
+  patientId: string
+  /** Empty = the standard meals. */
+  meals: PlannedMeal[]
+  targetKcal?: number
+  /** Glasses of water a day. */
+  waterGoal: number
+  dietaryNote?: string
+  setBy?: string
+}
+
+export interface HydrationLog {
+  patientId: string
+  day: string       // YYYY-MM-DD
+  glasses: number
+}
+
+/** A patient's rating of the doctor who treats them. */
+export interface DoctorRating {
+  patientId: string
+  doctorId: string
+  rating: number    // 1–5
+  comment?: string
+}
+
+/** What a save came to: the value it produced, or a message fit to show the person. */
+export type Outcome<T = void> = { ok: true; value: T } | { ok: false; error: string }
 
 export type SupportTicketStatus = 'open' | 'resolved'
 
@@ -487,8 +537,10 @@ export interface DocFile {
   size: number
   /** Content hash — used for duplicate detection, idempotent retries and integrity checks. */
   sha256: string
-  /** In-memory stand-in for object storage. Absent for seeded demo files. */
+  /** The file's bytes, once loaded. Demo mode keeps them here; live mode fetches them from storage when the document is opened. */
   dataUrl?: string
+  /** Where the file lives in storage (live mode). */
+  path?: string
 }
 
 export interface VitalsReportRow {

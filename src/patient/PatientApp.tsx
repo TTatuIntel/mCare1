@@ -54,7 +54,7 @@ export default function PatientApp() {
     ? <QuickLogFab onLogOne={log.logOne} onLogGroup={log.logGroup} onLogAll={log.logAll} due={vitalsDue} /> : undefined
 
   return (
-    <PortalShell screen={tab} nav={NAV.map(n => ({ ...n, badge: badge[n.id] }))} onSelect={go} homeId="home" fill={tab === 'messages'} floating={fab}>
+    <PortalShell screen={tab} nav={NAV.map(n => ({ ...n, badge: badge[n.id] }))} onSelect={go} homeId="home" fill={tab === 'messages'} narrow={tab === 'profile'} floating={fab}>
       {log.sheets}
       {tab ==='home'     && <HomeTab go={go} openVital={openVital} onLog={log.logOne} />}
       {tab ==='vitals'   && <VitalsTab vitalId={vital?.id ?? null} onOpenVital={openVital} onCloseVital={closeVital} go={go} />}
@@ -62,7 +62,7 @@ export default function PatientApp() {
       {tab ==='messages' && <MessagesTab go={go} />}
       {tab ==='appts'    && <AppointmentsTab />}
       {tab ==='docs'     && <DocsTab go={go} />}
-      {tab ==='profile'  && <ProfileTab />}
+      {tab ==='profile'  && <ProfileTab go={go} />}
       {tab ==='meals'    && <MealsTab />}
       {tab ==='care'     && <CareTeamTab go={go} />}
       {tab ==='alerts'   && <MyAlertsTab openVital={openVital} onLog={log.logOne} go={go} />}

@@ -67,7 +67,7 @@ export function MedicineTab() {
                   <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg flex-shrink-0 ${allTaken ? 'bg-emerald-50' : 'bg-teal-50'}`}>💊</div>
                   <div className="flex-1 min-w-0">
                     <p className={`text-sm font-bold ${allTaken ? 'line-through text-gray-400' : 'text-gray-900'}`}>{rx.medication}</p>
-                    <p className="text-xs text-gray-500">{rx.purpose} · {rx.frequency}</p>
+                    <p className="text-xs text-gray-500">{[rx.dosage, rx.purpose, rx.frequency].filter(Boolean).join(' · ')}</p>
                     <p className="text-[10px] text-gray-400 mt-0.5">Prescribed by {getDoctorName(rx.doctorId)} · {rx.prescribedAt}</p>
                   </div>
                 </div>
@@ -88,24 +88,25 @@ export function MedicineTab() {
               </div>
             )
           })}
-
-          {/* Inactive prescriptions */}
-          {patient.prescriptions.some(rx => !rx.active) && (
-            <div>
-              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-1 mb-2">Discontinued</p>
-              {patient.prescriptions.filter(rx => !rx.active).map(rx => (
-                <div key={rx.id} className="bg-gray-50 rounded-2xl px-4 py-3 flex items-center gap-3 mb-1.5 opacity-60">
-                  <div className="w-9 h-9 bg-gray-100 rounded-xl flex items-center justify-center text-base flex-shrink-0">💊</div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-500 line-through">{rx.medication}</p>
-                    <p className="text-xs text-gray-400">{rx.purpose} · {rx.frequency}</p>
-                  </div>
-                  <span className="text-[9px] bg-gray-200 text-gray-500 px-2 py-0.5 rounded-full font-semibold flex-shrink-0">Stopped</span>
-                </div>
-              ))}
-            </div>
-          )}
         </>
+      )}
+
+      {/* Medication history: what was prescribed before and has since been stopped. Shown even when nothing is active. */}
+      {patient.prescriptions.some(rx => !rx.active) && (
+        <div>
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-1 mb-2">Stopped by your doctor</p>
+          {patient.prescriptions.filter(rx => !rx.active).map(rx => (
+            <div key={rx.id} className="bg-gray-50 rounded-2xl px-4 py-3 flex items-center gap-3 mb-1.5 opacity-70">
+              <div className="w-9 h-9 bg-gray-100 rounded-xl flex items-center justify-center text-base flex-shrink-0" aria-hidden="true">💊</div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-500 line-through">{rx.medication}</p>
+                <p className="text-xs text-gray-400 truncate">{[rx.purpose, rx.frequency].filter(Boolean).join(' · ')}</p>
+                <p className="text-[10px] text-gray-400 truncate">Prescribed by {getDoctorName(rx.doctorId)} · {rx.prescribedAt}</p>
+              </div>
+              <span className="text-[10px] bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full font-semibold flex-shrink-0">Stopped</span>
+            </div>
+          ))}
+        </div>
       )}
     </Page>
   )

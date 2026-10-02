@@ -2,7 +2,8 @@ import { useRef, useState } from 'react'
 import { BottomSheet } from '@/shared/ui/BottomSheet'
 import MCareLogo from '@/shared/layout/MCareLogo'
 import { AuthDivider, AuthIcon, AuthRights, AuthSwitch, OWNER } from './authKit'
-import { SocialButtons } from './SocialAuth'
+import { SocialButtons, socialSignInAvailable } from './SocialAuth'
+import { backendConfigured } from '@/shared/api/supabase'
 
 const SUPPORT_EMAIL = 'support@matendocare.com'
 
@@ -173,12 +174,17 @@ export function WelcomeScreen({ onGetStarted, onSignIn, onDemo }: {
         <AuthSwitch className="mt-5" prompt="Already have an account?" action="Sign in" onClick={onSignIn} />
       </section>
 
-      <AuthDivider>Or continue with</AuthDivider>
-      <SocialButtons />
+      {socialSignInAvailable && <>
+        <AuthDivider>Or continue with</AuthDivider>
+        <SocialButtons />
+      </>}
 
       <div className="flex items-center justify-center gap-3 text-[10px] @2xl:text-xs font-semibold text-teal-700 flex-wrap">
-        <button type="button" onClick={onDemo} className="underline-offset-4 hover:underline">Try a demo account</button>
-        <span aria-hidden className="h-2 w-px bg-gray-300" />
+        {/* Demo accounts exist only in demo mode, where the sample data lives. */}
+        {!backendConfigured && <>
+          <button type="button" onClick={onDemo} className="underline-offset-4 hover:underline">Try a demo account</button>
+          <span aria-hidden className="h-2 w-px bg-gray-300" />
+        </>}
         <button type="button" onClick={() => setHelpOpen(true)} className="flex items-center gap-1 underline-offset-4 hover:underline">
           <AuthIcon name="help" className="w-3 h-3 @2xl:w-3.5 @2xl:h-3.5" />
           Help &amp; support

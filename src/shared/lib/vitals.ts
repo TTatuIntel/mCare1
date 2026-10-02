@@ -140,8 +140,9 @@ export function stamp(d = new Date()): string {
 export function dateLabel(d = new Date()): string {
   return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`
 }
+/** The calendar day where the person is (YYYY-MM-DD), not the UTC day: at 1 a.m. in Nairobi it is already "today". */
 export function dayKey(d = new Date()): string {
-  return d.toISOString().slice(0, 10)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 export function ago(at: number, now = Date.now()): string {
   const s = Math.max(0, Math.round((now - at) / 1000))

@@ -1,36 +1,40 @@
 import { useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
-import { ProfileCard, Page, Toggle, HealthSummary } from '@/shared'
+import { ProfileCard, Page, Toggle, HealthSummary, BottomSheet, SheetButton, SaveError, useSave, useToast } from '@/shared'
 import { usePatient } from './usePatient'
 import { healthGaps, type HealthSection } from '@/shared/lib/health'
+import { dateLabel } from '@/shared/lib/vitals'
 import { SosSheet } from './SosSheet'
 import { EmergencyContacts } from './EmergencyContacts'
 import { HealthEditSheet } from './HealthEditSheet'
 
 /* ─── Profile ───────────────────────────────────────────────────────── */
-export function ProfileTab() {
+export function ProfileTab({ go }: { go?: (tab: string) => void }) {
   const { vitalDefs } = useApp()
-  const { patient, setTrackedVitals, status, error, reload } = usePatient()
+  const { patient, doctor, live, setTrackedVitals, canStopTracking, signOutOtherDevices, status, error, reload } = usePatient()
   const activeVitals = vitalDefs.filter(v => v.active)
   const [showVitalsSheet, setShowVitalsSheet] = useState(false)
   const [sos, setSos] = useState(false)
   const [editHealth, setEditHealth] = useState<HealthSection | null>(null)
   const gaps = healthGaps(patient)
+  const save = useSave()
+  const session = useSave()
+  const toast = useToast()
 
-  // Vitals with doctor-set thresholds are locked — patient cannot remove them
-  const doctorAssignedIds = Object.keys(patient.thresholds)
-  const lockedVitals = activeVitals.filter(v => doctorAssignedIds.includes(v.id))
-  const optionalVitals = activeVitals.filter(v => !doctorAssignedIds.includes(v.id))
+  // A vital the doctor set a target for, or any vital once a doctor is assigned, can only be removed by the doctor.
+  const tracked = (id: string) => patient.trackedVitalIds.includes(id)
+  const locked = (id: string) => tracked(id) && !canStopTracking(id)
+  const lockedVitals = activeVitals.filter(v => locked(v.id))
+  const optionalVitals = activeVitals.filter(v => !locked(v.id))
 
   const toggleVital = (id: string) => {
-    if (doctorAssignedIds.includes(id)) return
-    const next = patient.trackedVitalIds.includes(id)
-      ? patient.trackedVitalIds.filter(v => v !== id)
-      : [...patient.trackedVitalIds, id]
-    setTrackedVitals(next)
+    if (locked(id)) return
+    const next = tracked(id) ? patient.trackedVitalIds.filter(v => v !== id) : [...patient.trackedVitalIds, id]
+    void save.run(() => setTrackedVitals(next))
   }
-
-  const optionalTracked = optionalVitals.filter(v => patient.trackedVitalIds.includes(v.id)).length
+  const endOtherSessions = async () => {
+    if ((await session.run(signOutOtherDevices)).ok) toast.show('Signed out everywhere else')
+  }
 
   return (
     <Page title="Profile" status={status} error={error} onRetry={reload}>
@@ -52,131 +56,125 @@ export function ProfileTab() {
           <HealthSummary patient={patient} onEdit={setEditHealth} />
 
           {/* vitals selection trigger */}
-          <button
-            onClick={() => setShowVitalsSheet(true)}
-            className="w-full bg-white rounded-2xl p-4 shadow-sm text-left"
-          >
+          <button onClick={() => { save.clear(); setShowVitalsSheet(true) }} className="w-full bg-white rounded-2xl p-4 shadow-sm text-left">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-bold text-gray-900">Vitals I Track</p>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  {patient.trackedVitalIds.length} active · {lockedVitals.length} doctor-assigned
+                  {patient.trackedVitalIds.length} active{lockedVitals.length ? ` · ${lockedVitals.length} set by your doctor` : ''}
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <div className="flex -space-x-1">
-                  {activeVitals.filter(v => patient.trackedVitalIds.includes(v.id)).slice(0, 4).map(v => (
+                <div className="flex -space-x-1" aria-hidden="true">
+                  {activeVitals.filter(v => tracked(v.id)).slice(0, 4).map(v => (
                     <span key={v.id} className="text-sm">{v.icon}</span>
                   ))}
                 </div>
-                <span className="text-gray-300 text-base">›</span>
+                <span className="text-gray-300 text-base" aria-hidden="true">›</span>
               </div>
             </div>
           </button>
           <EmergencyContacts />
+
+          {/* Privacy and security: who can see the record, and where the account is signed in */}
+          <div className="bg-white rounded-2xl p-4 shadow-sm">
+            <p className="text-sm font-bold text-gray-900 mb-2">Privacy &amp; Security</p>
+            <ul className="flex flex-col gap-2.5 text-xs text-gray-600">
+              <li className="flex gap-2.5">
+                <span aria-hidden="true">🩺</span>
+                <span><b className="text-gray-900">{doctor ? doctor.name : 'No doctor yet'}</b>{doctor ? ' can see your health record and the documents you share with your care team. Nobody else on mCare can.' : ': your record is visible to you only until a doctor is assigned.'}</span>
+              </li>
+              <li className="flex gap-2.5">
+                <span aria-hidden="true">📄</span>
+                <span>New uploads are {patient.docPrefs?.privateByDefault ? <b className="text-gray-900">kept private</b> : <b className="text-gray-900">shared with your care team</b>}.{' '}
+                  {go && <button onClick={() => go('docs')} className="font-bold text-teal-700">Change in Documents</button>}</span>
+              </li>
+              <li className="flex gap-2.5">
+                <span aria-hidden="true">🛡️</span>
+                <span>mCare support staff can see that a document exists, never what it says, unless an administrator opens one for 15 minutes with a stated reason. You are told each time.</span>
+              </li>
+              {patient.termsAcceptedAt && (
+                <li className="flex gap-2.5">
+                  <span aria-hidden="true">✅</span>
+                  <span>You accepted the Terms and the Privacy Policy on {dateLabel(new Date(patient.termsAcceptedAt))}.</span>
+                </li>
+              )}
+            </ul>
+            {live && (
+              <div className="mt-3 pt-3 border-t border-gray-100">
+                <button onClick={endOtherSessions} disabled={session.busy}
+                  className="w-full rounded-xl border border-gray-200 py-2.5 text-xs font-bold text-gray-700 disabled:opacity-50">
+                  {session.busy ? 'Signing out…' : 'Sign out of all other devices'}
+                </button>
+                <p className="text-[10px] text-gray-400 mt-1.5">Use this if you lost a phone or signed in on a shared computer. This device stays signed in.</p>
+                <SaveError message={session.error} className="mt-2" />
+                {toast.node && <div className="mt-2">{toast.node}</div>}
+              </div>
+            )}
+          </div>
         </ProfileCard>
       </div>
 
       <SosSheet open={sos} onClose={() => setSos(false)} />
       {editHealth && <HealthEditSheet key={editHealth} section={editHealth} onClose={() => setEditHealth(null)} />}
 
-      {/* Vitals bottom sheet */}
-      {showVitalsSheet && (
-        <>
-          <div className="absolute inset-0 bg-black/40 z-40 sheet-fade" onClick={() => setShowVitalsSheet(false)} />
-          <div className="absolute bottom-0 left-0 right-0 z-50 bg-white sheet-up" style={{ borderRadius: '24px 24px 0 0' }}>
+      {/* Vitals I track */}
+      <BottomSheet open={showVitalsSheet} onClose={() => setShowVitalsSheet(false)} title="Vitals I Track"
+        subtitle={`${patient.trackedVitalIds.length} of ${activeVitals.length} active`}
+        footer={<SheetButton onClick={() => setShowVitalsSheet(false)}>Done</SheetButton>}>
+        <SaveError message={save.error} className="mb-3" />
 
-            {/* Sheet header */}
-            <div className="px-5 pt-5 pb-3">
-              <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4" />
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-base font-bold text-gray-900">Vitals I Track</p>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    {patient.trackedVitalIds.length} of {activeVitals.length} active
-                  </p>
-                </div>
-                <div className="flex items-center gap-1.5 bg-blue-50 px-2.5 py-1 rounded-full">
-                  <span className="text-xs">🔒</span>
-                  <span className="text-[10px] font-bold text-blue-600">{lockedVitals.length} Doctor Assigned</span>
-                </div>
-              </div>
+        {lockedVitals.length > 0 && (
+          <div className="mb-3">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[10px] font-bold text-blue-500 uppercase tracking-wider">Set by your doctor</span>
+              <div className="flex-1 h-px bg-blue-100" />
+              <span className="text-[10px] text-blue-400">Only your doctor removes these</span>
             </div>
-
-            <div className="max-h-80 overflow-y-auto px-5" style={{ scrollbarWidth: 'none' }}>
-
-              {/* Doctor-assigned section */}
-              {lockedVitals.length > 0 && (
-                <div className="mb-3">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-[9px] font-bold text-blue-500 uppercase tracking-wider">Doctor Assigned</span>
-                    <div className="flex-1 h-px bg-blue-100" />
-                    <span className="text-[9px] text-blue-400">Cannot be removed</span>
+            <div className="bg-blue-50/60 rounded-2xl overflow-hidden">
+              {lockedVitals.map((v, i) => (
+                <div key={v.id} className={`flex items-center gap-3 px-3 py-2.5 ${i < lockedVitals.length - 1 ? 'border-b border-blue-100/60' : ''}`}>
+                  <span className="text-base w-6 text-center" aria-hidden="true">{v.icon}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-gray-800">{v.name}</p>
+                    <p className="text-[10px] text-blue-500 font-medium font-mono">
+                      {patient.thresholds[v.id] ? `${patient.thresholds[v.id].min}–${patient.thresholds[v.id].max} ${v.unit}` : v.unit}
+                    </p>
                   </div>
-                  <div className="bg-blue-50/60 rounded-2xl overflow-hidden">
-                    {lockedVitals.map((v, i) => (
-                      <div key={v.id}
-                        className={`flex items-center gap-3 px-3 py-2.5 ${i < lockedVitals.length - 1 ? 'border-b border-blue-100/60' : ''}`}>
-                        <span className="text-base w-6 text-center">{v.icon}</span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-gray-800">{v.name}</p>
-                          <p className="text-[10px] text-blue-400 font-medium">
-                            {patient.thresholds[v.id]
-                              ? `${patient.thresholds[v.id].min}–${patient.thresholds[v.id].max} ${v.unit}`
-                              : v.unit}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-1.5 bg-blue-100 px-2 py-1 rounded-full flex-shrink-0">
-                          <span className="text-[10px]">🔒</span>
-                          <span className="text-[9px] font-bold text-blue-600">Locked</span>
-                        </div>
-                      </div>
-                    ))}
+                  <div className="flex items-center gap-1.5 bg-blue-100 px-2 py-1 rounded-full flex-shrink-0">
+                    <span className="text-[10px]" aria-hidden="true">🔒</span>
+                    <span className="text-[10px] font-bold text-blue-600">Locked</span>
                   </div>
                 </div>
-              )}
-
-              {/* Optional vitals section */}
-              {optionalVitals.length > 0 && (
-                <div className="mb-3">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Your Choices</span>
-                    <div className="flex-1 h-px bg-gray-100" />
-                    <span className="text-[9px] text-gray-400">{optionalTracked}/{optionalVitals.length} on</span>
-                  </div>
-                  <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-                    {optionalVitals.map((v, i) => (
-                      <div key={v.id}
-                        className={`flex items-center gap-3 px-3 py-2.5 ${i < optionalVitals.length - 1 ? 'border-b border-gray-50' : ''}`}>
-                        <span className="text-base w-6 text-center">{v.icon}</span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-gray-800">{v.name}</p>
-                          <p className="text-[10px] text-gray-400">{v.unit}</p>
-                        </div>
-                        <Toggle on={patient.trackedVitalIds.includes(v.id)} onChange={() => toggleVital(v.id)} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* No optional vitals fallback */}
-              {optionalVitals.length === 0 && (
-                <p className="text-xs text-gray-400 text-center py-3">All available vitals are doctor-assigned.</p>
-              )}
-            </div>
-
-            <div className="px-5 pt-3 pb-5">
-              <button
-                onClick={() => setShowVitalsSheet(false)}
-                className="w-full py-3 bg-teal-700 text-white text-sm font-bold rounded-xl"
-              >
-                Done
-              </button>
+              ))}
             </div>
           </div>
-        </>
-      )}
+        )}
+
+        {optionalVitals.length > 0 ? (
+          <div className="mb-1">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Your choices</span>
+              <div className="flex-1 h-px bg-gray-100" />
+              <span className="text-[10px] text-gray-400">{optionalVitals.filter(v => tracked(v.id)).length}/{optionalVitals.length} on</span>
+            </div>
+            <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+              {optionalVitals.map((v, i) => (
+                <div key={v.id} className={`flex items-center gap-3 px-3 py-2.5 ${i < optionalVitals.length - 1 ? 'border-b border-gray-50' : ''}`}>
+                  <span className="text-base w-6 text-center" aria-hidden="true">{v.icon}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-800">{v.name}</p>
+                    <p className="text-[10px] text-gray-400">{v.unit}</p>
+                  </div>
+                  <Toggle on={tracked(v.id)} onChange={() => toggleVital(v.id)} />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs text-gray-400 text-center py-3">Every vital you track was set by your doctor.</p>
+        )}
+      </BottomSheet>
     </Page>
   )
 }
