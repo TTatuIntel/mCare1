@@ -403,28 +403,6 @@ export function AuthRights({ className = '' }: { className?: string }) {
   )
 }
 
-/** "Encrypted in transit" is only claimed when this page really was served over HTTPS. */
-const SECURE = typeof window !== 'undefined' && window.location.protocol === 'https:'
-
-const TRUST: { icon: AuthIconName; label: string }[] = [
-  ...(SECURE ? [{ icon: 'lock' as const, label: 'Encrypted in transit' }] : []),
-  { icon: 'history', label: 'Full audit trail' },
-  { icon: 'users', label: 'Role-scoped access' },
-]
-
-export function TrustBadges({ className = '' }: { className?: string }) {
-  return (
-    <ul className={`flex flex-wrap ${className}`}>
-      {TRUST.map(t => (
-        <li key={t.label} className="flex items-center gap-1">
-          <AuthIcon name={t.icon} className="w-3.5 h-3.5 text-teal-700" />
-          {t.label}
-        </li>
-      ))}
-    </ul>
-  )
-}
-
 /* ─── One-time code ─────────────────────────────────────────────────── */
 
 const OTP_LEN = 6

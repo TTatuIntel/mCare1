@@ -22,6 +22,7 @@ Postgres, in `supabase/migrations` (run in order; add a new numbered file rather
 | `0018_care_team.sql` | `care_team_members`: consulting doctors. `consults()` widens `can_see_patient()` (reading only); `treats()` is unchanged, so only the treating doctor changes the record. `add_consulting_doctor()`, `remove_consulting_doctor()`. Internal notes, documents and messages are not included. |
 | `0019_delivery.sql` | `notification_deliveries`: every notification queued as an email; `claim_deliveries()` and `finish_delivery()` for the sender (service key only); retried up to five times, then `failed` with the reason. |
 | `0020_audit_search.sql` | `search_audit()`: the whole audit trail searched in the database, by words, person and kind of person, a page at a time. |
+| `0021_delivery_channels.sql` | Each person chooses email, text message and push (`profiles.notify_*`). Text messages only for an SOS, an escalation or a critical reading. `push_subscriptions` (one row per device, the owner's only). The invitation email. `claim_deliveries_for()` so a channel without a provider waits; `delivery_report()`. See [delivery.md](delivery.md). |
 | `0015_sync.sql` | `patient_changes` and `system_changes` counters, bumped by triggers; `my_change_token()`; published for Realtime where it exists. |
 
 Who owns each record, what each role may do and the path of a change: [data-flow.md](data-flow.md). The portals: [patient-module.md](patient-module.md), [doctor-module.md](doctor-module.md), [admin-module.md](admin-module.md).

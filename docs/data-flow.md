@@ -101,7 +101,7 @@ The counters say only that something changed. What is then loaded is still decid
 
 **Consulting doctor.** The treating doctor (or a coordinator) adds another approved doctor to the care team. That doctor then reads the same record (readings, alerts, medicines, shared notes, the started care plan) and the database refuses any change from them; internal notes, documents and messages stay out of reach. Either side can end it; access ends at once and the row is kept.
 
-**Email.** Every notification is also queued as an email (`notification_deliveries`). A sender outside the database claims a batch, sends, and reports each result: the local backend prints them, `supabase/functions/deliver` sends through Resend on a hosted project. SMS is not sent.
+**Email, text message, push.** Every notification is also queued for the channels the person allows (`notification_deliveries`): email for all of them, a text message only for what cannot wait, push on each device they allowed. A sender outside the database claims a batch, sends and reports each result; a channel with no provider yet waits in the queue. Setup: [delivery.md](delivery.md).
 
 **Account suspended.** `set_account_status(person, 'suspended', reason)` → refused for yourself, for the last active admin and for a doctor who still has patients → from that moment every table refuses that account, on the session it already holds → the person is told; their records stay.
 

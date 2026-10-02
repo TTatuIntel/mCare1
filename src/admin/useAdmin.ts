@@ -74,6 +74,8 @@ export function useAdmin() {
     timeOffOf: (doctorId: string) => app.timeOff.filter(o => o.doctorId === doctorId),
     /** RPC admin_report: counts for a period. */
     report: app.adminReport,
+    /** RPC delivery_report: emails, text messages and push sent and failed over a period. */
+    deliveryReport: app.deliveryReport,
     /** GET support_tickets */
     supportTickets: app.supportTickets,
 

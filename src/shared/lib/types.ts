@@ -99,6 +99,18 @@ export const RESET_TTL_MIN = 10
 /** Wrong-code attempts allowed before the token is burned. */
 export const MAX_RESET_ATTEMPTS = 5
 
+/**
+ * The channels a person allows. Email: every notification. Text message: only what cannot wait
+ * (an SOS, an escalation, a critical reading). Push: every notification, on each device they allowed.
+ */
+export interface NotifyPrefs { email: boolean; sms: boolean; push: boolean }
+
+/** How notifications went out over a period: counts by channel, and the latest failures (never an address). */
+export interface DeliveryReport {
+  channels: Partial<Record<'email' | 'sms' | 'push', { sent: number; failed: number; waiting: number }>>
+  failures: { channel: string; error: string; at: string }[]
+}
+
 export type ThemePref = 'light' | 'dark' | 'auto'
 export type FontSizePref = 'sm' | 'md' | 'lg'
 
@@ -132,6 +144,8 @@ export interface BaseUser {
   lastPasswordChangeAt?: number
   /** Epoch ms when the user agreed to the Terms and Privacy Policy at sign-up. */
   termsAcceptedAt?: number
+  /** How mCare may reach this person besides the app. In-app notifications always arrive. */
+  notify?: NotifyPrefs
   /** Why the account was suspended or deactivated, and when its status last changed. */
   statusReason?: string
   statusChangedAt?: string

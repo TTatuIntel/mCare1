@@ -682,16 +682,17 @@ export async function startBackend(options = {}) {
   const actualPort = server.address().port
 
   /* scheduled jobs: what pg_cron runs on a hosted project */
-  /* the email sender: what supabase/functions/deliver does on a hosted project. Here an email is printed, not sent. */
+  /* the sender: what supabase/functions/deliver does on a hosted project. Here every email, text message and push is printed, not sent. */
   async function deliverQueued() {
     let sent = 0
     // Until the queue is empty, a batch at a time.
     for (;;) {
       const { rows } = await q(`select * from public.claim_deliveries(20)`)
       for (const d of rows) {
-        outbox.unshift({ to: d.to_address, kind: 'notification', subject: d.subject, body: d.body, at: Date.now() })
+        outbox.unshift({ to: d.to_address, kind: d.notification_id ? 'notification' : 'invitation', channel: d.channel, subject: d.subject, body: d.body, at: Date.now() })
         outbox.length = Math.min(outbox.length, 50)
-        say(`  ✉  ${d.to_address}: ${d.subject}${d.body ? ` · ${d.body}` : ''}  (local backend: no email is sent)`)
+        const icon = d.channel === 'sms' ? '📱' : d.channel === 'push' ? '🔔' : '✉ '
+        say(`  ${icon} ${d.channel} → ${d.channel === 'push' ? 'device' : d.to_address}: ${d.subject}${d.body ? ` · ${d.body}` : ''}  (local backend: nothing is sent)`)
         await q(`select public.finish_delivery($1, true)`, [d.id])
       }
       sent += rows.length

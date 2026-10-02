@@ -12,7 +12,7 @@
  * Reading lives in ./records.
  */
 import type {
-  AccountStatus, AdminReport, AlertCommentKind, Appointment, ApprovalStatus, AssistantPerm, AvatarSpec, CarePlanDraft, CarePlanItemStatus, CarePlanStatus,
+  AccountStatus, AdminReport, DeliveryReport, NotifyPrefs, AlertCommentKind, Appointment, ApprovalStatus, AssistantPerm, AvatarSpec, CarePlanDraft, CarePlanItemStatus, CarePlanStatus,
   DayAvailability, EmergencyContact, FontSizePref, HealthProfile, MealPlan, NoteType, NoteVisibility, Prescription, ThemePref, UserRole, VitalDef, WorkBlock,
 } from '@/shared/lib/types'
 import type { VitalLevel } from '@/shared/lib/vitals'
@@ -72,7 +72,7 @@ async function okOnce(request: PromiseLike<Reply>): Promise<{ data: unknown; fre
 const withRef = (ref?: string) => (ref ? { client_ref: ref } : {})
 
 /* ─── Account ───────────────────────────────────────────────────────── */
-export interface ProfileChanges { name?: string; phone?: string; dob?: string; avatar?: AvatarSpec; theme?: ThemePref; fontSize?: FontSizePref }
+export interface ProfileChanges { name?: string; phone?: string; dob?: string; avatar?: AvatarSpec; theme?: ThemePref; fontSize?: FontSizePref; notify?: NotifyPrefs }
 
 export async function updateProfile(id: string, c: ProfileChanges) {
   const row: Record<string, unknown> = {}
@@ -82,6 +82,7 @@ export async function updateProfile(id: string, c: ProfileChanges) {
   if ('avatar' in c) row.avatar = c.avatar ?? null
   if (c.theme !== undefined) row.theme = c.theme
   if (c.fontSize !== undefined) row.font_size = c.fontSize
+  if (c.notify) { row.notify_email = c.notify.email; row.notify_sms = c.notify.sms; row.notify_push = c.notify.push }
   if (!Object.keys(row).length) return
   if ('full_name' in row && !row.full_name) throw new ApiError('Enter your name.')
   await ok((await db()).from('profiles').update(row).eq('id', id))
@@ -386,6 +387,15 @@ export const adminUpdateAppointment = async (id: string, change: { action: 'move
 }
 /** Counts for a period (YYYY-MM-DD to YYYY-MM-DD), made by the database from the records. */
 export const adminReport = async (from: string, to: string) => ok<AdminReport>((await db()).rpc('admin_report', { from_day: from, to_day: to }))
+export const deliveryReport = async (from: string, to: string) => ok<DeliveryReport>((await db()).rpc('delivery_report', { from_day: from, to_day: to }))
+
+/** Keeps this device as one that receives push notifications (the same device again replaces itself). */
+export async function savePushDevice(d: { endpoint: string; p256dh: string; auth: string; userAgent: string }) {
+  const supabase = await db()
+  await ok(supabase.from('push_subscriptions').delete().eq('endpoint', d.endpoint))
+  await ok(supabase.from('push_subscriptions').insert({ endpoint: d.endpoint, p256dh: d.p256dh, auth: d.auth, user_agent: d.userAgent }))
+}
+export const removePushDevice = async (endpoint: string) => { await ok((await db()).from('push_subscriptions').delete().eq('endpoint', endpoint)) }
 export async function decideDoctorRequest(patientId: string, approve: boolean, note?: string, alternativeDoctorId?: string) {
   const supabase = await db()
   const pending = await ok<{ id: string }[]>(supabase.from('doctor_requests').select('id').eq('patient_id', patientId).eq('status', 'pending'))

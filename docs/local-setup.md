@@ -88,8 +88,8 @@ Things to try once it opens, on both devices with the same account: log a readin
 | `npm run dev` | The app. |
 | `npm run typecheck` | TypeScript check. |
 | `npm run build` | Production build. |
-| `npm test` | Database rules (341 checks) and API (141 checks). About a minute. |
-| `npm run test:ui` | The patient, doctor, admin and assistant portals in a headless browser (64 checks). Needs Playwright, see the top of `supabase/tests/ui.test.mjs`. Takes several minutes. |
+| `npm test` | Database rules (350 checks) and API (144 checks). About a minute. |
+| `npm run test:ui` | The patient, doctor, admin and assistant portals in a headless browser (65 checks). Needs Playwright, see the top of `supabase/tests/ui.test.mjs`. Takes several minutes. |
 
 - **Start again with an empty database:** stop the backend, delete the `supabase/.data` folder, start it and seed again.
 - **Back to demo mode:** delete `.env.local`.

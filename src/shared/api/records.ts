@@ -288,6 +288,7 @@ export async function loadRecords(me: AppUser): Promise<Records> {
       id: p.id as string, name: p.full_name as string, email: p.email as string, phone: (p.phone as string) ?? '',
       status: p.status as AccountStatus, createdAt: dateLabel(new Date(p.created_at)),
       dob: p.dob ?? undefined, avatar: p.avatar ?? undefined, theme: p.theme ?? undefined, fontSize: p.font_size ?? undefined,
+      ...(p.id === me.id ? { notify: { email: p.notify_email ?? true, sms: p.notify_sms ?? true, push: p.notify_push ?? true } } : {}),
       statusReason: p.status_reason ?? undefined, statusChangedAt: p.status_changed_at ? dateLabel(new Date(p.status_changed_at)) : undefined,
       // Passwords and codes are held by the sign-in service; the app never sees them.
       verificationCode: '', password: '',

@@ -27,7 +27,6 @@ export const DOC_CATEGORIES: Record<DocCategory, { label: string; icon: string; 
   personal:      { label: 'Personal',       icon: '📁', color: 'gray' },
   other:         { label: 'Other',          icon: '📄', color: 'gray' },
 }
-export const ALL_CATEGORIES = Object.keys(DOC_CATEGORIES) as DocCategory[]
 /** Categories a patient may choose when uploading their own file. */
 export const PATIENT_UPLOAD_CATEGORIES: DocCategory[] = ['lab', 'imaging', 'discharge', 'referral', 'insurance', 'personal', 'other']
 /** Categories a clinician may choose when attaching a file. */

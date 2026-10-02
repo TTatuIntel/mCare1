@@ -413,6 +413,19 @@ check('queued notification emails are sent by the sender and marked sent', sentN
   && (await admin.from('notification_deliveries').select('id').in('status', ['queued', 'sending'])).data?.length === 0
   && (await staff.from('notification_deliveries').select('id')).data?.length === 0)
 
+const device = await pat.from('push_subscriptions').insert({ endpoint: 'https://push.example/api-test', p256dh: 'key', auth: 'secret', user_agent: 'API test' }).select().single()
+check('a patient registers a device for push, sees only their own, and switches text messages off', !!device.data?.id
+  && (await doc.from('push_subscriptions').select('id')).data?.length === 0
+  && !(await pat.from('profiles').update({ notify_sms: false }).eq('id', patId)).error
+  && (await pat.from('profiles').select('notify_sms').eq('id', patId).single()).data?.notify_sms === false, device.error?.message)
+await pat.from('profiles').update({ notify_sms: true }).eq('id', patId)
+await doc.from('messages').insert({ from_id: docId, to_id: patId, content: 'Push me' })
+const channelsSent = await backend.deliver()
+check('the sender delivers to the device too', channelsSent > 0 && backend.outbox.some(m => m.channel === 'push'))
+const dlv = await staff.rpc('delivery_report', { from_day: inDays(-30), to_day: today })
+check('the admin reads how delivery went; a patient cannot', dlv.data?.channels?.email?.sent > 0 && dlv.data?.channels?.push?.sent > 0
+  && !!(await pat.rpc('delivery_report', { from_day: inDays(-30), to_day: today })).error, dlv.error?.message)
+
 const hits = await staff.rpc('search_audit', { q: 'consulting', who: 'all', before: null, page_size: 50 })
 check('the audit trail is searched in the database, for whoever may read it only', hits.data?.length >= 2 && hits.data.every(r => /consulting/i.test(r.action + r.detail))
   && (await pat.rpc('search_audit', { q: null })).data?.length === 0, hits.error?.message)

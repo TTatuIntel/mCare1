@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { BackHeader, EmptyState, ChipFilter, StatTiles } from '@/shared'
-import type { AdminReport } from '@/shared/lib/types'
+import type { AdminReport, DeliveryReport } from '@/shared/lib/types'
 import { dayKey } from '@/shared/lib/vitals'
 import { downloadBlob } from '@/shared/documents/exporters'
 import { useAdmin } from './useAdmin'
@@ -18,12 +18,14 @@ const APPT_LABEL: Record<string, string> = {
    "Now" figures are what is waiting at this moment; the rest count what
    happened in the period. No patient is named and no reading is shown. */
 export default function ReportsTab({ onBack }: { onBack: () => void }) {
-  const { report } = useAdmin()
+  const { report, deliveryReport } = useAdmin()
   const [period, setPeriod] = useState<Period>('30')
   const [state, setState] = useState<{ data?: AdminReport; error?: string; loading: boolean }>({ loading: true })
+  const [delivery, setDelivery] = useState<DeliveryReport | null>(null)
   const load = () => {
     setState(s => ({ ...s, loading: true, error: undefined }))
     void report(daysAgo(Number(period) - 1), dayKey()).then(r => setState(r.ok ? { data: r.value, loading: false } : { error: r.error, loading: false }))
+    void deliveryReport(daysAgo(Number(period) - 1), dayKey()).then(r => setDelivery(r.ok ? r.value : null))
   }
   useEffect(load, [period]) // eslint-disable-line react-hooks/exhaustive-deps
   const r = state.data
@@ -103,6 +105,30 @@ export default function ReportsTab({ onBack }: { onBack: () => void }) {
               <div key={l} className="flex justify-between py-1 text-xs"><span className="text-gray-600">{l}</span><span className="font-mono font-bold text-gray-900">{v}</span></div>
             ))}
           </div>
+
+          {delivery && (
+            <div className="bg-white rounded-2xl p-4 shadow-sm">
+              <p className="text-sm font-bold text-gray-900 mb-2">Messages sent outside the app</p>
+              {(['email', 'sms', 'push'] as const).map(ch => {
+                const c = delivery.channels[ch]
+                return (
+                  <div key={ch} className="flex justify-between py-1 text-xs">
+                    <span className="text-gray-600">{ch === 'email' ? 'Email' : ch === 'sms' ? 'Text message' : 'Push'}</span>
+                    <span className="font-mono text-gray-900">
+                      <b>{c?.sent ?? 0}</b> sent{c?.failed ? <span className="text-red-600"> · {c.failed} failed</span> : null}{c?.waiting ? <span className="text-amber-700"> · {c.waiting} waiting</span> : null}
+                    </span>
+                  </div>
+                )
+              })}
+              {delivery.failures.length > 0 && (
+                <details className="mt-2 text-[11px]">
+                  <summary className="cursor-pointer text-gray-500">Latest failures ({delivery.failures.length})</summary>
+                  {delivery.failures.map((f, i) => <p key={i} className="text-gray-600 mt-1"><span className="font-semibold">{f.channel}</span> · {f.error}</p>)}
+                </details>
+              )}
+              <p className="text-[10px] text-gray-400 mt-2 leading-snug">Waiting means queued: a channel waits until its provider is set up. In-app notifications are not counted here.</p>
+            </div>
+          )}
 
           <div className="bg-white rounded-2xl p-4 shadow-sm span-all">
             <p className="text-sm font-bold text-gray-900 mb-2">Doctor workload</p>

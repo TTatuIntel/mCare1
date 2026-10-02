@@ -54,4 +54,4 @@ The clinical workspace for an approved, active doctor. Everything in it is the s
 - One doctor treats a patient at a time. Other doctors can be added to the care team as consulting doctors, who read the record and change nothing; there is no shared treating role.
 - Availability has no public holidays calendar and no per-day exceptions other than days away.
 - The prescription document filed at prescribing is not rewritten when the medicine is stopped; the stop is in the prescription's history.
-- Every notification is queued as an email. The hosted sender (`supabase/functions/deliver`) has not been run against a hosted project. SMS and push are not sent.
+- Notifications go out by email, text message (urgent only) and push as each person chooses; the providers are configured later ([delivery.md](delivery.md)) and their calls have not been run yet.

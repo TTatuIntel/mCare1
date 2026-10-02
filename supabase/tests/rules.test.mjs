@@ -1004,5 +1004,46 @@ const page2 = await search(ID.admin, null, null, page1[4].id, 5)
 check('it comes in pages, newest first, without repeats', page1.length === 5 && page2.length === 5 && Number(page2[0].id) < Number(page1[4].id))
 check('only someone who may read the audit log gets anything', (await search(ID.pat)).length === 0 && (await search(TREAT)).length === 0 && (await search(ID.asst)).length === 0)
 
+/* ── Delivery channels (0021): email, SMS for what cannot wait, push per device; each the person's choice ── */
+console.log('\nDelivery channels')
+await db.query(`update notification_deliveries set status = 'sent' where status in ('queued', 'sending')`)
+const waiting = async (channel, user) => (await db.query(`select to_address, subject from notification_deliveries where status = 'queued' and channel = $1 and user_id = $2`, [channel, user])).rows
+const sub = (await as(ID.pat, `insert into push_subscriptions (endpoint, p256dh, auth, user_agent) values ('https://push.example/abc', 'key', 'secret', 'Test phone') returning id, user_id`))[0]
+check('a device allowing push belongs to the person who allowed it, and nobody else reads it', sub.user_id === ID.pat
+  && (await as(TREAT, `select 1 from push_subscriptions`)).length === 0 && (await as(ID.admin, `select 1 from push_subscriptions`)).length === 0
+  && (await denied(ID.pat, `insert into push_subscriptions (user_id, endpoint, p256dh, auth) values ($1, 'https://push.example/x', 'k', 's')`, [TREAT])).blocked
+  && (await denied(ID.pat, `insert into push_subscriptions (endpoint, p256dh, auth) values ('http://insecure.example/x', 'k', 's')`)).blocked)
+
+await as(ID.pat, `insert into readings (patient_id, vital_id, value) values ($1, 'spo2', '82')`, [ID.pat])
+const sms = await waiting('sms', ID.pat), push = await waiting('push', ID.pat), email = await waiting('email', ID.pat)
+check('a critical reading reaches the patient by email, text message and push', sms.length === 1 && sms[0].to_address === '+254712345678'
+  && push.length >= 1 && push[0].to_address === 'https://push.example/abc' && email.length >= 1)
+await db.query(`update notification_deliveries set status = 'sent' where status in ('queued', 'sending')`)
+await as(TREAT, `insert into messages (from_id, to_id, content) values ($1, $2, 'A routine message')`, [TREAT, ID.pat])
+check('an ordinary notification is not sent as a text message', (await waiting('sms', ID.pat)).length === 0 && (await waiting('email', ID.pat)).length === 1)
+
+check('the person can switch each channel off; nobody else can', (await as(ID.pat, `update profiles set notify_email = false, notify_sms = false, notify_push = false where id = $1 returning 1`, [ID.pat])).length === 1
+  && (await as(TREAT, `update profiles set notify_email = true where id = $1 returning 1`, [ID.pat])).length === 0)
+await db.query(`update notification_deliveries set status = 'sent' where status in ('queued', 'sending')`)
+await as(ID.pat, `insert into readings (patient_id, vital_id, value) values ($1, 'spo2', '81')`, [ID.pat])
+check('…and then nothing is queued for them, while the in-app notification still arrives', (await waiting('email', ID.pat)).length === 0
+  && (await waiting('sms', ID.pat)).length === 0 && (await waiting('push', ID.pat)).length === 0
+  && (await as(ID.pat, `select 1 from notifications where created_at > now() - interval '1 minute' and title like 'Critical%'`)).length > 0)
+await as(ID.pat, `update profiles set notify_email = true, notify_sms = true, notify_push = true where id = $1`, [ID.pat])
+check('a device can be removed by its owner; the sender can forget one the browser withdrew', (await as(ID.pat, `delete from push_subscriptions where id = $1 returning 1`, [sub.id])).length === 1
+  && (await denied(ID.pat, `select forget_push_subscription($1)`, [sub.id])).blocked)
+
+await as(ID.admin, `select invite_account('invited.person@example.com', 'Invited Person', 'patient')`)
+const invite = (await db.query(`select user_id, subject, body, link from notification_deliveries where to_address = 'invited.person@example.com'`)).rows
+check('someone registered in advance is emailed an invitation to sign up', invite.length === 1 && invite[0].user_id === null
+  && /invited to mCare/.test(invite[0].subject) && /sign up with this email address/.test(invite[0].body))
+
+await db.query(`update notification_deliveries set status = 'failed', error = 'Provider refused the number' where id = (select max(id) from notification_deliveries where channel = 'sms')`)
+const dr = (await as(ID.admin, `select delivery_report(current_date - 30, current_date) r`))[0].r
+check('the delivery report counts by channel and shows what went wrong, without addresses', dr.channels.email?.sent > 0 && dr.channels.sms?.failed >= 1
+  && dr.failures.some(f => f.error === 'Provider refused the number') && !JSON.stringify(dr).includes('+254712345678'))
+check('it is for an administrator or someone who reads the audit log', (await denied(TREAT, `select delivery_report(current_date - 30, current_date)`)).blocked
+  && (await denied(ID.pat, `select delivery_report(current_date - 30, current_date)`)).blocked && (await denied(ID.asst, `select delivery_report(current_date - 30, current_date)`)).blocked)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

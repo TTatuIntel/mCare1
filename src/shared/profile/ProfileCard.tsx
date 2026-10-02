@@ -6,6 +6,7 @@ import { calcAge } from '@/shared/lib/vitals'
 import { Avatar, Pill, Chevron, InfoRow } from '@/shared/ui/primitives'
 import { MailboxSheet } from '@/shared/email/Mailbox'
 import { EditProfileSheet, ChangePasswordSheet, ThemeFontSheet, HelpSupportSheet, DeactivateAccountSheet } from './AccountSheets'
+import { NotificationsSheet } from './NotificationsSheet'
 
 /* ─── ProfileCard ───────────────────────────────────────────────────── */
 /**
@@ -21,6 +22,7 @@ export function ProfileCard({ children }: { children?: React.ReactNode }) {
   const [showHelp, setShowHelp]         = useState(false)
   const [showMail, setShowMail]         = useState(false)
   const [showDeactivate, setShowDeactivate] = useState(false)
+  const [showNotify, setShowNotify]     = useState(false)
   if (!currentUser) return null
 
   const rolePill: Record<string, string> = {
@@ -35,6 +37,7 @@ export function ProfileCard({ children }: { children?: React.ReactNode }) {
     unverified:       'amber',
     pending_approval: 'blue',
     suspended:        'red',
+    deactivated:      'gray',
   }
 
   const doctor    = currentUser.role === 'doctor'                                           ? currentUser as DoctorUser : null
@@ -103,6 +106,7 @@ export function ProfileCard({ children }: { children?: React.ReactNode }) {
         <SettingsRow icon="✏️" label="Edit Profile" onClick={() => setShowEdit(true)} />
         <SettingsRow icon="🔒" label="Change Password" onClick={() => setShowPw(true)} />
         <SettingsRow icon="🎨" label="Theme & Font" onClick={() => setShowTheme(true)} />
+        <SettingsRow icon="🔔" label="Notifications" onClick={() => setShowNotify(true)} />
         {/* Demo mode shows the emails mCare would send. In live mode they go to the person's real inbox. */}
         {!live && <SettingsRow icon="📧" label="Messages from mCare" onClick={() => setShowMail(true)} />}
         <SettingsRow icon="💬" label="Help & Support" onClick={() => setShowHelp(true)} />
@@ -115,6 +119,7 @@ export function ProfileCard({ children }: { children?: React.ReactNode }) {
       <HelpSupportSheet open={showHelp} onClose={() => setShowHelp(false)} />
       <MailboxSheet address={currentUser.email} phone={currentUser.phone} open={showMail} onClose={() => setShowMail(false)} />
       <DeactivateAccountSheet open={showDeactivate} onClose={() => setShowDeactivate(false)} />
+      <NotificationsSheet open={showNotify} onClose={() => setShowNotify(false)} />
 
       {/* role-specific injected content */}
       {children}

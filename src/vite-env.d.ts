@@ -5,6 +5,8 @@ interface ImportMetaEnv {
   readonly VITE_SUPABASE_URL?: string
   /** Supabase anon (public) key. Safe in the browser — the database rules do the protecting. */
   readonly VITE_SUPABASE_ANON_KEY?: string
+  /** Public half of the push key pair (VAPID). Leave unset until push is set up (AGENTS.md, "Notifications and delivery"). */
+  readonly VITE_VAPID_PUBLIC_KEY?: string
 }
 interface ImportMeta { readonly env: ImportMetaEnv }
 

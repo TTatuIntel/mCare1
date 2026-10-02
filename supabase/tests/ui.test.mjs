@@ -432,6 +432,16 @@ try {
     const told = (await row(patient.from('notifications').select('title'))).map(n => n.title)
     if (!told.includes('Your meal plan was updated') || !told.includes('A reading was added to your record')) throw new Error(told.join(', '))
   })
+  await step(p2, 'the patient switches text messages off; it is saved before the switch moves', async () => {
+    await p2.home(); await p2.page.getByRole('button', { name: 'Profile', exact: true }).click()
+    await p2.page.getByRole('button', { name: /Notifications/ }).click()
+    await p2.sheet().getByRole('switch', { name: 'Text message' }).click()
+    await p2.page.waitForFunction(() => document.querySelector('[role=switch][aria-label="Text message"]')?.getAttribute('aria-checked') === 'false', null, { timeout: 15000 })
+    const prof = await row(service.from('profiles').select('notify_sms, notify_email').eq('id', patId).single())
+    if (prof.notify_sms !== false || prof.notify_email !== true) throw new Error(JSON.stringify(prof))
+    await p2.sheet().getByText(/Push notifications are not set up|cannot receive notifications/).first().waitFor({ timeout: 10000 })
+    await p2.sheet().getByRole('button', { name: 'Done' }).click()
+  })
   await step(p2, 'the patient sees the consulting doctor on their care team', async () => {
     await p2.home(); await p2.page.getByRole('button', { name: /Care Team$/ }).click()
     await p2.page.getByText('Also on your care team').waitFor({ timeout: 15000 })
@@ -524,6 +534,7 @@ try {
   await step(a, 'the report is counted from the records', async () => {
     await a.nav('Reports')
     await a.page.getByText('Doctor workload').waitFor({ timeout: 20000 })
+    await a.page.getByText('Messages sent outside the app').waitFor({ timeout: 10000 })
     await a.page.getByRole('row', { name: /Dr\. Test Achieng/ }).waitFor({ timeout: 5000 })
   })
   await step(a, 'the admin approves a doctor after checking the licence; the doctor can then work', async () => {

@@ -28,7 +28,7 @@ The operational workspace: people, assignments, oversight, support and the audit
 | Documents: registry (metadata only), recovery, purge; open one for a support case | `DocumentsTab` | Document support; opening content: admin only | `document_registry()`, `staff_restore_document()`, `request_support_access()` | the patient is told when a document is opened |
 | Audit log: search the whole trail in the database, filter by who, page back, export | `AuditTab` | View audit logs | `search_audit()` | |
 | A patient's care team: add or remove a consulting doctor | `PatientAssignmentView`, shared `CareTeamCard` | Assign healthworkers | `add_consulting_doctor()`, `remove_consulting_doctor()` | the doctor and the patient are told |
-| Report: accounts, what is waiting, alerts, appointments, activity, doctor workload; export | `ReportsTab` | View audit logs | `admin_report()` | counts only |
+| Report: accounts, what is waiting, alerts, appointments, activity, doctor workload, messages sent by email / SMS / push; export | `ReportsTab` | View audit logs | `admin_report()` | counts only |
 
 ## Rules worth knowing
 
@@ -46,7 +46,7 @@ The operational workspace: people, assignments, oversight, support and the audit
 
 ## Not done
 
-- Every notification is queued as an email; on a hosted project it is sent by `supabase/functions/deliver` once a Resend key is set (not yet run against a hosted project). Invitations are not emailed: the admin tells the person to sign up.
+- Email, text messages and push are queued and sent by `supabase/functions/deliver` once providers are configured ([delivery.md](delivery.md)); the provider calls have not been run yet. Someone registered in advance is emailed an invitation.
 - Admins and assistants have no messaging. A person reaches the mCare team through a support request.
 - There is no screen for system-wide settings other than vital definitions.
 - Backups are the hosting service's; the app has no backup tool in live mode.

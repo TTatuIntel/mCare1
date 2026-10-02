@@ -4,13 +4,14 @@ import type {
   AppAlert, AlertCommentKind, Appointment, ApptEvent, PatientMessage, AppNotification, NotifKind, AuditEntry, ClinicalNote, MedDose, MealDone, ReportRequest,
   AccountStatus, SupportTicket, ResetToken, ResetChannel, AuthProvider, VitalsReportInclude, EmailContent, SentEmail, SentSms,
   MealPlan, HydrationLog, DoctorRating, Outcome, Invitation, UserRole, ReportNote,
-  CarePlan, CarePlanDraft, CarePlanItemStatus, CarePlanStatus, CareAssignment, CareTeamMember, PastPatient, TimeOff, WorkBlock, DayAvailability, AdminReport,
+  CarePlan, CarePlanDraft, CarePlanItemStatus, CarePlanStatus, CareAssignment, CareTeamMember, PastPatient, DeliveryReport, TimeOff, WorkBlock, DayAvailability, AdminReport,
 } from '@/shared/lib/types'
 import { emails as mail, sms as smsText, appBaseUrl, activationLink, activationToken } from '@/shared/email/emailTemplate'
 import { RESET_TTL_MIN, MAX_RESET_ATTEMPTS, AUTH_PROVIDER_LABELS, FOLLOW_UP_REASON } from '@/shared/lib/types'
 import { passwordIssue } from './auth'
 import { DEMO } from './demoData'
 import { backendConfigured, getSupabase, localBackend } from '@/shared/api/supabase'
+import { subscribePush, unsubscribePush } from '@/shared/lib/push'
 import { signOutBackend } from '@/shared/api/authBackend'
 import * as api from '@/shared/api/actions'
 import { changeToken, isoClock, isoDay, loadRecords, searchAudit as searchAuditApi, type AuditWho, type Records } from '@/shared/api/records'
@@ -183,6 +184,10 @@ interface Ctx extends DocumentApi {
   adminUpdateAppointment: (apptId: string, change: { action: 'move'; date: string; time?: string; reason: string } | { action: 'cancel'; reason: string }) => Saved
   /** Counts for a period, made from the records. A read: nothing is saved. */
   adminReport: (from: string, to: string) => Saved<AdminReport>
+  /** How notifications went out by email, text message and push over a period. A read. */
+  deliveryReport: (from: string, to: string) => Saved<DeliveryReport>
+  /** Turns push notifications on or off for this device. Live mode only: demo mode has no server to send them. */
+  setDevicePush: (on: boolean) => Saved
   /** One page of the audit trail, searched across the whole trail. `beforeId` continues after the last entry shown. A read. */
   searchAudit: (q: string, who: AuditWho, beforeId?: string) => Saved<AuditEntry[]>
   /** Consulting doctors on care teams, past and present. An open row (no `endedAt`) gives that doctor read access. */
@@ -580,6 +585,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if ('avatar' in p) profile.avatar = p.avatar
     if (p.theme) profile.theme = p.theme
     if (p.fontSize) profile.fontSize = p.fontSize
+    if (p.notify) profile.notify = p.notify
     await api.updateProfile(id, profile)
     if (p.termsAcceptedAt) await api.acceptTerms()
     if (p.health) await api.saveHealth(p.health)
@@ -1652,6 +1658,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }
 
   /* ─ reading only: figures for an administrator, and older audit entries ─ */
+  const deliveryReport = async (from: string, to: string): Saved<DeliveryReport> => {
+    if (!LIVE) return { ok: true, value: { channels: {}, failures: [] } }   // demo mode sends nothing
+    try { return { ok: true, value: await api.deliveryReport(from, to) } }
+    catch (e) { return { ok: false, error: api.explain(e) } }
+  }
+  const setDevicePush = async (on: boolean): Saved => {
+    if (!LIVE) return { ok: false, error: 'Push notifications work once mCare is connected to its server.' }
+    try {
+      if (on) await api.savePushDevice(await subscribePush())
+      else { const endpoint = await unsubscribePush(); if (endpoint) await api.removePushDevice(endpoint) }
+      return { ok: true, value: undefined }
+    } catch (e) { return { ok: false, error: e instanceof Error && !(e instanceof api.ApiError) && !/fetch/i.test(e.message) ? e.message : api.explain(e) } }
+  }
   const adminReport = async (from: string, to: string): Saved<AdminReport> => {
     if (LIVE) {
       try { return { ok: true, value: await api.adminReport(from, to) } }
@@ -1747,7 +1766,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       careAssignments, pastPatients, addClinicalNote,
       carePlans, saveCarePlan, setCarePlanStatus, setCarePlanItem, deleteCarePlanDraft,
       timeOff, setDoctorHours, addTimeOff, removeTimeOff, availabilityFor,
-      adminUpdateAppointment, adminReport, searchAudit,
+      adminUpdateAppointment, adminReport, deliveryReport, setDevicePush, searchAudit,
       careTeam, addConsultingDoctor, removeConsultingDoctor,
       addPrescription, setPrescriptionActive, logReading, correctReading, invalidateReading, sendAlertNow,
       setDoctorNote, setUnitPref, setThreshold, setCriticalThreshold, clinicalNotes, doses, toggleDose, mealsDone, toggleMeal,
