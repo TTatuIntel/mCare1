@@ -204,6 +204,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [ratings, setRatings] = useState<DoctorRating[]>([])
   const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([])
   const [now, setNow] = useState(Date.now())
+  const [patientLoadStatus, setPatientLoadStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [patientLoadError, setPatientLoadError] = useState<string>()
 
   // Always-fresh refs so callbacks never read stale state
   const usersRef = useRef(users); usersRef.current = users
@@ -216,6 +218,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const actorId = () => currentUserId ?? 'system'
 
   const findUser = (id?: string) => usersRef.current.find(u => u.id === id)
+
+  const reloadPatient = async () => {
+    const account = usersRef.current.find(u => u.id === currentUserId)
+    if (!backendConfigured || !account || account.role !== 'patient') return
+    setPatientLoadStatus('loading'); setPatientLoadError(undefined)
+    try {
+      const live = await loadPatientSnapshot(account.id)
+      setUsers(prev => {
+        const withoutDirectory = prev.filter(u => u.role !== 'doctor' || !live.doctors.some(d => d.id === u.id))
+        return withoutDirectory.map(u => u.id === account.id ? { ...u, ...live.patient } as PatientUser : u).concat(live.doctors)
+      })
+      setVitalDefs(live.vitalDefs)
+      setAlerts(live.alerts)
+      setAppointments(live.appointments)
+      setMessages(live.messages)
+      setDoses(live.doses)
+      setMealsDone(live.meals)
+      setReportRequests(live.reports)
+      setPatientLoadStatus('ready')
+    } catch (e) {
+      setPatientLoadError(e instanceof Error ? e.message : 'Could not load your health record.')
+      setPatientLoadStatus('error')
+    }
+  }
+
+  useEffect(() => { void reloadPatient() }, [currentUserId])
   const adminsAndMonitors = () => usersRef.current.filter(u =>
     (u.role === 'admin' && u.status === 'active') ||
     (u.role === 'assistant' && u.status === 'active' && (u as AdminUser).permissions.includes('monitor_patients')))
@@ -842,7 +870,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (pt.assignedDoctorId) notify(pt.assignedDoctorId, 'sos', `SOS: ${pt.name}`, body, 'alerts')
     adminsAndMonitors().forEach(a => notify(a.id, 'sos', `SOS: ${pt.name}`, body, 'alerts'))
     logAudit('SOS raised', pt.name)
-    return done()
+    return LIVE ? save(() => api.raiseSos(message)) : done()
   }
 
   const acknowledgeAlert = (alertId: string): Saved => {
