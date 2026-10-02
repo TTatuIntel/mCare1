@@ -8,6 +8,11 @@ import { emails as mail, sms as smsText, appBaseUrl, activationLink, activationT
 import { RESET_TTL_MIN, MAX_RESET_ATTEMPTS, AUTH_PROVIDER_LABELS } from '@/shared/lib/types'
 import { passwordIssue } from './auth'
 import { signOutBackend } from '@/shared/api/authBackend'
+import { backendConfigured } from '@/shared/api/supabase'
+import {
+  createMessage, createReading, loadPatientSnapshot, markNotification as markNotificationLive,
+  markNotifications as markNotificationsLive, raiseSos, readMessages, setDose, setMeal, updateReading,
+} from '@/shared/api/patientBackend'
 import { evaluate, alertIsFor, stamp, dateLabel, dayKey, ESCALATE_AFTER_MIN, CORRECTION_WINDOW_MIN, SELF_CLEAR_WINDOW_MIN, type VitalLevel } from '@/shared/lib/vitals'
 import { useDocumentStore, type DocumentApi } from '@/shared/documents/useDocumentStore'
 import { seedDocuments } from '@/shared/documents/docSeed'
@@ -240,6 +245,9 @@ interface Ctx extends DocumentApi {
   now: number
   currentUser: AppUser | null
   setCurrentUser: (u: AppUser | null) => void
+  reloadPatient: () => Promise<void>
+  patientLoadStatus: 'idle' | 'loading' | 'ready' | 'error'
+  patientLoadError?: string
   users: AppUser[]
   vitalDefs: VitalDef[]
   setVitalDefs: React.Dispatch<React.SetStateAction<VitalDef[]>>
@@ -347,6 +355,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [mealsDone, setMealsDone] = useState<MealDone[]>([])
   const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([])
   const [now, setNow] = useState(Date.now())
+  const [patientLoadStatus, setPatientLoadStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [patientLoadError, setPatientLoadError] = useState<string>()
 
   // Always-fresh refs so callbacks never read stale state
   const usersRef = useRef(users); usersRef.current = users
@@ -357,6 +367,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const actorId = () => currentUserId ?? 'system'
 
   const findUser = (id?: string) => usersRef.current.find(u => u.id === id)
+
+  const reloadPatient = async () => {
+    const account = usersRef.current.find(u => u.id === currentUserId)
+    if (!backendConfigured || !account || account.role !== 'patient') return
+    setPatientLoadStatus('loading'); setPatientLoadError(undefined)
+    try {
+      const live = await loadPatientSnapshot(account.id)
+      setUsers(prev => {
+        const withoutDirectory = prev.filter(u => u.role !== 'doctor' || !live.doctors.some(d => d.id === u.id))
+        return withoutDirectory.map(u => u.id === account.id ? { ...u, ...live.patient } as PatientUser : u).concat(live.doctors)
+      })
+      setVitalDefs(live.vitalDefs)
+      setAlerts(live.alerts)
+      setAppointments(live.appointments)
+      setMessages(live.messages)
+      setDoses(live.doses)
+      setMealsDone(live.meals)
+      setReportRequests(live.reports)
+      setPatientLoadStatus('ready')
+    } catch (e) {
+      setPatientLoadError(e instanceof Error ? e.message : 'Could not load your health record.')
+      setPatientLoadStatus('error')
+    }
+  }
+
+  useEffect(() => { void reloadPatient() }, [currentUserId])
   const adminsAndMonitors = () => usersRef.current.filter(u =>
     (u.role === 'admin' && u.status === 'active') ||
     (u.role === 'assistant' && u.status === 'active' && (u as AdminUser).permissions.includes('monitor_patients')))
@@ -404,8 +440,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const u = findUser(userId)
     if (opts.email !== false && u?.email && u.status !== 'suspended') sendEmail(mail.notification(u, kind, title, body), u.id)
   }
-  const markNotificationRead = (id: string) => setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n))
-  const markAllNotificationsRead = (userId: string) => setNotifications(prev => prev.map(n => n.userId === userId ? { ...n, read: true } : n))
+  const markNotificationRead = (id: string) => {
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n))
+    if (backendConfigured) void markNotificationLive(id).catch(console.error)
+  }
+  const markAllNotificationsRead = (userId: string) => {
+    setNotifications(prev => prev.map(n => n.userId === userId ? { ...n, read: true } : n))
+    if (backendConfigured) void markNotificationsLive(userId).catch(console.error)
+  }
   const logAudit = (action: string, detail: string) => {
     const t = Date.now()
     setAudit(prev => [{ id: uid('au'), actorId: actorId(), action, detail, at: t, createdAt: stamp(new Date(t)) }, ...prev])
@@ -562,13 +604,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const toggleDose = (patientId: string, rxId: string, slot: number) => {
     const day = dayKey()
     const same = (d: MedDose) => d.patientId === patientId && d.rxId === rxId && d.day === day && d.slot === slot
+    const taken = !doses.some(same)
     setDoses(prev => prev.some(same) ? prev.filter(d => !same(d)) : [...prev, { patientId, rxId, slot, day, takenAt: stamp() }])
+    if (backendConfigured) void setDose(patientId, rxId, slot, day, taken).then(reloadPatient).catch(console.error)
   }
   const toggleMeal = (patientId: string, mealId: string, note?: string) => {
     const day = dayKey()
+    const taken = !mealsDone.some(m => m.patientId === patientId && m.mealId === mealId && m.day === day)
     setMealsDone(prev => prev.some(m => m.patientId === patientId && m.mealId === mealId && m.day === day)
       ? prev.filter(m => !(m.patientId === patientId && m.mealId === mealId && m.day === day))
       : [...prev, { patientId, mealId, day, takenAt: stamp(), ...(note ? { note } : {}) }])
+    if (backendConfigured) void setMeal(patientId, mealId, day, note, taken).then(reloadPatient).catch(console.error)
   }
   const setDoctorNote = (patientId: string, note: string) => {
     if (!note.trim()) return
@@ -618,6 +664,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const t = Date.now()
     const full: VitalReading = { ...reading, at: t, loggedAt: stamp(new Date(t)) }
     patchPatient(patientId, p => ({ ...p, readings: [full, ...p.readings] }))
+    if (backendConfigured) void createReading(patientId, reading).then(reloadPatient).catch(console.error)
     if (!pt || !def) return { level: 'normal', alerted: false, readingId: full.id }
     const level = evaluate(pt, def, full.value)
 
@@ -674,6 +721,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const correctReading = (patientId: string, readingId: string, value: string) => {
     patchPatient(patientId, p => ({ ...p, readings: p.readings.map(x => x.id === readingId ? { ...x, value } : x) }))
+    if (backendConfigured) void updateReading(readingId, value).then(reloadPatient).catch(console.error)
     const pt = findUser(patientId) as PatientUser | undefined
     const rd = pt?.readings.find(x => x.id === readingId)
     const def = vitalDefs.find(v => v.id === rd?.vitalId)
@@ -702,6 +750,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (pt.assignedDoctorId) notify(pt.assignedDoctorId, 'sos', `SOS: ${pt.name}`, body, 'alerts')
     adminsAndMonitors().forEach(a => notify(a.id, 'sos', `SOS: ${pt.name}`, body, 'alerts'))
     logAudit('SOS raised', pt.name)
+    if (backendConfigured) void raiseSos(message).then(reloadPatient).catch(console.error)
   }
 
   const acknowledgeAlert = (alertId: string) => {
@@ -797,9 +846,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setMessages(prev => [...prev, { id: uid('msg'), fromId, toId, content, sentAt: stamp(), read: false }])
     notify(toId, 'message', `New message from ${findUser(fromId)?.name ?? 'mCare'}`, content.slice(0, 80),
       findUser(toId)?.role === 'patient' ? 'messages' : 'patients')
+    if (backendConfigured) void createMessage(fromId, toId, content).then(reloadPatient).catch(console.error)
   }
-  const markMessagesRead = (fromId: string, toId: string) =>
+  const markMessagesRead = (fromId: string, toId: string) => {
     setMessages(prev => prev.map(m => m.fromId === fromId && m.toId === toId && !m.read ? { ...m, read: true } : m))
+    if (backendConfigured) void readMessages(fromId, toId).catch(console.error)
+  }
 
   /* ─ account self-service: password recovery ───────────────────────────
      Every password change — self-service or forgotten — is gated behind a
@@ -1025,7 +1077,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   return (
     <AppContext.Provider value={{
       ...docStore,
-      now, currentUser, setCurrentUser,
+      now, currentUser, setCurrentUser, reloadPatient, patientLoadStatus, patientLoadError,
       users, vitalDefs, setVitalDefs,
       updateUser, addUser,
       getDoctors, getPatients, getAdmins,

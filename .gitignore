@@ -2,10 +2,38 @@ node_modules/
 dist/
 build/
 .cache/
+
+# Local environment and credentials (safe templates may be committed)
 .env*
+!.env.example
+!.env.*.example
+
+# This project uses pnpm; avoid accidental npm/Yarn lockfiles
+package-lock.json
+yarn.lock
+
+# Vite / TypeScript caches
 .vite/
 vite.config.*.timestamp-*
 *.tsbuildinfo
+
+# Test output
+coverage/
+.nyc_output/
+
+# Supabase CLI local state
+supabase/.temp/
+supabase/.branches/
+
+# Editors and operating-system metadata
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
 *-debug.log*
 logs/
 *.log

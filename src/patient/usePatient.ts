@@ -13,6 +13,11 @@ import { useApp } from '@/shared/state/AppContext'
 import type { LoadStatus } from '@/shared'
 import type { AppUser, Appointment, DoctorUser, EmergencyContact, HealthProfile, PatientUser, AvatarSpec } from '@/shared/lib/types'
 import { dateLabel } from '@/shared/lib/vitals'
+import { backendConfigured } from '@/shared/api/supabase'
+import {
+  createAppointment, createReportRequest, deleteContact, replaceHealth, replaceTrackedVitals,
+  requestDoctor as requestDoctorLive, saveContact, updatePatientProfile, updateProfile,
+} from '@/shared/api/patientBackend'
 
 /** What a patient may know about a clinician: directory details only — never credentials or other patients. */
 export type PublicDoctor = Pick<DoctorUser,
@@ -45,10 +50,12 @@ export function usePatient() {
   const app = useApp()
   const patient = app.currentUser as PatientUser
 
-  // In-memory data is always there. With the API these come from the request state.
-  const status: LoadStatus = 'ready'
-  const error: string | undefined = undefined
-  const reload = () => {}
+  const status: LoadStatus = backendConfigured
+    ? app.patientLoadStatus === 'error' ? 'error' : app.patientLoadStatus === 'ready' ? 'ready' : 'loading'
+    : 'ready'
+  const error = app.patientLoadError
+  const reload = app.reloadPatient
+  const persist = (work: Promise<unknown>) => { void work.then(reload).catch(err => console.error('Patient record was not saved', err)) }
 
   /** PATCH /me — whitelisted fields only. */
   const patchSelf = (patch: SelfPatch) => app.updateUser(patient.id, patch as Partial<AppUser>)
@@ -72,16 +79,25 @@ export function usePatient() {
     nameOf: (id: string | undefined, fallback = 'Your care team') => app.users.find(u => u.id === id)?.name ?? fallback,
 
     /** PUT /me/tracked-vitals */
-    setTrackedVitals: (ids: string[]) => patchSelf({ trackedVitalIds: [...new Set(ids)] }),
+    setTrackedVitals: (ids: string[]) => {
+      const next = [...new Set(ids)]
+      patchSelf({ trackedVitalIds: next })
+      if (backendConfigured) persist(replaceTrackedVitals(patient.id, next))
+    },
 
     /** PUT /me/health — optionally starts tracking vitals that a newly added condition calls for. */
-    saveHealth: (health: HealthProfile, alsoTrack: string[] = []) => patchSelf({
-      health: { ...health, otherMedicines: health.otherMedicines?.trim() || undefined },
-      ...(alsoTrack.length ? { trackedVitalIds: [...new Set([...patient.trackedVitalIds, ...alsoTrack])] } : {}),
-    }),
+    saveHealth: (health: HealthProfile, alsoTrack: string[] = []) => {
+      const clean = { ...health, otherMedicines: health.otherMedicines?.trim() || undefined }
+      const tracked = [...new Set([...patient.trackedVitalIds, ...alsoTrack])]
+      patchSelf({ health: clean, ...(alsoTrack.length ? { trackedVitalIds: tracked } : {}) })
+      if (backendConfigured) persist(Promise.all([replaceHealth(patient.id, clean), ...(alsoTrack.length ? [replaceTrackedVitals(patient.id, tracked)] : [])]))
+    },
 
     /** PATCH /me — date of birth and profile picture. */
-    saveAbout: (dob: string | undefined, avatar: AvatarSpec) => patchSelf({ dob, avatar }),
+    saveAbout: (dob: string | undefined, avatar: AvatarSpec) => {
+      patchSelf({ dob, avatar })
+      if (backendConfigured) persist(updateProfile(patient.id, { dob: dob ?? null, avatar }))
+    },
 
     /** POST /me/emergency-contacts — there is one next of kin, and they are listed first so SOS offers to call them. */
     saveEmergencyContact: (c: Omit<EmergencyContact, 'id'> & { id?: string }) => {
@@ -92,24 +108,28 @@ export function usePatient() {
           ? [contact, ...others.map(x => ({ ...x, nextOfKin: false }))]
           : [...others, contact],
       })
+      if (backendConfigured) persist(saveContact(patient.id, contact))
       return contact
     },
     /** DELETE /me/emergency-contacts/:id */
-    removeEmergencyContact: (id: string) =>
-      patchSelf({ emergencyContacts: (patient.emergencyContacts ?? []).filter(x => x.id !== id) }),
+    removeEmergencyContact: (id: string) => {
+      patchSelf({ emergencyContacts: (patient.emergencyContacts ?? []).filter(x => x.id !== id) })
+      if (backendConfigured) persist(deleteContact(id))
+    },
 
     /** POST /me/setup/complete */
-    completeSetup: () => patchSelf({ profileSetup: 'done' }),
+    completeSetup: () => { patchSelf({ profileSetup: 'done' }); if (backendConfigured) persist(updatePatientProfile(patient.id, { profile_setup: 'done' })) },
     /** POST /me/setup/skip — into the portal now; Home keeps a reminder to finish. What was already entered stays saved. */
-    skipSetup: () => patchSelf({ profileSetup: 'skipped' }),
+    skipSetup: () => { patchSelf({ profileSetup: 'skipped' }); if (backendConfigured) persist(updatePatientProfile(patient.id, { profile_setup: 'skipped' })) },
     /** POST /me/setup/resume — back to the setup steps from the Home reminder. */
-    resumeSetup: () => patchSelf({ profileSetup: 'pending' }),
+    resumeSetup: () => { patchSelf({ profileSetup: 'pending' }); if (backendConfigured) persist(updatePatientProfile(patient.id, { profile_setup: 'pending' })) },
 
     /** POST /me/doctor-request — admins who can approve are told. */
     requestDoctor: (doctorId: string) => {
       const doc = doctorById(doctorId)
       if (!doc) return false
       patchSelf({ doctorRequest: { doctorId, requestedAt: dateLabel(), status: 'pending' } })
+      if (backendConfigured) persist(requestDoctorLive(doctorId))
       app.getAdmins().filter(a => !a.isAssistant || a.permissions.includes('approve_patient_requests'))
         .forEach(a => app.notify(a.id, 'assignment', `Doctor request: ${patient.name}`, `Requested ${doc.name}`, 'assign'))
       return true
@@ -128,6 +148,7 @@ export function usePatient() {
         status: 'requested', createdAt: dateLabel(),
       }
       app.addAppointment(appt)
+      if (backendConfigured) persist(createAppointment(appt, r.date, r.time))
       return true
     },
 
@@ -135,7 +156,11 @@ export function usePatient() {
     reportRequests: app.reportRequests.filter(r => r.patientId === patient.id)
       .map(r => ({ ...r, ready: !!r.docId && !!app.getDocument(r.docId) })),
     /** POST /me/report-requests — asks the care team for a signed vitals report. False without a doctor. */
-    requestReport: (periodDays: number, reason: string) => app.requestReport(patient.id, periodDays, reason),
+    requestReport: (periodDays: number, reason: string) => {
+      const ok = app.requestReport(patient.id, periodDays, reason)
+      if (ok && backendConfigured && patient.assignedDoctorId) persist(createReportRequest(patient.id, patient.assignedDoctorId, periodDays, reason.trim()))
+      return ok
+    },
 
     /** POST /auth/logout */
     signOut: () => app.setCurrentUser(null),
