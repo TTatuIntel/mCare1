@@ -96,6 +96,8 @@ const step = async (s, name, work) => {
   catch (e) { check(name, false, String(e.message).split('\n').slice(0, 3).join(' / ')); await s.shot('fail-' + name.replace(/\W+/g, '-').slice(0, 40)).catch(() => {}); await s.page.keyboard.press('Escape').catch(() => {}) }
 }
 const inDays = n => { const d = new Date(Date.now() + n * 86_400_000); return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-') }
+/** The `n`th Monday after today (0 = the next one), as YYYY-MM-DD. */
+const mondayAfter = n => { let k = 1; while (new Date(Date.now() + k * 86_400_000).getDay() !== 1) k++; return inDays(k + 7 * n) }
 
 try {
   /* ── A new patient ── */
@@ -288,6 +290,8 @@ try {
 
   /* ── the same record from the doctor's and the admin's portals ── */
   console.log('\nOne record, three portals')
+  // A second patient for the doctor, so the Messages screen is a list of conversations.
+  await service.from('patients').update({ assigned_doctor_id: docId }).eq('id', newId)
   const d = await session('laptop')
   await d.signIn('test.doctor@mcare.test')
   await step(d, 'the doctor opens the patient and sees what the patient logged', async () => {
@@ -360,6 +364,19 @@ try {
     const plan = (await row(patient.from('care_plans').select('status, title')))[0]
     if (plan?.status !== 'active' || plan.title !== 'TEST Blood pressure control') throw new Error(JSON.stringify(plan))
   })
+  await step(d, 'the doctor adds a consulting doctor, who can then read the record and change nothing', async () => {
+    await d.page.getByRole('button', { name: 'Overview', exact: true }).click()
+    await d.page.getByRole('button', { name: '+ Consulting doctor' }).click()
+    await d.sheet().getByRole('radio', { name: /Dr\. Test Mutua/ }).click()
+    await d.sheet().getByPlaceholder('e.g. Cardiology opinion').fill('TEST: second opinion')
+    await d.sheet().getByRole('button', { name: 'Add to care team' }).click()
+    await d.page.getByText(/Consulting doctor added/).waitFor({ timeout: 15000 })
+    const mutua = api(backend.anonKey)
+    await mutua.auth.signInWithPassword({ email: 'test.doctor2@mcare.test', password: PW })
+    if (!(await row(mutua.from('readings').select('id').eq('patient_id', patId))).length) throw new Error('the consulting doctor cannot read the readings')
+    const tried = await mutua.from('prescriptions').insert({ patient_id: patId, doctor_id: (await mutua.auth.getUser()).data.user.id, medication: 'X', dosage: '1', frequency: 'Once daily' })
+    if (!tried.error) throw new Error('a consulting doctor could prescribe')
+  })
   await step(d, 'the doctor completes the visit the patient accepted', async () => {
     await d.nav('Appts')
     await d.page.getByRole('button', { name: 'Completed', exact: true }).first().click()
@@ -377,6 +394,21 @@ try {
     await d.page.getByText(/is reviewing/).first().waitFor({ timeout: 15000 })
     const a = (await row(service.from('alerts').select('status, acknowledged_by').eq('patient_id', patId).eq('value', '84')))[0]
     if (a?.status !== 'acknowledged' || a.acknowledged_by !== docId) throw new Error(JSON.stringify(a))
+  })
+  await step(d, 'the doctor replies from Messages; the patient has the same thread and is pointed at it', async () => {
+    await d.nav('Chat')
+    const conversations = d.page.getByRole('group', { name: 'Conversations' })
+    await conversations.getByRole('button', { name: /Test New Patient/ }).waitFor({ timeout: 15000 })
+    await d.page.getByText('Choose a conversation').waitFor({ timeout: 5000 })
+    await conversations.getByRole('button', { name: /Test Patient One/ }).click()
+    await d.page.getByText('TEST message from the phone').waitFor({ timeout: 15000 })
+    await d.page.getByLabel('Message').fill('TEST reply typed in the doctor portal')
+    await d.page.getByRole('button', { name: 'Send', exact: true }).click()
+    await d.page.getByRole('log').getByText('TEST reply typed in the doctor portal').waitFor({ timeout: 15000 })
+    const sent = await row(patient.from('messages').select('from_id, client_ref').eq('content', 'TEST reply typed in the doctor portal'))
+    if (sent.length !== 1 || sent[0].from_id !== docId || !sent[0].client_ref) throw new Error(JSON.stringify(sent))
+    const told = (await row(patient.from('notifications').select('link, resource_type, resource_id').eq('kind', 'message').order('created_at', { ascending: false }).limit(1)))[0]
+    if (told?.link !== 'messages' || told.resource_type !== 'conversation' || told.resource_id !== docId) throw new Error(JSON.stringify(told))
   })
   await step(d, 'the doctor sets working hours from Profile', async () => {
     await d.home2('Patients under care'); await d.page.getByRole('button', { name: 'Profile', exact: true }).click()
@@ -400,7 +432,30 @@ try {
     const told = (await row(patient.from('notifications').select('title'))).map(n => n.title)
     if (!told.includes('Your meal plan was updated') || !told.includes('A reading was added to your record')) throw new Error(told.join(', '))
   })
+  await step(p2, 'the patient sees the consulting doctor on their care team', async () => {
+    await p2.home(); await p2.page.getByRole('button', { name: /Care Team$/ }).click()
+    await p2.page.getByText('Also on your care team').waitFor({ timeout: 15000 })
+    await p2.page.getByText('Dr. Test Mutua').first().waitFor({ timeout: 5000 })
+  })
+  await step(p2, 'the patient is offered only the doctor\'s open times, and books one', async () => {
+    await p2.nav('Appts')
+    await p2.page.getByRole('button', { name: 'Request an appointment', exact: true }).first().click()
+    await p2.page.getByPlaceholder('e.g. Blood pressure follow-up').fill('TEST slot visit')
+    await p2.sheet().locator('input[type=date]').fill(mondayAfter(0))
+    await p2.page.getByRole('radiogroup', { name: 'Open times' }).waitFor({ timeout: 15000 })
+    if (await p2.sheet().locator('input[type=time]').count()) throw new Error('a free time field is offered for a doctor with a timetable')
+    await p2.page.getByRole('radio', { name: '9:30 AM' }).click()
+    await p2.page.getByRole('button', { name: 'Send request' }).click()
+    await p2.page.getByText('TEST slot visit').first().waitFor({ timeout: 15000 })
+    const ap = (await row(service.from('appointments').select('preferred_date, preferred_time, status').eq('title', 'TEST slot visit')))[0]
+    if (ap?.preferred_date !== mondayAfter(0) || !ap.preferred_time?.startsWith('09:30') || ap.status !== 'requested') throw new Error(JSON.stringify(ap))
+  })
   await p2.context.close()
+
+  // A doctor who has just signed up, waiting to be approved.
+  const pending = api(backend.anonKey)
+  const pendingUp = await pending.auth.signUp({ email: 'test.pendingdoc@mcare.test', password: PW, options: { data: { full_name: 'Dr. Test Pending', role: 'doctor' } } })
+  await service.from('doctors').update({ specialty: 'Nephrology', license_no: 'TEST-0003', hospital: 'mCare Test Clinic' }).eq('id', pendingUp.data.user.id)
 
   const a = await session('laptop')
   await a.signIn('test.admin@mcare.test')
@@ -419,6 +474,11 @@ try {
     await a.nav('Audit Log')
     await a.page.getByText('Set meal plan').first().waitFor({ timeout: 15000 })
     await a.page.getByText('Recorded reading for patient').first().waitFor({ timeout: 5000 })
+    // the search runs over the whole trail in the database
+    await a.page.getByLabel('Search the audit log').fill('consulting')
+    await a.page.getByText('Added consulting doctor').first().waitFor({ timeout: 15000 })
+    await a.page.waitForTimeout(500)
+    if (await a.page.getByText('Set meal plan').count()) throw new Error('the search did not narrow the list')
     await a.nav('Documents')
     await a.page.getByText('(title hidden)').first().waitFor({ timeout: 15000 })
     if (/test lab result/i.test(await a.text())) throw new Error('a document title is visible to the admin')
@@ -465,6 +525,31 @@ try {
     await a.nav('Reports')
     await a.page.getByText('Doctor workload').waitFor({ timeout: 20000 })
     await a.page.getByRole('row', { name: /Dr\. Test Achieng/ }).waitFor({ timeout: 5000 })
+  })
+  await step(a, 'the admin approves a doctor after checking the licence; the doctor can then work', async () => {
+    await a.nav('Approvals')
+    await a.page.getByText('Dr. Test Pending').waitFor({ timeout: 15000 })
+    await a.page.getByRole('button', { name: 'Approve', exact: true }).first().click()
+    await a.sheet().getByRole('button', { name: 'Approve', exact: true }).click()
+    await a.page.getByText(/Dr\. Test Pending approved/).waitFor({ timeout: 15000 })
+    const doc = await row(service.from('doctors').select('approval_status').eq('id', pendingUp.data.user.id).single())
+    const prof = await row(service.from('profiles').select('status').eq('id', pendingUp.data.user.id).single())
+    if (doc.approval_status !== 'approved' || prof.status !== 'active') throw new Error(JSON.stringify({ doc, prof }))
+  })
+  await step(a, 'support moves an appointment for the patient, within the doctor\'s hours; both are told', async () => {
+    await a.nav('Appointments')
+    await a.page.getByPlaceholder(/Search by reference/).fill('TEST slot visit')
+    await a.page.getByRole('button', { name: 'Move', exact: true }).first().click()
+    await a.sheet().locator('input[type=date]').fill(mondayAfter(1))
+    await a.sheet().getByRole('radio', { name: '10:00 AM' }).click()
+    await a.sheet().getByPlaceholder(/cannot travel/).fill('TEST: patient phoned')
+    await a.sheet().getByRole('button', { name: 'Move appointment' }).click()
+    await a.page.getByText(/Appointment moved ·/).waitFor({ timeout: 15000 })
+    const ap = (await row(service.from('appointments').select('id, preferred_date, preferred_time').eq('title', 'TEST slot visit')))[0]
+    if (ap?.preferred_date !== mondayAfter(1) || !ap.preferred_time?.startsWith('10:00')) throw new Error(JSON.stringify(ap))
+    const moved = await row(service.from('appointment_events').select('action, detail').eq('appointment_id', ap.id).eq('action', 'moved'))
+    if (moved.length !== 1 || !/TEST: patient phoned/.test(moved[0].detail)) throw new Error(JSON.stringify(moved))
+    if (!(await row(patient.from('notifications').select('title'))).some(n => n.title === 'Appointment moved by mCare support')) throw new Error('the patient was not told')
   })
   check('the admin portal: no script errors', a.errors.length === 0, a.errors.join(' | '))
   await a.shot('admin-documents'); await a.context.close()
@@ -548,7 +633,7 @@ try {
         ['appointments', async x => { await x.home2('Patients on mCare'); await x.page.getByRole('button', { name: /^(📅\s*)?Appointments$/ }).first().click(); await x.page.getByPlaceholder(/Search by reference/).waitFor() }],
         ['support', async x => { await x.home2('Patients on mCare'); await x.page.getByRole('button', { name: /Support$/ }).first().click(); await x.page.getByText(/waiting ·/).waitFor() }],
         ['reports', async x => { await x.home2('Patients on mCare'); await x.page.getByRole('button', { name: /Reports$/ }).first().click(); await x.page.getByText('Doctor workload').waitFor({ timeout: 20000 }) }],
-        ['audit', async x => { await x.home2('Patients on mCare'); await x.page.getByRole('button', { name: /Audit Log$/ }).first().click(); await x.page.getByPlaceholder(/Search actions/).waitFor() }],
+        ['audit', async x => { await x.home2('Patients on mCare'); await x.page.getByRole('button', { name: /Audit Log$/ }).first().click(); await x.page.getByPlaceholder(/Search the whole trail/).waitFor() }],
       ]],
     ]
     for (const [portal, email, marker, list] of portals) {

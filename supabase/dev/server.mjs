@@ -682,7 +682,25 @@ export async function startBackend(options = {}) {
   const actualPort = server.address().port
 
   /* scheduled jobs: what pg_cron runs on a hosted project */
+  /* the email sender: what supabase/functions/deliver does on a hosted project. Here an email is printed, not sent. */
+  async function deliverQueued() {
+    let sent = 0
+    // Until the queue is empty, a batch at a time.
+    for (;;) {
+      const { rows } = await q(`select * from public.claim_deliveries(20)`)
+      for (const d of rows) {
+        outbox.unshift({ to: d.to_address, kind: 'notification', subject: d.subject, body: d.body, at: Date.now() })
+        outbox.length = Math.min(outbox.length, 50)
+        say(`  ✉  ${d.to_address}: ${d.subject}${d.body ? ` · ${d.body}` : ''}  (local backend: no email is sent)`)
+        await q(`select public.finish_delivery($1, true)`, [d.id])
+      }
+      sent += rows.length
+      if (rows.length < 20) return sent
+    }
+  }
+
   const timers = options.jobs === false ? [] : [
+    setInterval(() => { deliverQueued().catch(e => console.error('delivery job:', e.message)) }, 10_000),
     setInterval(() => { q(`select public.escalate_stale_alerts()`).catch(e => console.error('escalation job:', e.message)) }, 60_000),
     setInterval(() => { q(`select public.purge_deleted_documents()`).catch(e => console.error('purge job:', e.message)) }, 6 * 3600_000),
     setInterval(() => { q(`select public.complete_ended_prescriptions()`).catch(e => console.error('prescription job:', e.message)) }, 3600_000),
@@ -693,6 +711,8 @@ export async function startBackend(options = {}) {
     url: `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${actualPort}`, port: actualPort, anonKey, serviceKey, outbox, db, dataDir,
     /** Runs SQL as the database owner. For tests and scripts only. */
     sql: (text, params) => q(text, params),
+    /** Sends what is waiting in the email queue now (the job does this every 10 s). Resolves with how many. */
+    deliver: deliverQueued,
     close: async () => {
       timers.forEach(clearInterval)
       await new Promise(done => server.close(done))

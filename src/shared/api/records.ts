@@ -10,7 +10,7 @@
  */
 import type {
   AccountStatus, AdminUser, AppAlert, AppNotification, AppUser, Appointment, ApprovalStatus, AssistantPerm, AuditEntry,
-  CareAssignment, CarePlan, PastPatient, TimeOff,
+  CareAssignment, CarePlan, CareTeamMember, PastPatient, TimeOff,
   ClinicalNote, DocEvent, DoctorRating, DoctorRequest, DoctorUser, HydrationLog, Invitation, MealDone, MealPlan, MedDose, MedicalDocument,
   PatientMessage, PatientUser, ReportRequest, ShareLink, SupportGrant, SupportTicket, TargetChange, UserRole, VitalDef, VitalReading,
 } from '@/shared/lib/types'
@@ -55,6 +55,8 @@ export interface Records {
   pastPatients: PastPatient[]
   /** Days a doctor is away: their own, or everyone's for staff. */
   timeOff: TimeOff[]
+  /** Consulting doctors on care teams, past and present. */
+  careTeam: CareTeamMember[]
 }
 
 /* ─── Dates and times ───────────────────────────────────────────────── */
@@ -120,7 +122,10 @@ export const toAudit = (r: Row): AuditEntry => ({
 /** "09:00:00" → "09:00" */
 const hm = (time: string) => time.slice(0, 5)
 
-const toAlert = (r: Row, defs: VitalDef[]): AppAlert => ({
+const toAlert = (r: Row, defs: VitalDef[], remeasures: Row[] = [], comments: Row[] = []): AppAlert => ({
+  remeasureIds: remeasures.map(m => m.reading_id as string),
+  resolvedHow: r.resolved_how ?? undefined,
+  comments: comments.map(c => ({ id: c.id, authorId: c.author_id, kind: c.kind, body: c.body, at: ms(c.created_at) ?? 0, createdAt: when(c.created_at) ?? '' })),
   id: r.id, patientId: r.patient_id, type: r.type, severity: r.severity, status: r.status, resolved: r.status === 'resolved',
   vitalId: r.vital_id ?? undefined, vitalName: r.type === 'sos' ? 'SOS' : defs.find(d => d.id === r.vital_id)?.name ?? 'Reading',
   value: r.value, unit: r.unit ?? '', readingId: r.reading_id ?? undefined,
@@ -147,7 +152,7 @@ const toAppointment = (r: Row, events: Row[]): Appointment => ({
 })
 
 const toMessage = (r: Row): PatientMessage => ({
-  id: r.id, fromId: r.from_id, toId: r.to_id, content: r.content, sentAt: when(r.created_at) ?? '', read: r.read,
+  id: r.id, fromId: r.from_id, toId: r.to_id, content: r.content, sentAt: when(r.created_at) ?? '', at: ms(r.created_at), read: r.read,
 })
 
 const toNotification = (r: Row): AppNotification => ({
@@ -249,7 +254,7 @@ export async function loadRecords(me: AppUser): Promise<Records> {
   ])
 
   // The newer parts of the record, and what belongs to one role.
-  const [rxEvents, planRows, planItemRows, planEventRows, assignmentRows, hourRows, timeOffRows, pastRows] = await Promise.all([
+  const [rxEvents, planRows, planItemRows, planEventRows, assignmentRows, hourRows, timeOffRows, pastRows, remeasureRows, alertCommentRows, teamRows] = await Promise.all([
     rows('prescription_events', q => q.order('id')),
     rows('care_plans', q => q.order('created_at', { ascending: false })),
     rows('care_plan_items', q => q.order('position')),
@@ -258,7 +263,12 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     rows('doctor_hours'),
     rows('doctor_time_off', q => q.order('from_date')),
     me.role === 'doctor' ? supabase.rpc('my_past_patients').then(({ data }) => (data ?? []) as Row[], () => [] as Row[]) : Promise.resolve([] as Row[]),
+    rows('alert_remeasures', q => q.order('created_at')),
+    rows('alert_comments', q => q.order('created_at')),
+    rows('care_team_members', q => q.order('started_at', { ascending: false })),
   ])
+  const remeasuresOf = (id: string) => remeasureRows.filter(r => r.alert_id === id)
+  const alertCommentsOf = (id: string) => alertCommentRows.filter(r => r.alert_id === id)
 
   const vitalDefs = vitalDefRows.map(toVitalDef)
   const by = <T extends Row>(list: T[], key: string) => {
@@ -362,7 +372,7 @@ export async function loadRecords(me: AppUser): Promise<Records> {
 
   return {
     users, vitalDefs,
-    alerts: alertRows.map(r => toAlert(r, vitalDefs)),
+    alerts: alertRows.map(r => toAlert(r, vitalDefs, remeasuresOf(r.id), alertCommentsOf(r.id))),
     appointments: appointmentRows.map(r => toAppointment(r, appointmentEvents)),
     messages: messageRows.map(toMessage).reverse(),
     notifications: notificationRows.map(toNotification),
@@ -401,6 +411,10 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     })),
     pastPatients: pastRows.map(r => ({ patientId: r.patient_id, name: r.full_name, startedAt: ms(r.started_at) ?? 0, endedAt: ms(r.ended_at) ?? 0, endReason: r.end_reason ?? undefined })),
     timeOff: timeOffRows.map(r => ({ id: r.id, doctorId: r.doctor_id, from: r.from_date, to: r.to_date, reason: r.reason ?? undefined })),
+    careTeam: teamRows.map(r => ({
+      id: r.id, patientId: r.patient_id, doctorId: r.doctor_id, reason: r.reason ?? undefined, addedBy: r.added_by ?? undefined,
+      startedAt: ms(r.started_at) ?? 0, endedAt: ms(r.ended_at),
+    })),
     mealPlans: mealPlanRows.map(r => ({
       patientId: r.patient_id, meals: Array.isArray(r.meals) ? r.meals : [], targetKcal: r.target_kcal ?? undefined,
       waterGoal: r.water_goal ?? 8, dietaryNote: r.dietary_note ?? undefined, setBy: r.set_by ?? undefined,
@@ -438,10 +452,16 @@ export async function changeToken(): Promise<string> {
   return (data as string | null) ?? ''
 }
 
-/** Older entries of the audit trail, before the oldest one already on screen. */
-export async function loadAuditBefore(beforeId: string, limit = 300): Promise<AuditEntry[]> {
+/** Who did it, for an audit search. */
+export type AuditWho = 'all' | 'patient' | 'doctor' | 'staff' | 'system'
+
+/**
+ * One page of the audit trail, newest first, searched by the database across the whole trail:
+ * words in the action or detail, or the name of the person who did it. `beforeId` continues after the last entry shown.
+ */
+export async function searchAudit(q: string, who: AuditWho, beforeId?: string, pageSize = 100): Promise<AuditEntry[]> {
   const supabase = await getSupabase()
-  const { data, error } = await supabase.from('audit_log').select('*').lt('id', Number(beforeId)).order('created_at', { ascending: false }).limit(limit)
+  const { data, error } = await supabase.rpc('search_audit', { q: q.trim() || null, who, before: beforeId ? Number(beforeId) : null, page_size: pageSize })
   if (error) throw new LoadError(error)
-  return (data ?? []).map(toAudit)
+  return ((data ?? []) as Row[]).map(toAudit)
 }

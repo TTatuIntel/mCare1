@@ -123,7 +123,12 @@ function reportBlocks(doc: MedicalDocument, users: AppUser[]): DocxBlock[] {
         ...(inc.trends ? [r.direction && r.direction !== 'unknown' ? `${r.direction}${r.change ? ` (${r.change > 0 ? '+' : ''}${r.change})` : ''}` : '—'] : [])])] })
     if (inc.alerts && b.alerts.length) {
       out.push(h2('Alerts & events'))
-      out.push({ t: 'table', rows: [['Date & time', 'Event', 'Severity', 'Status'], ...b.alerts.map(a => [a.at, a.label, a.severity === 'danger' ? 'Critical' : 'Warning', `${a.status}${a.resolution ? ` — ${a.resolution}` : ''}`])] })
+      out.push({ t: 'table', rows: [['Date & time', 'Event', 'Severity', 'Status'], ...b.alerts.map(a => [a.at, a.label, a.severity === 'danger' ? 'Critical' : 'Warning', `${a.status === 'resolved' ? `RESOLVED${a.outcome ? ` (${a.outcome})` : ''}` : `UNRESOLVED (${a.status})`}${a.resolution ? ` — ${a.resolution}` : ''}`])] })
+      // What followed each abnormal reading: re-measurements, comments and actions, the resolution.
+      b.alerts.filter(a => a.steps?.length).forEach(a => {
+        out.push({ t: 'p', runs: [{ text: `${a.label} · ${a.at}` }] })
+        a.steps!.forEach(st => out.push({ t: 'p', bullet: true, runs: [{ text: `${st.when} — ${st.text}${st.by ? ` (${st.by})` : ''}` }] }))
+      })
     }
     if (inc.medications && b.medications?.length) {
       out.push(h2('Current medications'))

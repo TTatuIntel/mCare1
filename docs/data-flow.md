@@ -33,6 +33,8 @@ Account status: `pending_approval` (a doctor not yet approved), `active`, `suspe
 | Reading (`readings`) | patient | patient, treating doctor | recorder, for 15 minutes; doctor marks invalid | patient, treating doctor, monitors | never deleted; first value and who invalidated it are kept |
 | Target and critical range (`thresholds`) | patient | treating doctor | treating doctor | patient, treating doctor, monitors | `threshold_changes` |
 | Alert (`alerts`) | patient | the database only | treating doctor, monitors (steps only) | patient, treating doctor, monitors | never deleted; a resolved alert cannot be edited |
+| Re-measurement (`alert_remeasures`) | patient | the database only | nobody | patient, treating doctor, monitors | a link from the alert to the reading; the reading is never copied |
+| Alert comment (`alert_comments`) | patient | treating doctor, monitors | nobody: a correction is a new comment | patient, treating doctor, monitors | append-only |
 | Prescription (`prescriptions`) | patient | treating doctor | treating doctor (stop, restart only) | patient, treating doctor, monitors | never deleted; `prescription_events` |
 | Dose, meal, water logs | patient | patient | patient | patient, treating doctor, monitors | |
 | Clinical note (`clinical_notes`) | patient | treating doctor | nobody: a correction is a new note | shared: patient, doctor, monitors. Internal: treating doctor only | append-only |
@@ -89,9 +91,17 @@ The counters say only that something changed. What is then loaded is still decid
 
 **Patient records a vital.** Patient saves a reading → the database stamps the time and the recorder, validates and grades it against the patient's target and critical range → if it must, raises the alert and notifies the doctor and the monitors → the patient's change counter moves → the doctor's open portal reloads and shows it.
 
+**Abnormal reading is re-measured.** The patient taps Re-measure on the alert (My Alerts, Home, the vital's page) and saves a reading → the database links it to the open alert for that vital (`alert_remeasures`) and grades it → in range on a warning: the alert is resolved (`resolved_how = 'remeasure'`), both sides are told. In range on a critical alert: it goes back to the doctor, who closes it ("Resolve with this reading"). Still out of range: the same alert stays open (no second alert), the patient is told to contact the doctor. The doctor may add a comment, an action taken or an instruction at any point (`alert_comments`) and resolves with a reason. `alertStory()` in `lib/vitals` turns the alert, its re-measurements, comments and resolution into the one sequence that My Alerts, the resolve sheet and the printed report all show.
+
 **Admin assigns a doctor.** `assign_doctor(patient, doctor, reason)` → checks the permission and that the doctor is approved and active → the open assignment is ended and the new one started (one open row per patient) → both doctors and the patient are notified, any pending request of the patient is closed, the audit entry carries before and after → the new doctor gains the record and the former loses it in the same instant.
 
 **Appointment.** Patient requests (checked against the doctor's hours and days away) → doctor confirms, declines or proposes a time → patient accepts → doctor completes it or records a missed visit. Support may move or cancel it for either of them, with a reason both read. Each step is a line in `appointment_events`. It is one row throughout.
+
+**Messages.** A conversation is not stored: it is every `messages` row between two people (`src/shared/lib/messaging.ts`), shown by the same `Inbox` and `ChatThread` in the patient and doctor portals. Only a patient and the doctor who treats them now can write to each other; after a reassignment both keep the old conversation to read. Each message carries its form reference, so a retry does not send it twice. Its notification names the conversation, so a tap opens that thread. Staff do not message and cannot read messages: a person reaches the mCare team through a support request.
+
+**Consulting doctor.** The treating doctor (or a coordinator) adds another approved doctor to the care team. That doctor then reads the same record (readings, alerts, medicines, shared notes, the started care plan) and the database refuses any change from them; internal notes, documents and messages stay out of reach. Either side can end it; access ends at once and the row is kept.
+
+**Email.** Every notification is also queued as an email (`notification_deliveries`). A sender outside the database claims a batch, sends, and reports each result: the local backend prints them, `supabase/functions/deliver` sends through Resend on a hosted project. SMS is not sent.
 
 **Account suspended.** `set_account_status(person, 'suspended', reason)` → refused for yourself, for the last active admin and for a doctor who still has patients → from that moment every table refuses that account, on the session it already holds → the person is told; their records stay.
 

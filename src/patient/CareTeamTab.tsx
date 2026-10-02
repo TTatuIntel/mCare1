@@ -5,7 +5,7 @@ import { DoctorProfileSheet } from './DoctorProfileSheet'
 
 /* ─── Care Team ─────────────────────────────────────────────────────── */
 export function CareTeamTab({ go }: { go: (t: string, target?: string) => void }) {
-  const { patient, doctor: assignedDoctor, doctors: approvedDoctors, doctorById, requestDoctor, carePlans, nameOf, status, error, reload } = usePatient()
+  const { patient, doctor: assignedDoctor, doctors: approvedDoctors, doctorById, requestDoctor, carePlans, consultingDoctors, nameOf, status, error, reload } = usePatient()
   // The plan to follow now first; a plan on hold next. Closed plans stay below as history.
   const livePlans = carePlans.filter(p => p.status === 'active' || p.status === 'on_hold')
   const earlierPlans = carePlans.filter(p => p.status === 'completed' || p.status === 'cancelled')
@@ -65,6 +65,24 @@ export function CareTeamTab({ go }: { go: (t: string, target?: string) => void }
           </div>
         )}
       </div>
+
+      {/* other doctors who may read this record */}
+      {consultingDoctors.length > 0 && (
+        <div className="bg-white rounded-2xl p-4 shadow-sm">
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Also on your care team</p>
+          {consultingDoctors.map(d => (
+            <button key={d.id} onClick={() => setProfileDoctor(d)} className="w-full flex items-center gap-3 py-2 border-b border-gray-50 last:border-0 text-left">
+              <Avatar name={d.name} avatar={d.avatar} size="xs" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-900 truncate">{d.name}</p>
+                <p className="text-[10px] text-gray-400 truncate">{[d.specialty, d.reason].filter(Boolean).join(' · ')}</p>
+              </div>
+              <Pill color="blue">Consulting</Pill>
+            </button>
+          ))}
+          <p className="text-[10px] text-gray-400 mt-2 leading-snug">A consulting doctor can read your readings, medicines and care plan to advise your doctor. They cannot change your record, read your messages or open your documents.</p>
+        </div>
+      )}
 
       {/* The care plan the doctor set: the same record the doctor works on, read only here */}
       {livePlans.map(p => <CarePlanCard key={p.id} plan={p} nameOf={id => nameOf(id, 'Your doctor')} />)}

@@ -18,6 +18,7 @@
  */
 import { useApp } from '@/shared/state/AppContext'
 import { useLoadStatus } from '@/shared/state/useLoadStatus'
+import { partnersOf } from '@/shared/lib/messaging'
 import type {
   AppUser, Appointment, DoctorUser, EmergencyContact, HealthProfile, MealPlan, Outcome, PatientUser, AvatarSpec, PlannedMeal,
 } from '@/shared/lib/types'
@@ -102,6 +103,11 @@ export function usePatient() {
     doctorById,
     /** GET doctors — approved, active clinicians a patient can ask for. */
     doctors: app.getDoctors().filter(d => d.status === 'active' && d.approvalStatus === 'approved').map(toPublicDoctor),
+    /** GET care_team_members: other doctors who may read this patient's record (they cannot change it). */
+    consultingDoctors: app.careTeam.filter(m => m.patientId === patient.id && !m.endedAt)
+      .flatMap(m => { const d = doctorById(m.doctorId); return d ? [{ ...d, reason: m.reason }] : [] }),
+    /** GET messages: everyone this patient has exchanged a message with (their doctor, and any doctor before). */
+    messagePartners: partnersOf(app.messages, patient.id),
     /** GET care_plans: the plans the doctor has started for this patient (never a draft), newest first. */
     carePlans: app.carePlans.filter(p => p.patientId === patient.id && p.status !== 'draft'),
     /** RPC doctor_availability: the open times of a doctor on a day (YYYY-MM-DD). */

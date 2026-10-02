@@ -181,6 +181,7 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
 
   const me = (): AppUser | null => deps.usersRef.current.find(u => u.id === deps.currentUserId) ?? null
   const userName = (id?: string) => deps.usersRef.current.find(u => u.id === id)?.name ?? 'Unknown'
+  const personName = (id: string) => deps.usersRef.current.find(u => u.id === id)?.name
   const ctx = (): PolicyCtx => ({ users: deps.usersRef.current, grants: grantsRef.current, now: Date.now() })
   const find = (id: string) => docsRef.current.find(d => d.id === id)
   const patch = (id: string, fn: (d: MedicalDocument) => MedicalDocument) =>
@@ -454,7 +455,7 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
     const pt = deps.usersRef.current.find(x => x.id === patientId) as PatientUser | undefined
     if (!u || !pt || !isTreatingDoctor(u, patientId, deps.usersRef.current)) return no('Only the treating doctor can prepare a report for this patient.')
     const t = Date.now()
-    const { body, links } = buildVitalsReport(pt, deps.vitalDefs, deps.alertsRef.current, days, t, interpretation, include, notes)
+    const { body, links } = buildVitalsReport(pt, deps.vitalDefs, deps.alertsRef.current, days, t, interpretation, include, notes, personName)
     if (live) return run(() => docApi.createReport(patientId, `Vitals Report — last ${days} days`, body, links, dayKey(new Date(t))))
     const id = opaqueId('doc')
     const doc: MedicalDocument = {
@@ -534,7 +535,7 @@ export function useDocumentStore(deps: Deps, seed: { docs: MedicalDocument[]; ev
     const pt = deps.usersRef.current.find(x => x.id === old.patientId) as PatientUser
     const t = Date.now()
     const rebuilt = old.body?.type === 'vitals'
-      ? buildVitalsReport(pt, deps.vitalDefs, deps.alertsRef.current, old.body.periodDays, t, old.body.interpretation, old.body.include, old.body.notes)
+      ? buildVitalsReport(pt, deps.vitalDefs, deps.alertsRef.current, old.body.periodDays, t, old.body.interpretation, old.body.include, old.body.notes, personName)
       : { body: old.body, links: old.links }
     if (live) {
       const saved = await run(async () => {

@@ -4,7 +4,7 @@ The clinical workspace for an approved, active doctor. Everything in it is the s
 
 ## How it is built
 
-- **Screens**: `src/doctor/`. `DoctorApp.tsx` holds the tabs (Home, Patients, Appointments, Alerts; Messages and Profile open from Home and the avatar).
+- **Screens**: `src/doctor/`. `DoctorApp.tsx` holds the tabs (Home, Patients, Chat, Appointments, Alerts; Profile opens from the avatar).
 - **Data layer**: `useDoctor()` (`src/doctor/useDoctor.ts`). Every doctor screen reads and changes the record through it. What it returns is already narrowed to this doctor's patients; each action is one request. `useBoard()` (patients by risk) and `useVisits()` (the appointment card, its sheets and booking) are built on it.
 - **One patient's record**: `PatientDetail.tsx` is the frame; each part is its own file: `PatientVitals`, `PatientMeds`, `PatientCarePlan`, `PatientNutrition`, `PatientNotes`, `PatientDocs`.
 - **Saving**: every form uses `useSave()` and `<SaveError>`; a button that saves on its own uses `useAct()`. Nothing is announced before the database has answered.
@@ -28,8 +28,10 @@ The clinical workspace for an approved, active doctor. Everything in it is the s
 | Meal plan | `PatientNutrition` | `meal_plans` | patient | audit |
 | Appointments: confirm, decline, propose a time, complete, no-show, cancel; book a visit | `AppointmentsTab`, `useVisits` | `appointments` | patient; support staff | `appointment_events` |
 | Working hours, visit length, days away | `AvailabilityCard` (Profile) | `set_doctor_hours()`, `doctor_time_off` | patients are offered the open times | audit |
-| Messages | `MessagesTab`, shared `ChatThread` | `messages` | the patient only | |
+| Messages: one conversation per patient, unread first; a former patient's conversation stays readable, with nothing more to send | `MessagesTab`, shared `Inbox` and `ChatThread` | `messages` | the patient only | messages are never edited |
 | Documents and reports: upload, build a vitals report, sign, release, correct | `PatientDocs`, `ReportBuilderSheet`, shared `DocumentViewer` | `documents`, `sign_document()`, `release_document()`, `correct_document()` | patient, once released | versions, `document_events` |
+| Care team: add or remove a consulting doctor | `PatientDetail` overview, shared `CareTeamCard` | `add_consulting_doctor()`, `remove_consulting_doctor()` | the doctor added, the patient | `care_team_members`, audit |
+| Read a patient one consults on (read only); leave that care team | `PatientsTab` → `ConsultView` | `care_team_members`, `consults()` | | |
 | Signature, profile, password | `ProfileTab` | `doctors`, `profiles` | | |
 
 ## Rules worth knowing
@@ -49,7 +51,7 @@ The clinical workspace for an approved, active doctor. Everything in it is the s
 ## Not done
 
 - A doctor cannot correct the value of a reading a patient entered; they mark it invalid and record a new one.
-- One doctor treats a patient at a time. There is no shared care team of several doctors.
+- One doctor treats a patient at a time. Other doctors can be added to the care team as consulting doctors, who read the record and change nothing; there is no shared treating role.
 - Availability has no public holidays calendar and no per-day exceptions other than days away.
 - The prescription document filed at prescribing is not rewritten when the medicine is stopped; the stop is in the prescription's history.
-- Email, SMS and push are not sent; notifications are in-app.
+- Every notification is queued as an email. The hosted sender (`supabase/functions/deliver`) has not been run against a hosted project. SMS and push are not sent.

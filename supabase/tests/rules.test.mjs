@@ -360,6 +360,37 @@ await as(ID.doc, `update alerts set recheck_requested_at = now() where id = $1`,
 await g('bp', '121/79')
 const wr = await one(`select status, resolution_reason, resolution_note from alerts where id = $1`, [wa.id])
 check('requested re-check in range closes a warning, named as what it was', wr.status === 'resolved' && wr.resolution_reason === 'Re-check back in range' && /Dr\. Amara Osei/.test(wr.resolution_note))
+check('how each alert ended is recorded', (await one(`select resolved_how from alerts where id = $1`, [al.id])).resolved_how === 'doctor'
+  && (await one(`select resolved_how from alerts where id = $1`, [wa.id])).resolved_how === 'remeasure')
+check('every re-measurement is linked to its alert', (await one(`select count(*)::int n from alert_remeasures where alert_id = $1 and reading_id = $2`, [al.id, recheck.id])).n === 1)
+
+// Vital resolution (0016): re-measurements stay on the one alert; a warning closes on an in-range reading whenever it comes.
+await g('bp', '150/95'); const w3 = (await g('bp', '151/96'))[0]
+const wb = await one(`select id from alerts where reading_id = $1`, [w3.id])
+await db.query(`update alerts set created_at = now() - interval '3 hours' where id = $1`, [wb.id])
+const still = (await g('bp', '149/94'))[0]
+check('a re-measurement still out of range stays on the same alert and the patient is advised',
+  (await one(`select count(*)::int n from alerts where patient_id = $1 and vital_id = 'bp' and status <> 'resolved'`, [ID.pat2])).n === 1
+  && (await one(`select count(*)::int n from alert_remeasures where alert_id = $1 and reading_id = $2`, [wb.id, still.id])).n === 1
+  && (await as(ID.pat2, `select 1 from notifications where title = 'Still outside your range'`)).length === 1
+  && (await as(ID.doc, `select 1 from notifications where title like 'Still out of range:%'`)).length === 1)
+const cm = (await as(ID.doc, `insert into alert_comments (alert_id, patient_id, author_id, kind, body) values ($1, $2, $3, 'instruction', ' Rest, then measure again ') returning author_id, patient_id, body`, [wb.id, ID.pat, ID.doc]))[0]
+check('the doctor comments on an alert without resolving it; patient and author come from the server',
+  cm.author_id === ID.doc && cm.patient_id === ID.pat2 && cm.body === 'Rest, then measure again'
+  && (await one(`select status from alerts where id = $1`, [wb.id])).status !== 'resolved')
+check('the patient reads the instruction and is told', (await as(ID.pat2, `select 1 from alert_comments where alert_id = $1`, [wb.id])).length === 1
+  && (await as(ID.pat2, `select 1 from notifications where title like 'Instruction from %'`)).length === 1
+  && (await one(`select count(*)::int n from audit_log where action = 'Commented on alert' and resource_id = $1`, [wb.id])).n === 1)
+check('a patient, or a doctor who does not treat them, cannot comment',
+  (await denied(ID.pat2, `insert into alert_comments (alert_id, patient_id, author_id, body) values ($1, $2, $2, 'x')`, [wb.id, ID.pat2])).blocked
+  && (await denied(ID.doc2, `insert into alert_comments (alert_id, patient_id, author_id, body) values ($1, $2, $3, 'x')`, [wb.id, ID.pat2, ID.doc2])).blocked)
+check('a comment is never edited or removed', (await as(ID.doc, `update alert_comments set body = 'changed' where alert_id = $1 returning id`, [wb.id])).length === 0
+  && (await as(ID.doc, `delete from alert_comments where alert_id = $1 returning id`, [wb.id])).length === 0)
+await g('bp', '119/78')
+const wc = await one(`select status, resolved_how, resolution_reason from alerts where id = $1`, [wb.id])
+check('an in-range re-measurement closes a warning hours later, both re-measurements kept',
+  wc.status === 'resolved' && wc.resolved_how === 'remeasure' && wc.resolution_reason === 'Re-measured in range by patient'
+  && (await one(`select count(*)::int n from alert_remeasures where alert_id = $1`, [wb.id])).n === 2)
 check("send_alert_now refuses an in-range reading and other people's readings", (await denied(ID.pat2, `select send_alert_now($1)`, [r1.id])).blocked
   && (await denied(ID.pat, `select send_alert_now($1)`, [crit.id])).blocked)
 check('a second SOS while one is open returns the same alert', await (async () => {
@@ -882,6 +913,96 @@ check('the counters are read only by those who may see the patient, and written 
   && (await as(ID.pat, `update patient_changes set version = 0 returning patient_id`).catch(() => [])).length === 0
   && (await denied(ID.pat, `insert into system_changes (topic) values ('x')`)).blocked)
 check('a signed-out visitor or a closed account gets no token', (await denied(null, `select my_change_token()`)).blocked && (await denied(ID.pat2, `select my_change_token()`)).blocked)
+
+/* ── Messaging (0017): who may write to whom, and where a message notification leads ── */
+console.log('\nMessaging')
+// Dr. Amara (TREAT) treats James again; doc2 (DOC) treated him before.
+await as(TREAT, `insert into messages (from_id, to_id, content) values ($1, $2, 'How are the new tablets?')`, [TREAT, ID.pat])
+const msgTold = (await as(ID.pat, `select link, resource_type, resource_id from notifications where kind = 'message' order by created_at desc limit 1`))[0]
+check('a message notification opens the conversation it belongs to', msgTold.link === 'messages' && msgTold.resource_type === 'conversation' && msgTold.resource_id === TREAT)
+await as(ID.pat, `insert into messages (from_id, to_id, content) values ($1, $2, 'Fine so far')`, [ID.pat, TREAT])
+const docTold = (await as(TREAT, `select link, resource_id from notifications where kind = 'message' order by created_at desc limit 1`))[0]
+check('the doctor is pointed at the same conversation', docTold.link === 'messages' && docTold.resource_id === ID.pat)
+check('a former doctor and the patient can no longer write to each other', (await denied(DOC, `insert into messages (from_id, to_id, content) values ($1, $2, 'Checking in')`, [DOC, ID.pat])).blocked
+  && (await denied(ID.pat, `insert into messages (from_id, to_id, content) values ($1, $2, 'Hello again')`, [ID.pat, DOC])).blocked)
+check('staff cannot read a conversation, and nobody can write as someone else', (await as(ID.admin, `select 1 from messages`)).length === 0 && (await as(ID.asst, `select 1 from messages`)).length === 0
+  && (await denied(ID.pat, `insert into messages (from_id, to_id, content) values ($1, $2, 'Forged')`, [TREAT, ID.pat])).blocked)
+
+/* ── Care team (0018): a consulting doctor reads the record and changes nothing ── */
+console.log('\nCare team')
+check('before being added, another doctor sees nothing of the patient', (await as(DOC, `select 1 from readings where patient_id = $1`, [ID.pat])).length === 0
+  && (await as(DOC, `select 1 from profiles where id = $1`, [ID.pat])).length === 0)
+check('only the treating doctor or a coordinator adds a consulting doctor', (await denied(DOC, `select add_consulting_doctor($1, $2)`, [ID.pat, DOC])).blocked
+  && (await denied(ID.pat, `select add_consulting_doctor($1, $2)`, [ID.pat, DOC])).blocked
+  && (await denied(ID.asst, `select add_consulting_doctor($1, $2)`, [ID.pat, DOC])).blocked
+  && /already treats/.test((await denied(TREAT, `select add_consulting_doctor($1, $2)`, [ID.pat, TREAT])).why ?? ''))
+const member = (await as(TREAT, `select add_consulting_doctor($1, $2, 'Cardiology opinion') id`, [ID.pat, DOC]))[0].id
+check('the consulting doctor and the patient are told, and it is audited', (await as(DOC, `select resource_id from notifications where title = 'Added to a care team'`))[0]?.resource_id === ID.pat
+  && (await as(ID.pat, `select 1 from notifications where title = 'Care team updated' and body like '%consulting doctor'`)).length === 1
+  && (await one(`select count(*)::int n from audit_log where action = 'Added consulting doctor' and patient_id = $1`, [ID.pat])).n === 1
+  && /already on the care team/.test((await denied(TREAT, `select add_consulting_doctor($1, $2)`, [ID.pat, DOC])).why ?? ''))
+check('a consulting doctor reads the record: readings, alerts, medicines, shared notes, the started plan', (await as(DOC, `select 1 from readings where patient_id = $1`, [ID.pat])).length > 0
+  && (await as(DOC, `select 1 from alerts where patient_id = $1`, [ID.pat])).length > 0 && (await as(DOC, `select 1 from prescriptions where patient_id = $1`, [ID.pat])).length > 0
+  && (await as(DOC, `select 1 from profiles where id = $1`, [ID.pat])).length === 1 && (await as(DOC, `select 1 from patients where id = $1`, [ID.pat])).length === 1
+  && (await as(DOC, `select 1 from clinical_notes where patient_id = $1 and visibility = 'shared'`, [ID.pat])).length > 0
+  && (await as(DOC, `select 1 from care_plans where patient_id = $1`, [ID.pat])).length > 0)
+check('…but not internal notes, documents or messages', (await as(DOC, `select 1 from clinical_notes where patient_id = $1 and visibility = 'internal'`, [ID.pat])).length === 0
+  && (await as(DOC, `select 1 from documents where patient_id = $1`, [ID.pat])).length === 0
+  && (await as(DOC, `select 1 from messages where from_id = $1 and to_id = $2`, [ID.pat, TREAT])).length === 0)
+check('…and changes nothing', (await denied(DOC, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency) values ($1, $2, 'X', '1', 'Once daily')`, [ID.pat, DOC])).blocked
+  && (await denied(DOC, `insert into clinical_notes (patient_id, author_id, content) values ($1, $2, 'x')`, [ID.pat, DOC])).blocked
+  && (await denied(DOC, `insert into readings (patient_id, vital_id, value) values ($1, 'hr', '70')`, [ID.pat])).blocked
+  && (await as(DOC, `update thresholds set target_max = 999 where patient_id = $1 returning 1`, [ID.pat])).length === 0
+  && (await as(DOC, `update alerts set status = 'acknowledged' where patient_id = $1 and status = 'open' returning 1`, [ID.pat])).length === 0
+  && (await denied(DOC, `insert into messages (from_id, to_id, content) values ($1, $2, 'Hello')`, [DOC, ID.pat])).blocked)
+check('the patient and the treating doctor can see who is on the care team; a stranger cannot', (await as(ID.pat, `select 1 from care_team_members`)).length === 1
+  && (await as(TREAT, `select 1 from care_team_members where patient_id = $1`, [ID.pat])).length === 1 && (await as(ID.evil, `select 1 from care_team_members`)).length === 0
+  && (await denied(TREAT, `insert into care_team_members (patient_id, doctor_id) values ($1, $2)`, [ID.evil, TREAT])).blocked)
+const consultToken = await changeToken(DOC)
+await as(ID.pat, `insert into readings (patient_id, vital_id, value) values ($1, 'hr', '71')`, [ID.pat])
+check("the consulting doctor's screen learns of a change to that record", await changeToken(DOC) !== consultToken)
+check('a stranger cannot remove the membership', (await denied(ID.evil, `select remove_consulting_doctor($1)`, [member])).blocked)
+await as(DOC, `select remove_consulting_doctor($1)`, [member])
+check('once it ends (here, by the consulting doctor), access ends at once and the history is kept', (await as(DOC, `select 1 from readings where patient_id = $1`, [ID.pat])).length === 0
+  && (await one(`select ended_by, ended_at is not null ended from care_team_members where id = $1`, [member])).ended_by === DOC
+  && (await as(ID.pat, `select 1 from notifications where body like '%no longer has access to your record'`)).length === 1)
+await as(ID.admin, `select add_consulting_doctor($1, $2, 'Covering')`, [ID.pat, DOC])
+await as(ID.admin, `select assign_doctor($1, $2, 'Taking over')`, [ID.pat, DOC])
+check('a consulting doctor who becomes the treating doctor is no longer listed as consulting', (await one(`select count(*)::int n from care_team_members where patient_id = $1 and ended_at is null`, [ID.pat])).n === 0
+  && (await as(DOC, `select 1 from clinical_notes where patient_id = $1 and visibility = 'internal'`, [ID.pat])).length > 0)
+await as(ID.admin, `select assign_doctor($1, $2, 'Back to the first doctor')`, [ID.pat, TREAT])
+
+/* ── Delivery (0019): every notification is queued as an email; only the sender works the queue ── */
+console.log('\nDelivery')
+const queued = async () => (await one(`select count(*)::int n from notification_deliveries where status = 'queued'`)).n
+const before19 = await queued()
+await as(TREAT, `insert into messages (from_id, to_id, content) values ($1, $2, 'Queued as an email too')`, [TREAT, ID.pat])
+const mail = await one(`select d.to_address, d.subject, d.body, d.status, p.email from notification_deliveries d join profiles p on p.id = d.user_id order by d.id desc limit 1`)
+check('a notification is queued as an email to that person', await queued() === before19 + 1 && mail.to_address === mail.email && mail.status === 'queued' && /New message from/.test(mail.subject))
+check('the queue is closed to every signed-in person', (await as(ID.admin, `select 1 from notification_deliveries`)).length === 0 && (await as(ID.pat, `select 1 from notification_deliveries`)).length === 0
+  && (await denied(ID.admin, `select claim_deliveries(5)`)).blocked && (await denied(ID.pat, `select finish_delivery(1, true)`)).blocked)
+await db.query(`update notification_deliveries set status = 'sent' where status = 'queued' and id <> (select max(id) from notification_deliveries)`)
+const claimed = (await db.query(`select * from claim_deliveries(10)`)).rows
+check('the sender claims what is waiting, once', claimed.length === 1 && claimed[0].status === 'sending' && claimed[0].attempts === 1 && (await db.query(`select * from claim_deliveries(10)`)).rows.length === 0)
+await db.query(`select finish_delivery($1, false, 'Mailbox unavailable')`, [claimed[0].id])
+check('a failure is kept with its reason and goes back in the queue', (await one(`select status, error from notification_deliveries where id = $1`, [claimed[0].id])).error === 'Mailbox unavailable' && await queued() === 1)
+for (let i = 0; i < 4; i++) { const again = (await db.query(`select * from claim_deliveries(10)`)).rows[0]; await db.query(`select finish_delivery($1, false, 'Mailbox unavailable')`, [again.id]) }
+check('after five attempts it is marked failed, not retried for ever', (await one(`select status, attempts from notification_deliveries where id = $1`, [claimed[0].id])).status === 'failed' && await queued() === 0)
+await as(ID.admin, `select set_account_status($1, 'suspended', 'Testing delivery')`, [ID.evil])
+check('nothing is queued for an account that has been stopped', await queued() === 0)
+await as(ID.admin, `select set_account_status($1, 'active')`, [ID.evil])
+
+/* ── Audit search (0020): the whole trail, by words, by person, by kind of person, in pages ── */
+console.log('\nAudit search')
+const search = (who, q = null, kind = null, before = null, size = 100) => as(who, `select id, action, actor_role from search_audit($1, $2, $3, $4)`, [q, kind, before, size])
+const found = await search(ID.admin, 'consulting')
+check('an entry is found by words in it', found.length >= 2 && found.every(r => /consulting/i.test(r.action)))
+check('…by the name of who did it, and by the kind of person', (await search(ID.admin, 'Amara')).length > 0 && (await search(ID.admin, null, 'doctor')).every(r => r.actor_role === 'doctor')
+  && (await search(ID.admin, null, 'staff')).every(r => ['admin', 'assistant'].includes(r.actor_role)) && (await search(ID.admin, 'zzz-no-such-entry')).length === 0)
+const page1 = await search(ID.admin, null, null, null, 5)
+const page2 = await search(ID.admin, null, null, page1[4].id, 5)
+check('it comes in pages, newest first, without repeats', page1.length === 5 && page2.length === 5 && Number(page2[0].id) < Number(page1[4].id))
+check('only someone who may read the audit log gets anything', (await search(ID.pat)).length === 0 && (await search(TREAT)).length === 0 && (await search(ID.asst)).length === 0)
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

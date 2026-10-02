@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
-import { BottomSheet, SheetButton, Field, inputCls, Toggle, useSave, SaveError } from '@/shared'
-import type { DoctorUser, MedicalDocument, Outcome, PatientUser, ReportNote, ReportRequest, VitalsReportInclude } from '@/shared/lib/types'
+import { BottomSheet, SheetButton, inputCls, Toggle, useSave, SaveError, AlertStatusPill, ResolveAlertSheet } from '@/shared'
+import type { AppAlert, DoctorUser, MedicalDocument, Outcome, PatientUser, ReportNote, ReportRequest, VitalsReportInclude } from '@/shared/lib/types'
 import { buildVitalsReport, DEFAULT_REPORT_INCLUDE } from '@/shared/documents/documents'
 import { suggestInterpretation } from '@/shared/documents/analysis'
 import { DocumentReader } from '@/shared/documents/DocumentReader'
@@ -56,6 +56,12 @@ export function ReportBuilderSheet({ patient, open, onClose, onCreated, request 
   const [sigOpen, setSigOpen] = useState(false)
   const save = useSave()
   const doctor = currentUser?.role === 'doctor' ? currentUser as DoctorUser : null
+  const personName = (id: string) => users.find(u => u.id === id)?.name
+  /** The abnormal event being commented on or resolved from here, before it goes on the report. */
+  const [event, setEvent] = useState<AppAlert | null>(null)
+  // The alerts this report will list: the chosen vitals in the chosen period, plus any SOS.
+  const events = !inc.alerts ? [] : alerts.filter(a => a.patientId === patient.id && a.at >= Date.now() - days * 86_400_000
+    && (a.type === 'sos' || tracked.some(d => picked.includes(d.id) && d.name === a.vitalName)))
 
   useEffect(() => {
     if (!open) return
@@ -71,7 +77,7 @@ export function ReportBuilderSheet({ patient, open, onClose, onCreated, request 
 
   /** Drafts the interpretation from the same figures the report will show. The doctor edits it before signing. */
   const suggest = () => {
-    const { body } = buildVitalsReport(patient, vitalDefs, alerts, days, Date.now(), '', include)
+    const { body } = buildVitalsReport(patient, vitalDefs, alerts, days, Date.now(), '', include, [], personName)
     if (body.type !== 'vitals') return
     setInterp(suggestInterpretation(body, patient)); setSuggested(true)
   }
@@ -79,7 +85,7 @@ export function ReportBuilderSheet({ patient, open, onClose, onCreated, request 
   const previewDoc = useMemo<MedicalDocument | null>(() => {
     if (!preview || !currentUser) return null
     const t = Date.now()
-    const { body, links } = buildVitalsReport(patient, vitalDefs, alerts, days, t, interp, include, notes)
+    const { body, links } = buildVitalsReport(patient, vitalDefs, alerts, days, t, interp, include, notes, personName)
     return {
       id: 'doc_preview', patientId: patient.id, title: `Vitals Report — last ${days} days`, category: 'vitals_report', origin: 'system_generated',
       documentDate: new Date(t).toISOString().slice(0, 10), createdAt: body.type === 'vitals' ? body.generatedAt : '', at: t, createdBy: currentUser.id,
@@ -159,6 +165,34 @@ export function ReportBuilderSheet({ patient, open, onClose, onCreated, request 
         </div>
         <p className="text-[10px] text-gray-400 mt-1">Always included: letterhead, patient details, latest readings against target, and your signature.</p>
 
+        {/* Abnormal readings in the period: comment on one, or resolve it, before it is printed */}
+        {inc.alerts && (
+          <>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mt-4 mb-1">Abnormal readings & resolutions ({events.length})</p>
+            {events.length === 0 ? (
+              <p className="text-[11px] text-gray-400">No alerts were raised for these vitals in this period.</p>
+            ) : (
+              <>
+                <div className="rounded-xl border border-gray-100 divide-y divide-gray-50">
+                  {events.map(a => (
+                    <button key={a.id} onClick={() => setEvent(a)} className="w-full flex items-center gap-2 px-3 py-2 text-left">
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-xs font-semibold text-gray-800 truncate">{a.type === 'sos' ? 'SOS' : `${a.vitalName}: ${a.value} ${a.unit}`}</span>
+                        <span className="block text-[10px] text-gray-400 truncate">
+                          {a.loggedAt} · {a.remeasureIds?.length ?? 0} re-measured · {a.comments?.length ?? 0} comment{a.comments?.length === 1 ? '' : 's'}
+                        </span>
+                      </span>
+                      <AlertStatusPill alert={a} />
+                      <span className="text-[10px] font-bold text-teal-700 flex-shrink-0">{a.status === 'resolved' ? 'View' : 'Comment / resolve'}</span>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-gray-400 mt-1">Each is printed with its re-measurements, your comments and how it was resolved. What you add here is saved to the patient's record.</p>
+              </>
+            )}
+          </>
+        )}
+
         {/* Doctor's notes: existing clinical notes to attach, then the interpretation written for this report */}
         <div className="flex items-center justify-between mt-4 mb-1">
           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Clinical notes to attach ({noteIds.length}/{patientNotes.length})</p>
@@ -229,6 +263,7 @@ export function ReportBuilderSheet({ patient, open, onClose, onCreated, request 
       </BottomSheet>
 
       <SignatureSheet open={sigOpen} onClose={() => setSigOpen(false)} />
+      <ResolveAlertSheet alert={event} patientName={patient.name} onClose={() => setEvent(null)} />
       {previewDoc && <DocumentReader doc={previewDoc} open onClose={() => setPreview(false)} />}
     </>
   )

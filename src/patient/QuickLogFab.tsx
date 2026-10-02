@@ -37,7 +37,7 @@ export function QuickLogFab({ onLogOne, onLogGroup, onLogAll, due = false }: {
       ...g,
       tiles: tracked.filter(v => groupOf(v.id) === g.id).map(def => {
         const sc = selfClear(def)
-        return { def, last: latestValid(patient, def.id), remeasure: !!sc && !sc.expired }
+        return { def, last: latestValid(patient, def.id), remeasure: !!sc, clears: !!sc?.clears }
       }),
     }))
     .filter(g => g.tiles.length > 0)
@@ -91,7 +91,7 @@ export function QuickLogFab({ onLogOne, onLogGroup, onLogAll, due = false }: {
                 )}
               </div>
               <div className="grid grid-cols-2 gap-2">
-                {g.tiles.map(({ def, last, remeasure }) => {
+                {g.tiles.map(({ def, last, remeasure, clears }) => {
                   const u = unitView(def, patient)
                   const at = last ? readingTime(last) : null
                   const lvl = last ? evaluate(patient, def, last.value) : null
@@ -104,7 +104,7 @@ export function QuickLogFab({ onLogOne, onLogGroup, onLogAll, due = false }: {
                       </span>
                       <span className="text-xs font-bold text-gray-900 truncate max-w-full">{def.name}</span>
                       {remeasure ? (
-                        <span className="text-[10px] font-semibold text-amber-700">Re-measure to clear alert</span>
+                        <span className="text-[10px] font-semibold text-amber-700">{clears ? 'Re-measure to clear alert' : 'Re-measure for your doctor'}</span>
                       ) : last ? (
                         <span className="text-[10px] text-gray-500 truncate max-w-full">
                           Last <span className={`font-bold font-mono ${levelStyle(lvl).value}`}>{u.value(last.value)}</span>{at ? ` · ${ago(at, now)}` : ''}

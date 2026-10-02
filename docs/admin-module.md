@@ -26,7 +26,8 @@ The operational workspace: people, assignments, oversight, support and the audit
 | Find an appointment; move or cancel it for someone | `AppointmentsTab` | read: Monitor patients or Handle support. Change: Handle support | `admin_update_appointment()` | patient and doctor are told; a line in its history |
 | Support requests: answer and close | `SupportTab` | Handle support | `support_tickets` | the person who asked is told |
 | Documents: registry (metadata only), recovery, purge; open one for a support case | `DocumentsTab` | Document support; opening content: admin only | `document_registry()`, `staff_restore_document()`, `request_support_access()` | the patient is told when a document is opened |
-| Audit log: search, filter by who, load older, export | `AuditTab` | View audit logs | `audit_log` | |
+| Audit log: search the whole trail in the database, filter by who, page back, export | `AuditTab` | View audit logs | `search_audit()` | |
+| A patient's care team: add or remove a consulting doctor | `PatientAssignmentView`, shared `CareTeamCard` | Assign healthworkers | `add_consulting_doctor()`, `remove_consulting_doctor()` | the doctor and the patient are told |
 | Report: accounts, what is waiting, alerts, appointments, activity, doctor workload; export | `ReportsTab` | View audit logs | `admin_report()` | counts only |
 
 ## Rules worth knowing
@@ -45,7 +46,7 @@ The operational workspace: people, assignments, oversight, support and the audit
 
 ## Not done
 
-- Nothing emails an invitation or a notice: the admin tells the person to sign up.
+- Every notification is queued as an email; on a hosted project it is sent by `supabase/functions/deliver` once a Resend key is set (not yet run against a hosted project). Invitations are not emailed: the admin tells the person to sign up.
+- Admins and assistants have no messaging. A person reaches the mCare team through a support request.
 - There is no screen for system-wide settings other than vital definitions.
-- The audit log is filtered in the browser over what is loaded (the newest 300, more on request); there is no server-side search.
 - Backups are the hosting service's; the app has no backup tool in live mode.

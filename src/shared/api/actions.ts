@@ -12,7 +12,7 @@
  * Reading lives in ./records.
  */
 import type {
-  AccountStatus, AdminReport, Appointment, ApprovalStatus, AssistantPerm, AvatarSpec, CarePlanDraft, CarePlanItemStatus, CarePlanStatus,
+  AccountStatus, AdminReport, AlertCommentKind, Appointment, ApprovalStatus, AssistantPerm, AvatarSpec, CarePlanDraft, CarePlanItemStatus, CarePlanStatus,
   DayAvailability, EmergencyContact, FontSizePref, HealthProfile, MealPlan, NoteType, NoteVisibility, Prescription, ThemePref, UserRole, VitalDef, WorkBlock,
 } from '@/shared/lib/types'
 import type { VitalLevel } from '@/shared/lib/vitals'
@@ -170,6 +170,8 @@ export interface SavedReading {
   alerted: boolean
   /** This reading closed an open alert (a warning re-measured in range). */
   cleared: boolean
+  /** This reading was a re-measurement for an alert that is still open: out of range again, or in range on a critical alert the doctor must close. */
+  followsAlert: boolean
 }
 
 export async function logReading(patientId: string, vitalId: string, value: string, note?: string, ref?: string): Promise<SavedReading> {
@@ -185,6 +187,7 @@ export async function logReading(patientId: string, vitalId: string, value: stri
     readingId: row.id, level: row.level,
     alerted: linked.some(a => a.reading_id === row.id),
     cleared: linked.some(a => a.reading_id !== row.id && a.status === 'resolved'),
+    followsAlert: linked.some(a => a.reading_id !== row.id && a.status !== 'resolved'),
   }
 }
 export const correctReading = async (id: string, value: string) => { await ok((await db()).from('readings').update({ value }).eq('id', id)) }
@@ -223,6 +226,10 @@ export const cancelSos = async (alertId: string) => { await ok((await db()).rpc(
 export const acknowledgeAlert = async (id: string) => { await ok((await db()).from('alerts').update({ status: 'acknowledged' }).eq('id', id)) }
 export const escalateAlert = async (id: string) => { await ok((await db()).from('alerts').update({ status: 'escalated' }).eq('id', id)) }
 export const requestRecheck = async (id: string) => { await ok((await db()).from('alerts').update({ recheck_requested_at: new Date().toISOString() }).eq('id', id)) }
+/** A comment, an action taken or an instruction on an alert, without resolving it. The database fills in who and when. */
+export const addAlertComment = async (alertId: string, authorId: string, kind: AlertCommentKind, body: string, ref?: string) => {
+  await okOnce((await db()).from('alert_comments').insert({ alert_id: alertId, author_id: authorId, kind, body: body.trim(), ...withRef(ref) }))
+}
 export const resolveAlert = async (id: string, reason: string, note?: string) => {
   await ok((await db()).from('alerts').update({ status: 'resolved', resolution_reason: reason, resolution_note: blank(note) }).eq('id', id))
 }
@@ -366,6 +373,10 @@ export const fulfilReportRequest = async (id: string, documentId: string) => {
 export const assignDoctor = async (patientId: string, doctorId: string | null, reason?: string) => {
   await ok((await db()).rpc('assign_doctor', { patient: patientId, doctor: doctorId, reason: reason ?? null }))
 }
+/** Adds a consulting doctor to a patient's care team: they read the record and change nothing. */
+export const addConsultingDoctor = async (patientId: string, doctorId: string, reason?: string) =>
+  ok<string>((await db()).rpc('add_consulting_doctor', { patient: patientId, doctor: doctorId, reason: reason ?? null }))
+export const removeConsultingDoctor = async (memberId: string) => { await ok((await db()).rpc('remove_consulting_doctor', { member: memberId })) }
 /** Support moves an appointment to another time, or cancels it. Same record; both people are told. */
 export const adminUpdateAppointment = async (id: string, change: { action: 'move'; date: string; time?: string; reason: string } | { action: 'cancel'; reason: string }) => {
   await ok((await db()).rpc('admin_update_appointment', {

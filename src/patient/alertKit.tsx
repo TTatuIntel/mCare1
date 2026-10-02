@@ -7,9 +7,8 @@ import { useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import { CloseButton } from '@/shared'
 import type { AppAlert, VitalDef } from '@/shared/lib/types'
-import { parseValue, targetRange, unitView, SELF_CLEAR_WINDOW_MIN } from '@/shared/lib/vitals'
+import { parseValue, targetRange, unitView } from '@/shared/lib/vitals'
 import { usePatient } from './usePatient'
-import { useSelfClear } from './VitalLogSheets'
 
 export interface AlertView {
   def?: VitalDef
@@ -24,7 +23,7 @@ export interface AlertView {
   danger: boolean
   /** Where the alert is with the care team, in the patient's words. */
   statusLine: string
-  /** A fresh reading would help: the self-clear window is open, or the doctor asked for one. */
+  /** What a fresh reading does for this alert. Every open vital alert can be re-measured. */
   remeasure: { reason: string } | null
   /** What to do while waiting, most useful first. */
   tips: string[]
@@ -65,7 +64,6 @@ function tipsFor(vitalId: string | undefined, direction: 'high' | 'low' | null, 
 export function useAlertView() {
   const { vitalDefs } = useApp()
   const { patient } = usePatient()
-  const selfClear = useSelfClear()
 
   return (a: AppAlert): AlertView => {
     const danger = a.severity === 'danger'
@@ -98,10 +96,10 @@ export function useAlertView() {
       : p.primary < range.min || (p.secondary !== undefined && p.secondary < diaMin) ? 'low'
       : null
 
-    const sc = a.status === 'open' && !danger ? selfClear(def) : null
-    const remeasure = a.recheckRequestedAt ? { reason: 'Your doctor asked for a fresh reading' }
-      : sc && !sc.expired ? { reason: `Re-measure within ${sc.minLeft} min. An in-range reading clears this alert` }
-      : null
+    const remeasure = a.status === 'resolved' ? null
+      : { reason: `${a.recheckRequestedAt ? 'Your doctor asked for a fresh reading. ' : ''}${danger
+          ? 'Re-measure and your doctor reviews the new reading'
+          : 'Re-measure: an in-range reading clears this alert'}` }
 
     return {
       def, icon: def.icon, name: def.name, value: u.value(a.value), unit: u.unit, direction, danger, statusLine, remeasure,
@@ -111,8 +109,8 @@ export function useAlertView() {
   }
 }
 
-/** How long a patient has to clear a warning by re-measuring; shown in the empty state. */
-export const SELF_CLEAR_NOTE = `A warning clears by itself if you re-measure in range within ${SELF_CLEAR_WINDOW_MIN} minutes.`
+/** How a patient clears a warning; shown in the empty state. */
+export const SELF_CLEAR_NOTE = 'A warning clears by itself when you re-measure in range.'
 
 /* ─── Home: the alerts that are open right now ──────────────────────── */
 

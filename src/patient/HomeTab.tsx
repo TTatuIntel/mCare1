@@ -95,7 +95,7 @@ export function HomeTab({ go, openVital, onLog }: {
 
   return (
     <div className="flex flex-col gap-4 card-flow">
-      <PortalHeader onNavigate={t => go(t)} onProfile={() => go('profile')} />
+      <PortalHeader onNavigate={(t, about) => go(t, about?.type === 'conversation' ? about.id : undefined)} onProfile={() => go('profile')} />
 
       {/* the health-profile setup was skipped: one tap goes back to it */}
       {patient.profileSetup === 'skipped' && (

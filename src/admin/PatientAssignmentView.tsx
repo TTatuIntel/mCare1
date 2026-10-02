@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Avatar, Pill, BackHeader, BottomSheet, SheetButton, Field, inputCls, useSave, SaveError, useToast } from '@/shared'
+import { Avatar, Pill, BackHeader, BottomSheet, SheetButton, Field, inputCls, useSave, SaveError, useToast, CareTeamCard } from '@/shared'
 import type { DoctorUser, PatientUser } from '@/shared/lib/types'
 import DoctorPicker from './DoctorPicker'
 import { useAdmin } from './useAdmin'
@@ -87,6 +87,8 @@ export default function PatientAssignmentView({ patient, onBack }: { patient: Pa
         )}
         {!canAssign && <p className="text-[11px] text-gray-400 mt-3">Assigning a doctor needs the “Assign healthworkers” permission.</p>}
       </div>
+
+      <CareTeamCard patient={patient} canManage={canAssign} />
 
       {/* who has treated this patient, newest first */}
       <div className="bg-white rounded-2xl p-4 shadow-sm">

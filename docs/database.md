@@ -18,6 +18,10 @@ Postgres, in `supabase/migrations` (run in order; add a new numbered file rather
 | `0012_clinical.sql` | Clinical notes: `visibility` (internal or shared), kind, visit, and `amends` for a correction. Prescriptions: route, instructions, first and last day, `status`, stop reason, `prescription_events`. Care plans: `care_plans`, `care_plan_items`, `care_plan_events`, `save_care_plan()`, `set_care_plan_status()`. |
 | `0013_availability.sql` | `doctor_hours`, `doctor_time_off`, `doctors.slot_minutes`; `set_doctor_hours()`, `doctor_availability()`; a booking is checked against them, and confirmed bookings are serialised per doctor. |
 | `0014_admin_ops.sql` | `admin_update_appointment()` (support moves or cancels the one appointment record); support requests are answered once; `admin_report()`. |
+| `0017_messaging.sql` | A message notification names the conversation (`resource_type = 'conversation'`), so a tap opens that thread in either portal. |
+| `0018_care_team.sql` | `care_team_members`: consulting doctors. `consults()` widens `can_see_patient()` (reading only); `treats()` is unchanged, so only the treating doctor changes the record. `add_consulting_doctor()`, `remove_consulting_doctor()`. Internal notes, documents and messages are not included. |
+| `0019_delivery.sql` | `notification_deliveries`: every notification queued as an email; `claim_deliveries()` and `finish_delivery()` for the sender (service key only); retried up to five times, then `failed` with the reason. |
+| `0020_audit_search.sql` | `search_audit()`: the whole audit trail searched in the database, by words, person and kind of person, a page at a time. |
 | `0015_sync.sql` | `patient_changes` and `system_changes` counters, bumped by triggers; `my_change_token()`; published for Realtime where it exists. |
 
 Who owns each record, what each role may do and the path of a change: [data-flow.md](data-flow.md). The portals: [patient-module.md](patient-module.md), [doctor-module.md](doctor-module.md), [admin-module.md](admin-module.md).

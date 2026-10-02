@@ -5,6 +5,7 @@ import { PatientDetail } from './PatientDetail'
 import type { Section } from './PatientDetail'
 import { useBoard } from './useBoard'
 import { useDoctor } from './useDoctor'
+import { ConsultView } from './ConsultView'
 
 /* ─── Patients ────────────────────────────────────────────────────────
    Mobile and tablet: the list, then the opened patient in its place.
@@ -12,8 +13,11 @@ import { useDoctor } from './useDoctor'
    moves between patients without going back. */
 export function PatientsTab({ openId, setOpenId, initialSection, initialDoc }: { openId: string | null; setOpenId: (id: string | null) => void; initialSection?: Section; initialDoc?: string }) {
   const board = useBoard()
-  const { patient, pastPatients, now, status, error, reload } = useDoctor()
+  const { patient, pastPatients, consulting, now, status, error, reload } = useDoctor()
   const [q, setQ] = useState('')
+  /** A patient this doctor consults on, opened to read. */
+  const [consultId, setConsultId] = useState<string | null>(null)
+  const consult = consulting.find(c => c.patient.id === consultId)
   // Only a patient assigned to this doctor opens; anything else falls back to the list.
   const opened = patient(openId)?.id ?? null
   const list = board.filter(b => b.p.name.toLowerCase().includes(q.trim().toLowerCase()))
@@ -42,6 +46,8 @@ export function PatientsTab({ openId, setOpenId, initialSection, initialDoc }: {
     </button>
   ))
 
+  if (consult && !opened) return <ConsultView patient={consult.patient} member={consult.member} onBack={() => setConsultId(null)} />
+
   if (opened) return (
     <div className="@5xl:grid @5xl:grid-cols-[18rem_minmax(0,1fr)] @5xl:gap-6 @5xl:items-start">
       <aside className="hidden @5xl:flex flex-col gap-3" aria-label="Patients">
@@ -57,6 +63,20 @@ export function PatientsTab({ openId, setOpenId, initialSection, initialDoc }: {
     <Page title="Patients" meta={board.length ? `${board.length} under your care` : undefined} status={status} error={error} onRetry={reload}>
       {board.length > 0 && search}
       {rows}
+      {/* patients of other doctors whose record this doctor may read */}
+      {consulting.length > 0 && <p className="span-all text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-1 -mb-2">Consulting · {consulting.length}</p>}
+      {consulting.map(({ patient: p, member }) => (
+        <button key={member.id} onClick={() => setConsultId(p.id)}
+          className="bg-white rounded-2xl px-4 py-4 flex items-center gap-3 shadow-sm text-left active:bg-gray-50">
+          <Avatar name={p.name} avatar={p.avatar} size="sm" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-gray-900 truncate">{p.name}</p>
+            <p className="text-xs text-gray-500 truncate">{member.reason || 'Read only'}</p>
+            <div className="mt-1"><Pill color="blue">Consulting</Pill></div>
+          </div>
+          <Chevron />
+        </button>
+      ))}
       {/* who this doctor used to treat: a name and dates, since the record is no longer theirs to open */}
       {pastPatients.length > 0 && (
         <details className="bg-white rounded-2xl p-4 shadow-sm span-all">

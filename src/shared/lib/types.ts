@@ -441,6 +441,20 @@ export interface CareAssignment {
   endReason?: string
 }
 
+/**
+ * A consulting doctor on a patient's care team: they read the record, and change nothing.
+ * The treating doctor is not a row here; they are `PatientUser.assignedDoctorId`.
+ */
+export interface CareTeamMember {
+  id: string
+  patientId: string
+  doctorId: string
+  reason?: string
+  addedBy?: string
+  startedAt: number
+  endedAt?: number
+}
+
 /** Someone a doctor used to treat. A name and dates only: the record is no longer theirs to open. */
 export interface PastPatient {
   patientId: string
@@ -587,6 +601,31 @@ export interface AppAlert {
   recheckRequestedAt?: number
   /** The reading logged in answer to the re-check. */
   recheckReadingId?: string
+  /** Every reading logged for this vital while the alert was open, oldest first. The readings themselves live on the patient. */
+  remeasureIds?: string[]
+  /** What closed it: an in-range re-measurement, the care team, or the reading being withdrawn. */
+  resolvedHow?: AlertResolvedHow
+  /** What the care team said or did about it, oldest first. */
+  comments?: AlertComment[]
+}
+
+export type AlertResolvedHow = 'remeasure' | 'doctor' | 'invalid' | 'corrected' | 'patient'
+
+export type AlertCommentKind = 'comment' | 'action' | 'instruction'
+export const ALERT_COMMENT_KINDS: { id: AlertCommentKind; label: string }[] = [
+  { id: 'comment', label: 'Clinical comment' },
+  { id: 'action', label: 'Action taken' },
+  { id: 'instruction', label: 'Follow-up instruction' },
+]
+
+/** One thing the care team wrote on an alert. Never edited: a correction is a new comment. */
+export interface AlertComment {
+  id: string
+  authorId: string
+  kind: AlertCommentKind
+  body: string
+  at: number
+  createdAt: string
 }
 
 export type AlertStatus = 'open' | 'acknowledged' | 'escalated' | 'resolved'
@@ -594,7 +633,11 @@ export type AlertStatus = 'open' | 'acknowledged' | 'escalated' | 'resolved'
 /** Resolving with this reason books the follow-up visit in the same step; the database refuses it on its own. */
 export const FOLLOW_UP_REASON = 'Appointment scheduled'
 
+/** The clinician confirms an in-range re-measurement; offered from the reading itself in the resolve sheet. */
+export const REMEASURED_REASON = 'Re-measured, back in range'
+
 export const RESOLUTION_REASONS = [
+  REMEASURED_REASON,
   'Contacted patient, condition stable',
   'Medication adjusted',
   FOLLOW_UP_REASON,
@@ -668,6 +711,8 @@ export interface PatientMessage {
   toId: string
   content: string
   sentAt: string
+  /** Epoch ms it was sent. */
+  at?: number
   read: boolean
 }
 
@@ -841,7 +886,13 @@ export type DocBody =
       periodDays: number
       generatedAt: string
       rows: VitalsReportRow[]
-      alerts: { id: string; label: string; status: string; at: string; severity?: 'danger' | 'warning'; resolution?: string }[]
+      alerts: {
+        id: string; label: string; status: string; at: string; severity?: 'danger' | 'warning'; resolution?: string
+        /** How it ended, or that it is still open. Absent on reports made before this was recorded. */
+        outcome?: string
+        /** What followed the reading, in order: re-measurements, the care team's comments and actions, the resolution. */
+        steps?: { when: string; text: string; by?: string }[]
+      }[]
       readingsCount: number
       summary: string
       /** Period covered, epoch ms. */

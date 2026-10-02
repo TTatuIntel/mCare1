@@ -163,12 +163,81 @@ export function greeting(d = new Date()): string {
 export const ESCALATE_AFTER_MIN = 10
 /** Patients may correct their own reading within this window. */
 export const CORRECTION_WINDOW_MIN = 15
-/**
- * Minutes a patient has to clear a warning-level alert themselves by logging a
- * fresh in-range reading. After this window only the care team can clear it.
- * Critical alerts are never self-clearing — a clinician always reviews those.
- */
-export const SELF_CLEAR_WINDOW_MIN = 30
+
+/* ─── The story of an alert ─────────────────────────────────────────────
+   One abnormal reading, every re-measurement that followed, what the care
+   team said and did, and how it ended. My Alerts, the doctor's alert sheet,
+   the patient record and the printed report all read it from here, so they
+   tell it the same way. */
+
+export interface AlertStep {
+  kind: 'raised' | 'acknowledged' | 'escalated' | 'requested' | 'remeasure' | 'comment' | 'resolved'
+  /** e.g. "Re-measured 128/82 mmHg". */
+  title: string
+  detail?: string
+  /** When, as shown. */
+  when: string
+  /** Who did it (an account id), when a person did. */
+  by?: string
+  /** How a reading in this step was graded. */
+  level?: VitalLevel
+}
+
+export const LEVEL_WORD: Record<VitalLevel, string> = { normal: 'In range', warning: 'Out of range', critical: 'Critical' }
+
+/** How a resolved alert ended, in a few words. */
+export function resolvedHowLabel(a: AppAlert): string {
+  switch (a.resolvedHow) {
+    case 'remeasure': return 'Resolved automatically by re-measurement'
+    case 'invalid': return 'Closed: reading marked invalid'
+    case 'corrected': return 'Closed: reading corrected'
+    case 'patient': return 'Closed by the patient'
+    case 'doctor': return 'Resolved by the care team'
+    // Alerts saved before this was recorded.
+    default: return a.recheckReadingId && a.resolvedBy === a.patientId ? 'Resolved automatically by re-measurement' : 'Resolved'
+  }
+}
+
+/** The readings logged as re-measurements of an alert, oldest first. */
+export function alertRemeasures(a: AppAlert, patient: PatientUser | undefined): VitalReading[] {
+  const ids = new Set([...(a.remeasureIds ?? []), ...(a.recheckReadingId ? [a.recheckReadingId] : [])])
+  return (patient?.readings ?? []).filter(r => ids.has(r.id)).sort((x, y) => (x.at ?? 0) - (y.at ?? 0))
+}
+
+export function alertStory(a: AppAlert, patient: PatientUser | undefined, def: VitalDef | undefined): AlertStep[] {
+  const sos = a.type === 'sos'
+  const steps: AlertStep[] = [{
+    kind: 'raised', when: a.loggedAt, level: sos ? undefined : a.severity === 'danger' ? 'critical' : 'warning',
+    title: sos ? `SOS · ${a.value}` : `${a.vitalName} ${a.value} ${a.unit}`.trim(),
+    detail: sos ? 'Emergency help requested' : a.severity === 'danger' ? 'Critical reading · alert raised' : 'Out of range · alert raised',
+  }]
+  if (a.acknowledgedAt) steps.push({ kind: 'acknowledged', when: a.acknowledgedAt, by: a.acknowledgedBy, title: 'Reviewed by the care team' })
+  if (a.escalatedAt) steps.push({ kind: 'escalated', when: a.escalatedAt, title: 'Escalated to the care team' })
+
+  // What followed, in the order it happened.
+  const timed: (AlertStep & { at: number })[] = []
+  if (a.recheckRequestedAt) timed.push({ kind: 'requested', at: a.recheckRequestedAt, when: stamp(new Date(a.recheckRequestedAt)), title: 'Re-measurement requested' })
+  alertRemeasures(a, patient).forEach(r => {
+    const level = r.invalid ? undefined : patient && def ? evaluate(patient, def, r.value) : undefined
+    timed.push({
+      kind: 'remeasure', at: r.at ?? 0, when: r.loggedAt, by: r.recordedBy, level,
+      title: `Re-measured ${r.value} ${def?.unit ?? a.unit}`.trim(),
+      detail: r.invalid ? 'Marked invalid' : level ? LEVEL_WORD[level] : undefined,
+    })
+  })
+  ;(a.comments ?? []).forEach(c => timed.push({
+    kind: 'comment', at: c.at, when: c.createdAt, by: c.authorId, detail: c.body,
+    title: c.kind === 'action' ? 'Action taken' : c.kind === 'instruction' ? 'Follow-up instruction' : 'Clinical comment',
+  }))
+  timed.sort((x, y) => x.at - y.at).forEach(({ at: _at, ...s }) => steps.push(s))
+
+  if (a.status === 'resolved') steps.push({
+    kind: 'resolved', when: a.resolvedAt ?? '', by: a.resolvedHow === 'remeasure' ? undefined : a.resolvedBy,
+    title: resolvedHowLabel(a),
+    detail: [a.resolutionReason, a.resolutionNote].filter(Boolean).join(' · ') || undefined,
+  })
+  return steps
+}
 
 /** Age in whole years from a YYYY-MM-DD date of birth, as of `now`. */
 export function calcAge(dob: string, now = new Date()): number | null {

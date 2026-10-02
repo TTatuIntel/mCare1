@@ -1,10 +1,10 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import type {
   AppUser, VitalDef, PatientUser, DoctorUser, AdminUser, AssistantPerm, Prescription, VitalReading,
-  AppAlert, Appointment, ApptEvent, PatientMessage, AppNotification, NotifKind, AuditEntry, ClinicalNote, MedDose, MealDone, ReportRequest,
+  AppAlert, AlertCommentKind, Appointment, ApptEvent, PatientMessage, AppNotification, NotifKind, AuditEntry, ClinicalNote, MedDose, MealDone, ReportRequest,
   AccountStatus, SupportTicket, ResetToken, ResetChannel, AuthProvider, VitalsReportInclude, EmailContent, SentEmail, SentSms,
   MealPlan, HydrationLog, DoctorRating, Outcome, Invitation, UserRole, ReportNote,
-  CarePlan, CarePlanDraft, CarePlanItemStatus, CarePlanStatus, CareAssignment, PastPatient, TimeOff, WorkBlock, DayAvailability, AdminReport,
+  CarePlan, CarePlanDraft, CarePlanItemStatus, CarePlanStatus, CareAssignment, CareTeamMember, PastPatient, TimeOff, WorkBlock, DayAvailability, AdminReport,
 } from '@/shared/lib/types'
 import { emails as mail, sms as smsText, appBaseUrl, activationLink, activationToken } from '@/shared/email/emailTemplate'
 import { RESET_TTL_MIN, MAX_RESET_ATTEMPTS, AUTH_PROVIDER_LABELS, FOLLOW_UP_REASON } from '@/shared/lib/types'
@@ -13,8 +13,8 @@ import { DEMO } from './demoData'
 import { backendConfigured, getSupabase, localBackend } from '@/shared/api/supabase'
 import { signOutBackend } from '@/shared/api/authBackend'
 import * as api from '@/shared/api/actions'
-import { changeToken, isoClock, isoDay, loadAuditBefore, loadRecords, type Records } from '@/shared/api/records'
-import { evaluate, alertIsFor, stamp, dateLabel, dayKey, targetRange, ESCALATE_AFTER_MIN, CORRECTION_WINDOW_MIN, SELF_CLEAR_WINDOW_MIN, type VitalLevel } from '@/shared/lib/vitals'
+import { changeToken, isoClock, isoDay, loadRecords, searchAudit as searchAuditApi, type AuditWho, type Records } from '@/shared/api/records'
+import { evaluate, alertIsFor, stamp, dateLabel, dayKey, targetRange, ESCALATE_AFTER_MIN, CORRECTION_WINDOW_MIN, type VitalLevel } from '@/shared/lib/vitals'
 import { apptDateLabel, apptTimeLabel, apptWhen, isOpenAppt } from '@/shared/lib/schedule'
 import { useDocumentStore, type DocumentApi } from '@/shared/documents/useDocumentStore'
 import { seedDocuments } from '@/shared/documents/docSeed'
@@ -50,6 +50,8 @@ export interface LogResult {
   readingId: string
   /** This reading closed an open warning (re-measured in range). */
   cleared?: boolean
+  /** A re-measurement for an alert that stays open: out of range again, or in range on a critical alert the doctor must close. */
+  followsAlert?: boolean
 }
 
 /** Every action that saves resolves with how it went, in both modes. */
@@ -168,6 +170,8 @@ interface Ctx extends DocumentApi {
   resolveAlert: (alertId: string, reason: string, note?: string) => Saved
   escalateAlert: (alertId: string) => Saved
   requestRecheck: (alertId: string) => Saved
+  /** A comment, an action taken or an instruction on an alert, without resolving it. `ref` is the form's reference. */
+  addAlertComment: (alertId: string, kind: AlertCommentKind, body: string, ref?: string) => Saved
   /** A monitor asks the treating doctor to respond to an open alert. */
   chaseDoctor: (alertId: string) => Saved
   scheduleFollowUp: (patientId: string, doctorId: string, date: string, time: string, note: string | undefined, alertId?: string) => Saved
@@ -179,8 +183,12 @@ interface Ctx extends DocumentApi {
   adminUpdateAppointment: (apptId: string, change: { action: 'move'; date: string; time?: string; reason: string } | { action: 'cancel'; reason: string }) => Saved
   /** Counts for a period, made from the records. A read: nothing is saved. */
   adminReport: (from: string, to: string) => Saved<AdminReport>
-  /** Fetches older audit entries than those on screen. Resolves with how many came. */
-  loadOlderAudit: () => Saved<number>
+  /** One page of the audit trail, searched across the whole trail. `beforeId` continues after the last entry shown. A read. */
+  searchAudit: (q: string, who: AuditWho, beforeId?: string) => Saved<AuditEntry[]>
+  /** Consulting doctors on care teams, past and present. An open row (no `endedAt`) gives that doctor read access. */
+  careTeam: CareTeamMember[]
+  addConsultingDoctor: (patientId: string, doctorId: string, reason?: string) => Saved
+  removeConsultingDoctor: (memberId: string) => Saved
   reportRequests: ReportRequest[]
   requestReport: (patientId: string, periodDays: number, reason: string) => Saved
   /** Draft the requested report; the doctor may adjust the period and what it includes. Resolves with the new document id. */
@@ -258,8 +266,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     .map(p => ({ id: `ca_${p.id}`, patientId: p.id, doctorId: p.assignedDoctorId!, startedAt: NOW - 30 * 86_400_000 })))
   const [pastPatients, setPastPatients] = useState<PastPatient[]>([])
   const [timeOff, setTimeOff] = useState<TimeOff[]>([])
-  /** Audit entries older than the newest page, fetched on request and kept across reloads. */
-  const [olderAudit, setOlderAudit] = useState<AuditEntry[]>([])
+  const [careTeam, setCareTeam] = useState<CareTeamMember[]>([])
   const [now, setNow] = useState(Date.now())
 
   // Always-fresh refs so callbacks never read stale state
@@ -412,7 +419,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setMessages(r.messages); setNotifications(r.notifications); setDoses(r.doses); setMealsDone(r.mealsDone)
     setReportRequests(r.reportRequests); setClinicalNotes(r.clinicalNotes); setSupportTickets(r.supportTickets); setAudit(r.audit)
     setMealPlans(r.mealPlans); setHydrationLogs(r.hydration); setRatings(r.ratings); setInvitations(r.invitations)
-    setCarePlans(r.carePlans); setCareAssignments(r.careAssignments); setPastPatients(r.pastPatients); setTimeOff(r.timeOff)
+    setCarePlans(r.carePlans); setCareAssignments(r.careAssignments); setPastPatients(r.pastPatients); setTimeOff(r.timeOff); setCareTeam(r.careTeam)
     docStore.hydrateDocuments(r.documents, r.docEvents, r.shareLinks, r.supportGrants)
   }
   /**
@@ -427,7 +434,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const EMPTY: Records = {
     users: [], vitalDefs: [], alerts: [], appointments: [], messages: [], notifications: [], doses: [], mealsDone: [], reportRequests: [],
     clinicalNotes: [], supportTickets: [], audit: [], mealPlans: [], hydration: [], ratings: [], documents: [], docEvents: [], shareLinks: [], supportGrants: [], invitations: [],
-    carePlans: [], careAssignments: [], pastPatients: [], timeOff: [],
+    carePlans: [], careAssignments: [], pastPatients: [], timeOff: [], careTeam: [],
   }
 
   /** Signs out locally. `notice` says why, when the person did not choose to. */
@@ -436,7 +443,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loadSeq.current++
     meRef.current = null; pendingRef.current = null
     setCurrentUserId(null)
-    if (LIVE) { apply(EMPTY); setOlderAudit([]); lastToken.current = ''; setSync({ at: null, refreshing: false }) }
+    if (LIVE) { apply(EMPTY); lastToken.current = ''; setSync({ at: null, refreshing: false }) }
     setEnterError(notice)
   }
 
@@ -922,7 +929,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const logReading = (patientId: string, reading: VitalReading): Saved<LogResult> => {
     if (LIVE) return run(async () => {
       const saved = await api.logReading(patientId, reading.vitalId, reading.value, reading.note, reading.clientRef)
-      return { level: saved.level, alerted: saved.alerted, readingId: saved.readingId, cleared: saved.cleared }
+      return { level: saved.level, alerted: saved.alerted, readingId: saved.readingId, cleared: saved.cleared, followsAlert: saved.followsAlert }
     })
     const pt = findUser(patientId) as PatientUser | undefined
     const def = vitalDefs.find(v => v.id === reading.vitalId)
@@ -938,44 +945,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
       logAudit('Recorded reading for patient', `${pt.name} · ${label}`)
     }
 
-    // A doctor asked for a re-check on this vital. An in-range reading closes a warning;
-    // a critical alert is never closed by a number alone, so it goes back to the doctor.
-    const pendingRecheck = alertsRef.current.find(a =>
-      a.patientId === patientId && alertIsFor(a, def) && a.recheckRequestedAt && a.status !== 'resolved')
-    if (pendingRecheck && level === 'normal') {
-      if (pendingRecheck.severity === 'warning') {
-        setAlerts(prev => prev.map(a => a.id === pendingRecheck.id
-          ? { ...a, status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: patientId, recheckReadingId: full.id,
-              resolutionReason: 'Re-check back in range', resolutionNote: `New reading ${label}` }
-          : a))
-        notify(pendingRecheck.patientId, 'alert', 'Alert resolved', `${def.name}: your new reading is back in range`, 'alerts')
+    // The alert still open on this vital: this reading is a re-measurement of it.
+    const open = alertsRef.current.find(a =>
+      a.patientId === patientId && a.type === 'vital' && alertIsFor(a, def) && a.status !== 'resolved')
+    if (open) {
+      const linked = { recheckReadingId: full.id, remeasureIds: [...(open.remeasureIds ?? []), full.id] }
+      const patch = (more: Partial<AppAlert>) => setAlerts(prev => prev.map(a => (a.id === open.id ? { ...a, ...linked, ...more } : a)))
+      const doctor = pt.assignedDoctorId
+      // A warning closes on an in-range re-measurement, whenever it comes.
+      if (level === 'normal' && open.severity === 'warning') {
+        const asked = open.recheckRequestedAt !== undefined
+        patch({
+          status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: actorId(), resolvedHow: 'remeasure',
+          resolutionReason: asked ? 'Re-check back in range' : 'Re-measured in range by patient', resolutionNote: `New reading ${label}`,
+        })
+        notify(patientId, 'alert', 'Alert cleared', `${def.name}: your new reading is back in range`, 'alerts')
+        if (doctor) notify(doctor, 'alert', `Alert cleared: ${pt.name}`, `${label} · re-measured back in range`, 'alerts')
+        logAudit('Alert self-cleared', `${pt.name} · ${label}`)
         return done({ level, alerted: false, readingId: full.id, cleared: true })
       }
-      setAlerts(prev => prev.map(a => a.id === pendingRecheck.id ? { ...a, recheckReadingId: full.id } : a))
-      notify(pendingRecheck.patientId, 'alert', 'Re-check received', `${def.name}: your new reading is in range. Your doctor will review it and close the alert.`, 'alerts')
-      if (pt.assignedDoctorId) notify(pt.assignedDoctorId, 'alert', `Re-check in range: ${pt.name}`, `${label} · review and resolve the alert`, 'alerts')
-      return done({ level, alerted: false, readingId: full.id })
-    }
-
-    // Self-clear: a warning the patient raised themselves can be cleared by an
-    // in-range re-measurement within SELF_CLEAR_WINDOW_MIN. Critical alerts are
-    // excluded — a clinician always reviews those — and so is anything the care
-    // team has already picked up.
-    const selfClearable = alertsRef.current.find(a =>
-      a.patientId === patientId && alertIsFor(a, def) && a.type === 'vital' &&
-      a.severity === 'warning' && a.status === 'open' &&
-      t - a.at <= SELF_CLEAR_WINDOW_MIN * MIN)
-    if (selfClearable && level === 'normal') {
-      setAlerts(prev => prev.map(a => a.id === selfClearable.id
-        ? { ...a, status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: patientId, recheckReadingId: full.id,
-            resolutionReason: 'Re-measured in range by patient', resolutionNote: `New reading ${label}` }
-        : a))
-      notify(patientId, 'alert', 'Alert cleared', `${def.name}: your new reading is back in range`, 'alerts')
-      if (pt.assignedDoctorId)
-        notify(pt.assignedDoctorId, 'alert', `Alert cleared: ${pt.name}`,
-          `${def.name} re-measured at ${full.value} ${def.unit} — back in range`, 'alerts')
-      logAudit('Alert self-cleared', `${pt.name} · ${label}`)
-      return done({ level, alerted: false, readingId: full.id, cleared: true })
+      // A critical alert is never closed by a number alone, so it goes back to the doctor.
+      if (level === 'normal') {
+        patch({})
+        notify(patientId, 'alert', 'Re-check received', `${def.name}: your new reading is in range. Your doctor will review it and close the alert.`, 'alerts')
+        if (doctor) notify(doctor, 'alert', `Re-check in range: ${pt.name}`, `${label} · review and resolve the alert`, 'alerts')
+        return done({ level, alerted: false, readingId: full.id, followsAlert: true })
+      }
+      // Still out of range: the same alert carries on, at the worse of the two severities.
+      patch(level === 'critical' ? { severity: 'danger' } : {})
+      notify(patientId, 'alert', level === 'critical' ? 'Still critical: contact your doctor' : 'Still outside your range',
+        `${label} · ${level === 'critical' ? 'your care team has been told. If you feel unwell, use SOS or call 999.' : 'your doctor has been told. Message them if you feel unwell.'}`, 'alerts')
+      if (doctor) notify(doctor, 'alert', `${level === 'critical' ? 'Critical' : 'Still out of range'}: ${pt.name}`, `${label} · re-measurement`, 'alerts')
+      return done({ level, alerted: false, readingId: full.id, followsAlert: true })
     }
 
     if (level === 'normal') return done({ level, alerted: false, readingId: full.id })
@@ -1011,7 +1012,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const level = evaluate(pt, def, value)
     setAlerts(prev => prev.map(a => a.readingId !== readingId || a.status === 'resolved' ? a
       : level === 'normal'
-        ? { ...a, status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: patientId, resolutionReason: 'Corrected by patient',
+        ? { ...a, status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: patientId, resolvedHow: 'corrected', resolutionReason: 'Corrected by patient',
             resolutionNote: `Entered as ${rd?.value}, corrected to ${value} ${def.unit}` }
         : { ...a, value, severity: level === 'critical' ? 'danger' : 'warning' }))
     return done()
@@ -1025,7 +1026,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const raised = alertsRef.current.find(a => a.readingId === readingId && a.status !== 'resolved')
     if (raised) {
       setAlerts(prev => prev.map(a => a.id === raised.id
-        ? { ...a, status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: actorId(), resolutionReason: 'Reading marked invalid', resolutionNote: reason } : a))
+        ? { ...a, status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: actorId(), resolvedHow: 'invalid', resolutionReason: 'Reading marked invalid', resolutionNote: reason } : a))
       notify(patientId, 'alert', 'Alert closed', `${raised.vitalName}: your doctor marked the reading as not valid`, 'alerts')
     }
     return done()
@@ -1071,7 +1072,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     if (a?.status === 'resolved') return refused('That alert is already resolved.')
     setAlerts(prev => prev.map(x => x.id === alertId
-      ? { ...x, status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: actorId(), resolutionReason: reason, resolutionNote: note?.trim() || undefined }
+      ? { ...x, status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: actorId(), resolvedHow: x.type === 'sos' && x.patientId === actorId() ? 'patient' : 'doctor', resolutionReason: reason, resolutionNote: note?.trim() || undefined }
       : x))
     if (a) {
       notify(a.patientId, 'alert', 'Alert resolved', `${a.type === 'sos' ? 'SOS' : a.vitalName}: ${reason}`, 'alerts')
@@ -1102,6 +1103,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
         `${findUser(actorId())?.name ?? 'Your doctor'} asked you to re-check your ${a.type === 'sos' ? 'condition' : a.vitalName}`, 'vitals')
       logAudit('Requested re-check', `${findUser(a.patientId)?.name} · ${a.vitalName}`)
     }
+    return done()
+  }
+
+  const addAlertComment = (alertId: string, kind: AlertCommentKind, body: string, ref?: string): Saved => {
+    if (!body.trim()) return refused('Write the comment first.')
+    if (LIVE) return run(() => api.addAlertComment(alertId, actorId(), kind, body, ref))
+    const a = alertsRef.current.find(x => x.id === alertId)
+    if (!a) return refused('That alert could not be found.')
+    const t = Date.now()
+    const by = findUser(actorId())?.name ?? 'Your care team'
+    setAlerts(prev => prev.map(x => x.id === alertId
+      ? { ...x, comments: [...(x.comments ?? []), { id: uid('ac'), authorId: actorId(), kind, body: body.trim(), at: t, createdAt: stamp(new Date(t)) }] }
+      : x))
+    notify(a.patientId, 'alert', kind === 'instruction' ? `Instruction from ${by}` : kind === 'action' ? `${by} acted on your alert` : `${by} commented on your alert`,
+      `${a.type === 'sos' ? 'SOS' : a.vitalName}: ${body.trim().slice(0, 120)}`, 'alerts')
+    logAudit('Commented on alert', `${findUser(a.patientId)?.name} · ${a.vitalName} · ${kind}`)
     return done()
   }
 
@@ -1311,9 +1328,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const sendMessage = (fromId: string, toId: string, content: string, ref?: string): Saved => {
     if (!content.trim()) return refused('Write a message first.')
     if (LIVE) return run(() => api.sendMessage(fromId, toId, content, ref))
-    setMessages(prev => [...prev, { id: uid('msg'), fromId, toId, content, sentAt: stamp(), read: false }])
-    notify(toId, 'message', `New message from ${findUser(fromId)?.name ?? 'mCare'}`, content.slice(0, 80),
-      findUser(toId)?.role === 'patient' ? 'messages' : 'patients')
+    // The same rule the database applies: a patient and the doctor who treats them now.
+    const a = findUser(fromId), b = findUser(toId)
+    const pt = (a?.role === 'patient' ? a : b?.role === 'patient' ? b : undefined) as PatientUser | undefined
+    const other = pt?.id === fromId ? toId : fromId
+    if (!pt || pt.assignedDoctorId !== other) return refused('You can only message the doctor who treats you, or a patient under your care.')
+    setMessages(prev => [...prev, { id: uid('msg'), fromId, toId, content: content.trim(), sentAt: stamp(), at: Date.now(), read: false }])
+    notify(toId, 'message', `New message from ${findUser(fromId)?.name ?? 'mCare'}`, content.trim().slice(0, 80), 'messages')
     return done()
   }
   const markMessagesRead = (fromId: string, toId: string): Saved => {
@@ -1674,16 +1695,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
       })).sort((a, b) => b.patients - a.patients),
     } }
   }
-  const allAudit = olderAudit.length ? [...audit, ...olderAudit.filter(o => !audit.some(a => a.id === o.id))] : audit
-  const loadOlderAudit = async (): Saved<number> => {
-    if (!LIVE) return { ok: true, value: 0 }   // demo mode keeps the whole trail in memory
-    const oldest = allAudit[allAudit.length - 1]
-    if (!oldest) return { ok: true, value: 0 }
-    try {
-      const more = await loadAuditBefore(oldest.id)
-      setOlderAudit(prev => [...prev, ...more])
-      return { ok: true, value: more.length }
-    } catch (e) { return { ok: false, error: api.explain(e) } }
+  const AUDIT_PAGE = 100
+  const searchAudit = async (q: string, who: AuditWho, beforeId?: string): Saved<AuditEntry[]> => {
+    if (LIVE) {
+      try { return { ok: true, value: await searchAuditApi(q, who, beforeId, AUDIT_PAGE) } }
+      catch (e) { return { ok: false, error: api.explain(e) } }
+    }
+    // Demo mode keeps the whole trail in memory: the same search, here.
+    const needle = q.trim().toLowerCase()
+    const start = beforeId ? audit.findIndex(a => a.id === beforeId) + 1 : 0
+    const hits = audit.slice(start).filter(a =>
+      (who === 'all' || (who === 'system' ? !a.actorRole : who === 'staff' ? a.actorRole === 'admin' || a.actorRole === 'assistant' : a.actorRole === who))
+      && (!needle || `${a.action} ${a.detail} ${findUser(a.actorId)?.name ?? ''}`.toLowerCase().includes(needle)))
+    return { ok: true, value: hits.slice(0, AUDIT_PAGE) }
+  }
+
+  /* ─ care team: consulting doctors read a patient's record; only the treating doctor changes it ─ */
+  const addConsultingDoctor = (patientId: string, doctorId: string, reason?: string): Saved => {
+    if (LIVE) return run(async () => { await api.addConsultingDoctor(patientId, doctorId, reason?.trim()) })
+    const pt = findUser(patientId) as PatientUser | undefined, doc = findUser(doctorId) as DoctorUser | undefined
+    if (!pt || !doc || doc.role !== 'doctor' || doc.status !== 'active' || doc.approvalStatus !== 'approved') return refused('That doctor is not available')
+    if (pt.assignedDoctorId === doctorId) return refused('That doctor already treats this patient')
+    if (careTeam.some(m => m.patientId === patientId && m.doctorId === doctorId && !m.endedAt)) return refused('That doctor is already on the care team')
+    const why = reason?.trim() || undefined
+    setCareTeam(prev => [{ id: uid('ctm'), patientId, doctorId, reason: why, addedBy: actorId(), startedAt: Date.now() }, ...prev])
+    notify(doctorId, 'assignment', 'Added to a care team', `You can now read ${pt.name}'s record as a consulting doctor${why ? ` · ${why}` : ''}`, 'patients')
+    notify(patientId, 'assignment', 'Care team updated', `${doc.name} can now read your record as a consulting doctor`, 'care')
+    logAudit('Added consulting doctor', `${pt.name} ← ${doc.name}${why ? ` · ${why}` : ''}`)
+    return done()
+  }
+  const removeConsultingDoctor = (memberId: string): Saved => {
+    if (LIVE) return run(() => api.removeConsultingDoctor(memberId))
+    const m = careTeam.find(x => x.id === memberId && !x.endedAt)
+    if (!m) return refused('That doctor is no longer on the care team')
+    setCareTeam(prev => prev.map(x => x.id === memberId ? { ...x, endedAt: Date.now() } : x))
+    if (m.doctorId !== actorId()) notify(m.doctorId, 'assignment', 'Removed from a care team', `You no longer have access to ${findUser(m.patientId)?.name}'s record`, 'patients')
+    notify(m.patientId, 'assignment', 'Care team updated', `${findUser(m.doctorId)?.name} no longer has access to your record`, 'care')
+    logAudit('Removed consulting doctor', `${findUser(m.patientId)?.name} ← ${findUser(m.doctorId)?.name}`)
+    return done()
   }
 
   return (
@@ -1698,17 +1747,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       careAssignments, pastPatients, addClinicalNote,
       carePlans, saveCarePlan, setCarePlanStatus, setCarePlanItem, deleteCarePlanDraft,
       timeOff, setDoctorHours, addTimeOff, removeTimeOff, availabilityFor,
-      adminUpdateAppointment, adminReport, loadOlderAudit,
+      adminUpdateAppointment, adminReport, searchAudit,
+      careTeam, addConsultingDoctor, removeConsultingDoctor,
       addPrescription, setPrescriptionActive, logReading, correctReading, invalidateReading, sendAlertNow,
       setDoctorNote, setUnitPref, setThreshold, setCriticalThreshold, clinicalNotes, doses, toggleDose, mealsDone, toggleMeal,
       mealPlans, setMealPlan, clearMealPlan, hydration, setHydration, ratings, rateDoctor,
-      alerts, raiseSOS, acknowledgeAlert, resolveAlert, escalateAlert, requestRecheck, chaseDoctor, scheduleFollowUp,
+      alerts, raiseSOS, acknowledgeAlert, resolveAlert, escalateAlert, requestRecheck, addAlertComment, chaseDoctor, scheduleFollowUp,
       appointments, addAppointment, updateAppointment,
       reportRequests, requestReport, fulfillReportRequest, declineReportRequest,
       messages, sendMessage, markMessagesRead,
       notifications, notify, markNotificationRead, markAllNotificationsRead,
       emails, emailsFor, texts, textsFor, resendVerification, verifyByLink, sendWelcomeEmail,
-      audit: allAudit, logAudit, logPatientView, canCorrect,
+      audit, logAudit, logPatientView, canCorrect,
       changePassword, requestPasswordReset, verifyResetCode, verifyResetLink,
       setPasswordAfterVerification, recoveryChannels, requestAdminPasswordHelp, socialAuth,
       supportTickets, createSupportTicket, resolveSupportTicket,

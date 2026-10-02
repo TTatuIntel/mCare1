@@ -234,7 +234,8 @@ ${inc.findings ? `<section class="block">
 ${inc.alerts && b.alerts.length ? `<section class="block">
   <h2>Alerts &amp; events</h2>
   <table class="grid"><thead><tr><th>Date &amp; time</th><th>Event</th><th>Severity</th><th>Status / outcome</th></tr></thead><tbody>
-  ${b.alerts.map(a => `<tr><td class="nowrap">${esc(a.at)}</td><td>${esc(a.label)}</td><td><span class="flag ${a.severity === 'danger' ? 'crit' : 'warn'}">${a.severity === 'danger' ? 'Critical' : 'Warning'}</span></td><td>${esc(a.status)}${a.resolution ? ` — ${esc(a.resolution)}` : ''}</td></tr>`).join('')}
+  ${b.alerts.map(a => `<tr><td class="nowrap">${esc(a.at)}</td><td>${esc(a.label)}</td><td><span class="flag ${a.severity === 'danger' ? 'crit' : 'warn'}">${a.severity === 'danger' ? 'Critical' : 'Warning'}</span></td><td><span class="flag ${a.status === 'resolved' ? 'ok' : 'crit'}">${a.status === 'resolved' ? 'Resolved' : 'Unresolved'}</span> ${esc(a.status === 'resolved' ? a.outcome ?? '' : a.status)}${a.resolution ? ` — ${esc(a.resolution)}` : ''}${a.steps?.length
+    ? `<ol class="steps">${a.steps.map(st => `<li><span class="when">${esc(st.when)}</span> ${esc(st.text)}${st.by ? ` <span class="when">· ${esc(st.by)}</span>` : ''}</li>`).join('')}</ol>` : ''}</td></tr>`).join('')}
   </tbody></table>
 </section>` : ''}
 
@@ -418,6 +419,7 @@ dl{margin:0}.row{display:flex;gap:8px;padding:2px 0}dt{width:92px;flex-shrink:0;
 .nochart{font-size:11px;color:#8a9aa3;background:#f7f9f9;border-radius:6px;padding:14px;text-align:center}
 .tnote{margin:6px 0 0;font-size:11px;color:#445;border-top:1px dashed #e3eceb;padding-top:5px}
 .flag{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.04em;padding:2px 7px;border-radius:99px;white-space:nowrap}
+.steps{margin:5px 0 0;padding-left:16px;font-size:10px;color:#374151}.steps li{margin:1px 0}.steps .when{color:#6b7280}
 .flag.ok{background:#d1fae5;color:#065f46}.flag.warn{background:#fef3c7;color:#92400e}.flag.crit{background:#fee2e2;color:#991b1b}.flag.na{background:#f3f4f6;color:#6b7280}.flag.info{background:#dbeafe;color:#1e40af}
 table.grid{width:100%;border-collapse:collapse;font-size:12px}
 table.grid th{background:#f1f7f6;color:#44565f;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;text-align:left;padding:6px 8px;border-bottom:1.5px solid #d6e7e5}

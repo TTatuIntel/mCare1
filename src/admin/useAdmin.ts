@@ -64,9 +64,10 @@ export function useAdmin() {
     activeAlerts: app.alerts.filter(isActiveAlert),
     /** GET appointments, appointment_events */
     appointments: app.appointments,
-    /** GET audit_log: the newest entries; `loadOlderAudit` fetches the ones before them. */
+    /** GET audit_log: the newest entries, as loaded with the record. */
     audit: app.audit,
-    loadOlderAudit: app.loadOlderAudit,
+    /** RPC search_audit: one page of the whole trail, by words, by person and by kind of person. */
+    searchAudit: app.searchAudit,
     /** GET care_assignments: who treated a patient, and when. */
     assignmentsOf: (patientId: string) => app.careAssignments.filter(a => a.patientId === patientId),
     /** GET doctor_time_off */

@@ -198,9 +198,9 @@ const INITIAL_APPOINTMENTS: Appointment[] = [
 ]
 
 const INITIAL_MESSAGES: PatientMessage[] = [
-  { id: 'msg1', fromId: 'd1', toId: 'p1', content: 'Your blood pressure is significantly elevated. Please reduce sodium intake, rest well, and monitor twice daily.', sentAt: stamp(new Date(NOW - 40 * MIN)), read: true },
-  { id: 'msg2', fromId: 'p1', toId: 'd1', content: 'Thank you doctor. I will follow your advice and monitor closely.', sentAt: stamp(new Date(NOW - 30 * MIN)), read: true },
-  { id: 'msg3', fromId: 'd1', toId: 'p3', content: 'Samuel, your SpO₂ dropped. Please rest and avoid strenuous activity. Contact me if it stays below 93%.', sentAt: stamp(new Date(NOW - 20 * MIN)), read: false },
+  { id: 'msg1', fromId: 'd1', toId: 'p1', content: 'Your blood pressure is significantly elevated. Please reduce sodium intake, rest well, and monitor twice daily.', sentAt: stamp(new Date(NOW - 40 * MIN)), at: NOW - 40 * MIN, read: true },
+  { id: 'msg2', fromId: 'p1', toId: 'd1', content: 'Thank you doctor. I will follow your advice and monitor closely.', sentAt: stamp(new Date(NOW - 30 * MIN)), at: NOW - 30 * MIN, read: true },
+  { id: 'msg3', fromId: 'd1', toId: 'p3', content: 'Samuel, your SpO₂ dropped. Please rest and avoid strenuous activity. Contact me if it stays below 93%.', sentAt: stamp(new Date(NOW - 20 * MIN)), at: NOW - 20 * MIN, read: false },
 ]
 
 const INITIAL_NOTES: ClinicalNote[] = [

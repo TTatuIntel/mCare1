@@ -397,6 +397,26 @@ const tokenAfter = (await pat.rpc('my_change_token')).data
 check('the change token moves when the doctor changes the patient\'s record', typeof tokenBefore === 'string' && tokenBefore.length === 32 && tokenAfter !== tokenBefore
   && !!(await client().rpc('my_change_token')).error)
 
+/* ── Care team, email queue, audit search ── */
+console.log('\nCare team, email, audit search')
+const addMember = await doc.rpc('add_consulting_doctor', { patient: patId, doctor: doc2Id, reason: 'Second opinion' })
+check('the treating doctor adds a consulting doctor, who then reads the record and cannot change it', typeof addMember.data === 'string'
+  && (await doc2.from('readings').select('id').eq('patient_id', patId)).data?.length > 0
+  && !!(await doc2.from('clinical_notes').insert({ patient_id: patId, author_id: doc2Id, content: 'x' })).error
+  && (await doc2.from('clinical_notes').select('id').eq('visibility', 'internal')).data?.length === 0, addMember.error?.message)
+check('the patient sees who is on their care team', (await pat.from('care_team_members').select('doctor_id').is('ended_at', null)).data?.[0]?.doctor_id === doc2Id)
+check('the consulting doctor can leave; access ends', !(await doc2.rpc('remove_consulting_doctor', { member: addMember.data })).error
+  && (await doc2.from('readings').select('id').eq('patient_id', patId)).data?.length === 0)
+
+const sentNow = await backend.deliver()
+check('queued notification emails are sent by the sender and marked sent', sentNow > 0 && backend.outbox.some(m => m.kind === 'notification')
+  && (await admin.from('notification_deliveries').select('id').in('status', ['queued', 'sending'])).data?.length === 0
+  && (await staff.from('notification_deliveries').select('id')).data?.length === 0)
+
+const hits = await staff.rpc('search_audit', { q: 'consulting', who: 'all', before: null, page_size: 50 })
+check('the audit trail is searched in the database, for whoever may read it only', hits.data?.length >= 2 && hits.data.every(r => /consulting/i.test(r.action + r.detail))
+  && (await pat.rpc('search_audit', { q: null })).data?.length === 0, hits.error?.message)
+
 /* ── Sessions end ── */
 console.log('\nPassword and sign-out')
 await client().auth.resetPasswordForEmail('test.patient2@mcare.test')

@@ -11,7 +11,7 @@ import type {
   AppUser, AdminUser, DoctorUser, PatientUser, VitalDef, AppAlert,
   MedicalDocument, DocCategory, DocBody, DocSourceLink, SupportGrant, VitalsReportRow, VitalsReportInclude, ReportNote,
 } from '@/shared/lib/types'
-import { evaluate, latestValid, targetRange, vitalTrend, stamp, parseValue } from '@/shared/lib/vitals'
+import { evaluate, latestValid, targetRange, vitalTrend, stamp, parseValue, alertIsFor, alertStory, resolvedHowLabel } from '@/shared/lib/vitals'
 import { SUPPORTED_SUMMARY, formatByExt, extOf, verifyContent, FORMATS } from './fileFormats'
 
 /* ─── Categories ─────────────────────────────────────────────────────── */
@@ -315,6 +315,8 @@ export function buildVitalsReport(
   include: VitalsReportInclude = DEFAULT_REPORT_INCLUDE,
   /** Clinical notes the doctor chose to attach. */
   notes: ReportNote[] = [],
+  /** Names for the people in an alert's history. */
+  personName: (id: string) => string | undefined = () => undefined,
 ): { body: DocBody; links: DocSourceLink[] } {
   const cutoff = now - days * DAY_MS
   const allTracked = defs.filter(d => patient.trackedVitalIds.includes(d.id))
@@ -370,6 +372,8 @@ export function buildVitalsReport(
     : []
   const open = inPeriod.filter(a => a.status !== 'resolved')
   if (inPeriod.length) findings.push(`${inPeriod.length} alert${inPeriod.length === 1 ? '' : 's'} raised in the period; ${open.length ? `${open.length} still open` : 'all resolved'}.`)
+  const auto = inPeriod.filter(a => a.resolvedHow === 'remeasure').length
+  if (auto) findings.push(`${auto} alert${auto === 1 ? '' : 's'} cleared by an in-range re-measurement; ${inPeriod.length - open.length - auto} closed by the care team.`)
   if (!rows.some(r => r.level === 'warning' || r.level === 'critical') && rows.some(r => r.total > 0))
     findings.unshift(`All ${picked.length ? 'reported' : 'tracked'} vitals were within target at the latest reading.`)
 
@@ -392,6 +396,10 @@ export function buildVitalsReport(
       alerts: inPeriod.map(a => ({
         id: a.id, label: a.type === 'sos' ? `SOS · ${a.value}` : `${a.vitalName} ${a.value} ${a.unit}`, status: a.status, at: a.loggedAt,
         severity: a.severity, resolution: a.resolutionReason ? `${a.resolutionReason}${a.resolutionNote ? ` — ${a.resolutionNote}` : ''}` : undefined,
+        outcome: a.status === 'resolved' ? resolvedHowLabel(a) : 'Unresolved',
+        // The first step is the reading itself, which the row already shows.
+        steps: alertStory(a, patient, defs.find(d => alertIsFor(a, d))).slice(1)
+          .map(st => ({ when: st.when, text: st.detail ? `${st.title}: ${st.detail}` : st.title, by: st.by ? personName(st.by) : undefined })),
       })),
       readingsCount: used.length, summary, findings,
       periodStart: cutoff, periodEnd: now,

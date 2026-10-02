@@ -21,6 +21,7 @@
  */
 import { useApp, isActiveAlert } from '@/shared/state/AppContext'
 import { useLoadStatus } from '@/shared/state/useLoadStatus'
+import { partnersOf } from '@/shared/lib/messaging'
 import type { Appointment, DoctorUser, MealPlan, PatientUser, RxRoute } from '@/shared/lib/types'
 import * as api from '@/shared/api/actions'
 import { dateLabel } from '@/shared/lib/vitals'
@@ -74,10 +75,18 @@ export function useDoctor() {
     /** GET patients, profiles (assigned to this doctor) */
     patients,
     patient: (id: string | undefined | null): PatientUser | undefined => patients.find(p => p.id === id),
+    /** GET care_team_members: patients whose record this doctor reads as a consulting doctor, and changes nothing in. */
+    consulting: app.careTeam.filter(m => m.doctorId === doctor.id && !m.endedAt)
+      .flatMap(m => { const p = app.getPatients().find(x => x.id === m.patientId); return p ? [{ member: m, patient: p }] : [] }),
+    /** GET alerts of one patient this doctor may see (their own patient, or one they consult on). */
+    alertsOf: (patientId: string) => app.alerts.filter(a => a.patientId === patientId),
+    /** RPC remove_consulting_doctor: this doctor leaves a care team. */
+    leaveCareTeam: app.removeConsultingDoctor,
     /** RPC my_past_patients: who this doctor used to treat. Names and dates only; their records are no longer open to them. */
     pastPatients: app.pastPatients,
     /** Display name for anyone this doctor's records mention. Someone they may not see (a previous doctor) gets the fallback. */
-    nameOf: (id: string | undefined | null, fallback = 'Patient') => app.users.find(u => u.id === id)?.name ?? fallback,
+    nameOf: (id: string | undefined | null, fallback = 'Patient') =>
+      app.users.find(u => u.id === id)?.name ?? app.pastPatients.find(p => p.patientId === id)?.name ?? fallback,
 
     /** GET alerts (of this doctor's patients) */
     alerts,
@@ -85,8 +94,10 @@ export function useDoctor() {
       .sort((a, b) => (a.severity === 'danger' ? 0 : 1) - (b.severity === 'danger' ? 0 : 1) || b.at - a.at),
     /** GET appointments (with this doctor) */
     appointments: app.appointments.filter(a => a.doctorId === doctor.id),
-    /** GET messages (between this doctor and their patients) */
-    messages: app.messages.filter(m => (m.toId === doctor.id && mine.has(m.fromId)) || (m.fromId === doctor.id && mine.has(m.toId))),
+    /** GET messages (between this doctor and their patients, past and present) */
+    messages: app.messages.filter(m => m.toId === doctor.id || m.fromId === doctor.id),
+    /** Everyone this doctor has exchanged a message with, including patients who have since moved on. */
+    messagePartners: partnersOf(app.messages, doctor.id),
     unreadFrom: (patientId: string) => app.messages.filter(m => m.fromId === patientId && m.toId === doctor.id && !m.read).length,
     /** GET clinical_notes: shared and internal, newest first. A corrected note carries `amendedBy`. */
     notesFor: (patientId: string) => app.clinicalNotes.filter(n => n.patientId === patientId),

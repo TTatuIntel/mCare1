@@ -4,7 +4,7 @@ import { BottomSheet, SheetButton, SaveError, useSave, levelStyle } from '@/shar
 import type { PatientUser, VitalDef } from '@/shared/lib/types'
 import {
   evaluate, alertIsFor, latestValid, targetRange, validateReading, unitView, groupOf, VITAL_GROUPS,
-  SELF_CLEAR_WINDOW_MIN, ago, readingTime, type VitalLevel,
+  ago, readingTime, type VitalLevel,
 } from '@/shared/lib/vitals'
 
 /* ─── Logging vitals ──────────────────────────────────────────────────
@@ -18,42 +18,36 @@ import {
    group together, or everything at once, and can move between the three:
    the one-vital sheet offers the rest of its group as the next step. */
 
-type Result = { level: VitalLevel; alerted: boolean; readingId: string; name: string; value: string; cleared?: boolean }
+type Result = { level: VitalLevel; alerted: boolean; readingId: string; name: string; value: string; cleared?: boolean; followsAlert?: boolean }
 
 /** One-tap context for a reading; saved as the reading's note, so History can filter on it. */
 const CONTEXT_TAGS = ['Resting', 'Before meal', 'After meal', 'After exercise', 'After medication']
 
 /**
- * The open warning on a vital that a fresh in-range reading would clear,
- * with how long is left. Mirrors the rule the backend applies when a reading is saved.
+ * The open alert on a vital that a fresh reading answers. `clears` says an
+ * in-range reading closes it (a warning); a critical alert goes back to the
+ * doctor instead. Mirrors the rule the backend applies when a reading is saved.
  */
 export function useSelfClear() {
-  const { currentUser, alerts, now } = useApp()
+  const { currentUser, alerts } = useApp()
   const patient = currentUser as PatientUser
   return (def: VitalDef) => {
-    const a = alerts.find(x => x.patientId === patient.id && isActiveAlert(x) &&
-      x.type === 'vital' && alertIsFor(x, def) && x.severity === 'warning' && x.status === 'open')
+    const a = alerts.find(x => x.patientId === patient.id && isActiveAlert(x) && x.type === 'vital' && alertIsFor(x, def))
     if (!a) return null
-    const msLeft = a.at + SELF_CLEAR_WINDOW_MIN * 60_000 - now
-    return { expired: msLeft <= 0, minLeft: Math.max(1, Math.ceil(msLeft / 60_000)) }
+    return { clears: a.severity === 'warning', requested: a.recheckRequestedAt !== undefined }
   }
 }
 
-/** Strip under a vital with an open warning: re-measure prompt while the window is open, then a hand-off note. */
+/** Strip under a vital with an open alert: the Re-measure prompt, and what a new reading will do. */
 export function SelfClearBanner({ def, onLog }: { def: VitalDef; onLog: () => void }) {
   const sc = useSelfClear()(def)
   if (!sc) return null
-  if (sc.expired) return (
-    <div className="px-3.5 py-1.5 bg-blue-50 border-t border-blue-100 flex items-center gap-2">
-      <span className="text-[10px]">👩‍⚕️</span>
-      <p className="text-[11px] text-blue-700 font-semibold truncate">Window closed — your doctor will clear this alert</p>
-    </div>
-  )
   return (
-    <button onClick={onLog} className="w-full text-left px-3.5 py-1.5 bg-amber-50 border-t border-amber-100 flex items-center gap-2">
-      <span className="text-[10px]">⏱</span>
-      <p className="text-[11px] text-amber-700 font-semibold flex-1 truncate">Re-measure within {sc.minLeft} min to clear</p>
-      <span className="text-[11px] font-bold text-amber-700">Log →</span>
+    <button onClick={onLog} className="w-full text-left px-3.5 py-2 bg-amber-50 border-t border-amber-100 flex items-center gap-2">
+      <p className="text-[11px] text-amber-800 font-semibold flex-1 min-w-0 leading-snug">
+        {sc.requested ? 'Your doctor asked for a fresh reading. ' : ''}{sc.clears ? 'An in-range reading clears this alert.' : 'Your doctor reviews the new reading.'}
+      </p>
+      <span className="flex-shrink-0 rounded-full bg-teal-700 px-3 py-1.5 text-[11px] font-bold text-white">Re-measure</span>
     </button>
   )
 }
@@ -77,19 +71,28 @@ function ResultSheet({ result, onClose }: { result: Result; onClose: () => void 
   const [sent, setSent] = useState(false)
   const save = useSave()
   const alerted = result.alerted || sent
+  const follows = !!result.followsAlert
   const sendNow = async () => { if ((await save.run(() => sendAlertNow(currentUser!.id, result.readingId))).ok) setSent(true) }
   return (
     <BottomSheet open onClose={onClose}
       title={result.cleared ? '✓ Alert cleared'
+        : follows && result.level === 'normal' ? '✓ Back in range'
+        : follows ? (result.level === 'critical' ? '⚠ Still critical' : '▲ Still outside your range')
         : result.level === 'critical' ? '⚠ Critical reading'
         : alerted ? 'Sent to your doctor' : '▲ Please re-measure'}
-      footer={!alerted && !result.cleared
+      footer={!alerted && !result.cleared && !follows
         ? <><SheetButton tone="ghost" onClick={onClose}>I'll re-measure</SheetButton><SheetButton tone="danger" disabled={save.busy} onClick={sendNow}>{save.busy ? 'Sending…' : 'Send to doctor now'}</SheetButton></>
         : <SheetButton onClick={onClose}>OK</SheetButton>}>
       <div className="text-sm text-gray-700 leading-relaxed">
         <p className="font-bold text-gray-900 mb-1 font-mono">{result.name}: {result.value}</p>
         {result.cleared
           ? <p>Your re-measurement is back inside your target range, so that alert has been cleared. Your doctor can still see both readings in your history.</p>
+          : follows && result.level === 'normal'
+          ? <p>Your new reading is in range and has been sent to your doctor. Because the first reading was critical, your doctor reviews it and closes the alert.</p>
+          : follows && result.level === 'critical'
+          ? <p>This reading is still in the critical range. Your alert stays open and your care team has been told. Contact your doctor now. If you feel unwell — chest pain, breathlessness, confusion — use SOS or call 999.</p>
+          : follows
+          ? <p>This reading is still outside your target range, so your alert stays open and your doctor has been told. Message your doctor if it does not settle or you feel unwell. Both readings are kept in your history.</p>
           : result.level === 'critical'
           ? <p>Your doctor has been alerted immediately. If you feel unwell — chest pain, breathlessness, confusion — use SOS or call 999.</p>
           : alerted
@@ -122,7 +125,7 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
   if (result) return <ResultSheet result={result} onClose={onClose} />
 
   const sc = selfClear(def)
-  const clearing = !!sc && !sc.expired
+  const clearing = !!sc && sc.clears
   // Typed in the patient's unit; `canon` is what gets validated, evaluated and stored.
   const u = unitView(def, patient)
   const canon = u.toCanonical(value)
@@ -141,7 +144,7 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
     const saved = await saving.run(() => logReading(patient.id, { id: `rd_${Date.now()}`, vitalId, value: canon, loggedAt: '', note: note.trim() || undefined }))
     if (!saved.ok) return   // nothing was saved: the sheet stays open with what was typed and says why
     const res = saved.value
-    if (res.level !== 'normal' || res.cleared) setResult({ ...res, name: def.name, value: `${u.value(canon)} ${u.unit}` })
+    if (res.level !== 'normal' || res.cleared || res.followsAlert) setResult({ ...res, name: def.name, value: `${u.value(canon)} ${u.unit}` })
     else then()
   }
   /** Moving on keeps what was typed: a reading in the box is saved first. */
@@ -152,10 +155,10 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
       subtitle={`${u.unit} · target ${range.min}–${range.max}${last ? ` · last ${u.value(last.value)}${lastAt ? `, ${ago(lastAt, now)}` : ''}` : ''}`}
       footer={<><SheetButton tone="ghost" onClick={onClose}>Cancel</SheetButton>
         <SheetButton disabled={!value.trim() || !!error || saving.busy} onClick={() => save()}>{saving.busy ? 'Saving…' : 'Save Reading'}</SheetButton></>}>
-      {clearing && (
+      {sc && (
         <div className="mb-3 px-3 py-2 rounded-xl bg-amber-50 border border-amber-100">
-          <p className="text-[11px] text-amber-700 font-semibold">
-            ⏱ {sc?.minLeft} min left — an in-range reading clears your open alert.
+          <p className="text-[11px] text-amber-800 font-semibold">
+            {sc.clears ? 'Re-measurement: an in-range reading clears your open alert.' : 'Re-measurement: your doctor reviews this reading before the alert is closed.'}
           </p>
         </div>
       )}

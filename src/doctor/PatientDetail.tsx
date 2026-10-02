@@ -2,11 +2,11 @@ import { useState } from 'react'
 import { useApp, isActiveAlert } from '@/shared/state/AppContext'
 import {
   Pill, AlertStatusPill, ResolveAlertSheet, ChatThread, BackHeader, VitalCard, HERO_GRADIENT,
-  HealthSummary, EmptyState, ChipFilter, StatTiles,
+  HealthSummary, EmptyState, ChipFilter, StatTiles, CareTeamCard,
 } from '@/shared'
 import { useVisits } from './useVisits'
 import type { AppAlert, DocSourceLink } from '@/shared/lib/types'
-import { evaluate, latestValid, riskScore, riskBand, targetRange, ago, dateLabel } from '@/shared/lib/vitals'
+import { evaluate, latestValid, riskScore, riskBand, targetRange, ago, dateLabel, resolvedHowLabel } from '@/shared/lib/vitals'
 import { buildDaySchedule, apptWhen, splitAppts } from '@/shared/lib/schedule'
 import { AlertCard } from './AlertCard'
 import { PatientDocs } from './PatientDocs'
@@ -112,6 +112,7 @@ export function PatientDetail({ patientId, onBack, initial = 'overview', initial
           </div>
 
           <HealthSummary patient={patient} />
+          <CareTeamCard patient={patient} canManage />
 
           <button onClick={() => setSection('visits')} className="bg-white rounded-2xl px-4 py-3 shadow-sm flex items-center gap-3 text-left">
             <span className="w-10 h-10 rounded-2xl bg-teal-50 flex items-center justify-center text-lg flex-shrink-0" aria-hidden="true">📅</span>
@@ -171,7 +172,7 @@ export function PatientDetail({ patientId, onBack, initial = 'overview', initial
 
       {section === 'notes' && <PatientNotes patient={patient} />}
 
-      {section === 'messages' && <div className="span-all"><ChatThread meId={doctor.id} otherId={patient.id} otherName={patient.name} subtitle="Secure patient channel" /></div>}
+      {section === 'messages' && <div className="span-all"><ChatThread meId={doctor.id} otherId={patient.id} otherName={patient.name} avatar={patient.avatar} subtitle="Secure patient channel" /></div>}
 
       {section === 'docs' && <PatientDocs patient={patient} openId={docOpen} setOpenId={setDocOpen} onLink={followDocLink} buildOpen={buildOpen} setBuildOpen={setBuildOpen} />}
 
@@ -210,14 +211,19 @@ export function PatientDetail({ patientId, onBack, initial = 'overview', initial
             <p className="text-sm font-bold text-gray-900 mb-3">Alert History</p>
             {mine.length === 0 && <p className="text-xs text-gray-400">No alerts have been raised for this patient.</p>}
             {mine.map(a => (
-              <div key={a.id} className="flex items-start gap-2 py-2 border-b border-gray-50 last:border-0">
+              // Opens the alert's full story: re-measurements, comments and how it ended. An open one can be worked from there.
+              <button key={a.id} onClick={() => setResolveSheet(a)} className="w-full text-left flex items-start gap-2 py-2 border-b border-gray-50 last:border-0">
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-semibold text-gray-900">{a.type === 'sos' ? 'SOS' : `${a.vitalName}: ${a.value} ${a.unit}`}</p>
-                  <p className="text-[10px] text-gray-400">{a.loggedAt}</p>
-                  {a.status === 'resolved' && <p className="text-[10px] text-emerald-700 mt-0.5">✓ {a.resolutionReason}{a.resolutionNote ? ` · ${a.resolutionNote}` : ''}</p>}
+                  <p className="text-[10px] text-gray-400">
+                    {a.loggedAt}
+                    {(a.remeasureIds?.length ?? 0) > 0 && <> · <span className="font-mono">{a.remeasureIds!.length}</span> re-measured</>}
+                    {(a.comments?.length ?? 0) > 0 && <> · <span className="font-mono">{a.comments!.length}</span> comment{a.comments!.length === 1 ? '' : 's'}</>}
+                  </p>
+                  {a.status === 'resolved' && <p className="text-[10px] text-emerald-700 mt-0.5">✓ {resolvedHowLabel(a)} · {a.resolutionReason}{a.resolutionNote ? ` · ${a.resolutionNote}` : ''}</p>}
                 </div>
                 <AlertStatusPill alert={a} />
-              </div>
+              </button>
             ))}
           </div>
           <button onClick={() => { setDocOpen(null); setSection('docs'); setBuildOpen(true) }}

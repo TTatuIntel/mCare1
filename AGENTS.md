@@ -24,11 +24,11 @@ No other files belong at the top of `src/`. Every source file lives in one of th
 - `src/shared/` - Everything used by more than one role
   - `index.ts` - The shared UI kit. Import UI from `@/shared` (e.g. `import { PageTitle, Pill } from '@/shared'`)
   - `state/` - `AppContext` (app state and actions, in live and demo mode), `useLoadStatus` (a screen's loading / ready / error), `demoData` (the sample people of demo mode; never used in live mode) and `auth`
-  - `lib/` - `types`, `vitals`, `schedule` (domain types and pure helpers) and `ids` (`newRef()`, the reference a form sends with its save)
+  - `lib/` - `types`, `vitals`, `schedule`, `messaging` (domain types and pure helpers) and `ids` (`newRef()`, the reference a form sends with its save)
   - `documents/` - Medical documents: store, seed data, DocKit, viewer, and upload/share sheets
   - `email/` - `emailTemplate` (the one branded layout and the catalogue of every email mCare sends) and `Mailbox` (in-app view of sent emails). Never build email HTML anywhere else; send through `notify()` or the builders in `emailTemplate`. The logo image is `public/brand/mcare-logo.png`
   - `api/` - `supabase` (the backend connection; demo mode when no keys are set), `authBackend` (sign-in), `records` (reads everything the signed-in person may see), `actions` and `documentActions` (one function per change; each throws an `ApiError` whose message can be shown as it is)
-  - `ui/` - Primitives, BottomSheet/Field/Toast, `controls` (Segmented, ChipFilter, StatTiles, `useAct`), alerts, appointments, `CarePlanCard`, `SlotPicker`, vitals widgets, chat, notifications, and the home-screen kit (`home.tsx`)
+  - `ui/` - Primitives, BottomSheet/Field/Toast, `controls` (Segmented, ChipFilter, StatTiles, `useAct`), alerts, appointments, `CarePlanCard`, `SlotPicker`, vitals widgets, messaging (`Inbox` = conversation list + `ChatThread`), notifications, and the home-screen kit (`home.tsx`)
   - `layout/` - PhoneShell, StatusBar, `PortalShell` (screen frame + NavBar for every portal), logo, loading. The boot splash is plain HTML and CSS in `index.html` (`#boot-splash`) so it shows before the code loads; `SplashScreen.tsx` takes it down once start-up work has finished, and the loading popup stays hidden until then
   - `profile/` - ProfileCard and account settings sheets (the same for every role)
   - `auth/` - Login, register, verification, doctor-status and suspended screens

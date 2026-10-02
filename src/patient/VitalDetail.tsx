@@ -141,7 +141,9 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
   const vitalAlerts = alerts.filter(al => al.patientId === patient.id && al.type === 'vital' && alertIsFor(al, def))
   const recheck = vitalAlerts.find(al => al.recheckRequestedAt && al.status !== 'resolved')
   const responses = vitalAlerts.filter(al => al.status === 'resolved' && al.resolvedBy && al.resolvedBy !== patient.id).slice(0, 2)
-  const hasGuidance = !!(recheck || patient.doctorNote || patient.thresholds[def.id] || targetChanges.length || responses.length)
+  // What the doctor wrote on this vital's alerts, newest first.
+  const said = vitalAlerts.flatMap(al => al.comments ?? []).sort((a, b) => b.at - a.at).slice(0, 3)
+  const hasGuidance = !!(recheck || patient.doctorNote || patient.thresholds[def.id] || targetChanges.length || responses.length || said.length)
 
   const periodBtn = (on: boolean) =>
     `text-[10px] font-bold px-2 py-1 rounded-lg transition-all ${on ? 'bg-white text-teal-700 shadow-sm' : 'text-gray-400'}`
@@ -302,6 +304,10 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
                   sub={`${dateLabel(new Date(c.at))} · marked in blue on the chart`} />
               )
             })}
+            {said.map(c => (
+              <GuidanceRow key={c.id} icon={c.kind === 'instruction' ? '📌' : c.kind === 'action' ? '🩺' : '💬'}
+                title={c.body} sub={`${c.kind === 'instruction' ? 'Instruction' : c.kind === 'action' ? 'Action taken' : 'Comment'} · ${c.createdAt}`} />
+            ))}
             {responses.map(al => (
               <GuidanceRow key={al.id} icon="✅"
                 title={`${al.resolutionReason ?? 'Alert reviewed'}${al.resolutionNote ? ` — ${al.resolutionNote}` : ''}`}
