@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import MCareLogo from '@/shared/layout/MCareLogo'
+import { setBootBusy, useSplashDone } from '@/shared/layout/splashSignal'
 
 /**
  * Global loading popup: the mCare logo alone on a frosted, see-through blur.
@@ -15,6 +16,9 @@ import MCareLogo from '@/shared/layout/MCareLogo'
  * finishes within SHOW_DELAY never shows it, so normal taps and saves stay
  * instant. Once up it stays long enough to read (MIN_VISIBLE), and a long
  * wait says so instead of looking frozen.
+ *
+ * At start-up the boot splash is the loading screen: while it is up the
+ * popup stays hidden and the splash waits for the work instead.
  */
 const SHOW_DELAY = 500
 const MIN_VISIBLE = 600
@@ -71,7 +75,9 @@ export function LoaderProvider({ children }: { children: React.ReactNode }) {
   const active = tasks.size > 0
   // The most recent task names the wait.
   const label = Array.from(tasks.values()).pop() ?? ''
-  const { phase, slow } = usePopupPhase(active)
+  const splashDone = useSplashDone()
+  useEffect(() => { setBootBusy(active); return () => setBootBusy(false) }, [active])
+  const { phase, slow } = usePopupPhase(active && splashDone)
   const online = useOnline()
 
   // Hold the last label through the fade-out so the text doesn't blank early.

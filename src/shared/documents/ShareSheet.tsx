@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
-import { BottomSheet, SheetButton, Field, Pill, Toggle, inputCls } from '@/shared'
+import { BottomSheet, SheetButton, Field, Pill, Toggle, inputCls, useSave, SaveError } from '@/shared'
 import type { ShareLink } from '@/shared/lib/types'
 import { canShare, SHARE_TTL_HOURS, DOC_CATEGORIES } from './documents'
 import { ago } from '@/shared/lib/vitals'
@@ -24,6 +24,7 @@ export function ShareSheet({ open, onClose, patientId, preselect }: {
   const { currentUser, documentsFor, docPolicyCtx, shareLinksFor, createShareLink, shareLinkUrl, revokeShareLink, openShareLink, now, live } = useApp()
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
+  const revoking = useSave()
   const [picked, setPicked] = useState<string[]>([])
   const [recipient, setRecipient] = useState('')
   const [ttl, setTtl] = useState<number>(24)
@@ -135,12 +136,13 @@ export function ShareSheet({ open, onClose, patientId, preselect }: {
                   <div className="flex gap-3 mt-1.5">
                     {shareLinkUrl(s) && <button onClick={() => copy(s)} className="text-[11px] font-bold text-teal-700">Copy</button>}
                     {!live && <button onClick={() => tryOpen(s)} className="text-[11px] font-bold text-gray-500">Test open</button>}
-                    <button onClick={() => revokeShareLink(s.id)} className="text-[11px] font-bold text-red-500">Revoke</button>
+                    <button disabled={revoking.busy} onClick={() => revoking.run(() => revokeShareLink(s.id))} className="text-[11px] font-bold text-red-600 disabled:opacity-50">Revoke</button>
                   </div>
                 )}
               </div>
             )
           })}
+          <SaveError message={revoking.error} />
           {preview && !created && <p className="text-[10px] text-gray-600">{preview}</p>}
         </div>
       )}

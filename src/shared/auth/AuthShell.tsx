@@ -230,7 +230,8 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
   const [reducedMotion] = useState(() => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false)
   const drag = useRef<{ x: number; swiped: boolean } | null>(null)
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const auto = playing && !held && !reducedMotion
+  // The tour keeps turning under reduced motion; its slides then fade instead of sliding (see index.css).
+  const auto = playing && !held
 
   const go = (to: number, d: 1 | -1) => {
     const next = (to + SLIDES.length) % SLIDES.length

@@ -1,5 +1,6 @@
 import { lazy, Suspense, useDeferredValue, useEffect, type ComponentType } from 'react'
 import { AppProvider, useApp } from '@/shared/state/AppContext'
+import { isStopped } from '@/shared/lib/types'
 import type { AdminUser, AppUser, DoctorUser, PatientUser } from '@/shared/lib/types'
 import { PhoneShell } from '@/shared/layout/PhoneShell'
 import { Loading } from '@/shared/ui/Loader'
@@ -60,10 +61,10 @@ const FULL_FRAME = new Set<string>(['patient', 'doctor', 'admin', 'assistant', '
 function screenFor(user: AppUser | null): keyof typeof SCREENS {
   if (!user) return 'login'
   if (user.status === 'unverified') return 'verify'
-  if (user.status === 'suspended' && user.role !== 'doctor') return 'suspended'
+  if (isStopped(user.status) && user.role !== 'doctor') return 'suspended'
   if (user.role === 'doctor') {
     if ((user as DoctorUser).approvalStatus !== 'approved') return 'doctorStatus'
-    if (user.status === 'suspended') return 'suspended'
+    if (isStopped(user.status)) return 'suspended'
     return 'doctor'
   }
   if (user.role === 'admin' || user.role === 'assistant') return (user as AdminUser).isAssistant ? 'assistant' : 'admin'

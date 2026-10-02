@@ -7,9 +7,10 @@ import { BottomSheet, SheetButton } from './BottomSheet'
 /* ─── Notifications bell + sheet ─── */
 const NOTIF_ICON: Record<AppNotification['kind'], string> = {
   alert: '⚠️', sos: '🚨', message: '💬', appointment: '📅', assignment: '🩺', prescription: '💊', account: '👤', escalation: '⏫',
-  document: '📄',
+  document: '📄', care_plan: '📋', support: '🛟',
 }
-export function NotificationBell({ onNavigate }: { onNavigate: (tab: string) => void }) {
+/** `onNavigate` gets the screen to open and, when the notification says so, the record it is about. */
+export function NotificationBell({ onNavigate }: { onNavigate: (tab: string, about?: AppNotification['resource']) => void }) {
   const { currentUser, notifications, markNotificationRead, markAllNotificationsRead, now } = useApp()
   const [open, setOpen] = useState(false)
   if (!currentUser) return null
@@ -33,7 +34,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (tab: string) => 
           <p className="text-sm text-gray-400 text-center py-8">No notifications yet.</p>
         ) : mine.map(n => (
           <button key={n.id}
-            onClick={() => { markNotificationRead(n.id); if (n.link) { onNavigate(n.link); setOpen(false) } }}
+            onClick={() => { markNotificationRead(n.id); if (n.link) { onNavigate(n.link, n.resource); setOpen(false) } }}
             className={`w-full text-left flex gap-3 p-3 rounded-xl mb-1.5 ${n.read ? 'bg-white' : 'bg-teal-50'}`}>
             <span className="text-lg flex-shrink-0">{NOTIF_ICON[n.kind]}</span>
             <div className="flex-1 min-w-0">

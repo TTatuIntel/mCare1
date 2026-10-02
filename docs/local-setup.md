@@ -59,18 +59,21 @@ You can also sign up as a new patient from the welcome page. The local backend c
 
 ## 3. Testing from a phone
 
+**Use the built app on a phone: `npm run phone`, then open `http://<laptop address>:8444`.**
+The development server on port 8443 sends the code unbundled (about 136 files, 10 MB), which is fine on the laptop but takes around a minute over a hotspot, during which the phone looks stuck. `npm run phone` builds the app (15 files, about 1.2 MB, sent compressed) and serves it on port 8444 with the same backend forwarding, so it starts in a few seconds and behaves the same as on the laptop. It does not update by itself: after changing code, stop it, run it again, and reload the page on the phone.
+
 1. Put the phone on the **same Wi-Fi or hotspot** as the laptop.
-2. On the phone's browser open `http://<laptop address>:8443`. Use the address `npm run backend` printed (for example `http://172.20.10.2:8443`).
+2. On the phone's browser open `http://<laptop address>:8444` (after `npm run phone`). Use the address it prints for the Wi-Fi adapter (for example `http://172.20.10.2:8444`). Port 8443 also works, slowly.
 3. Do **not** use `127.0.0.1` or `localhost` on the phone: on a phone those mean the phone itself.
 
-Why one address is enough: the phone only ever talks to the dev server on port 8443. The dev server forwards `/auth/v1`, `/rest/v1` and `/storage/v1` to the backend, which listens on the laptop alone (`127.0.0.1:54321`). `VITE_SUPABASE_URL=/` in `.env.local` means "the address this page was opened from", so the same setting works on both devices and the database's port is never opened to the network.
+Why one address is enough: the phone only ever talks to the app's server (8444 built, 8443 development). That server forwards `/auth/v1`, `/rest/v1` and `/storage/v1` to the backend, which listens on the laptop alone (`127.0.0.1:54321`). `VITE_SUPABASE_URL=/` in `.env.local` means "the address this page was opened from", so the same setting works on both devices and the database's port is never opened to the network.
 
 If the phone cannot connect:
 
 - **Firewall.** Windows must allow inbound connections to Node.js on the network's profile. Check (PowerShell):
   `Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow | Where-Object DisplayName -match 'Node'`
   If nothing is listed for the active profile, allow it (PowerShell as Administrator):
-  `New-NetFirewallRule -DisplayName "mCare dev server" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8443`
+  `New-NetFirewallRule -DisplayName "mCare dev server" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8443,8444`
 - **Address.** `ipconfig` shows the laptop's IPv4 address on the Wi-Fi adapter. A VirtualBox or VPN adapter's address (such as `192.168.56.1`) is not reachable from the phone.
 - **Guest or "client isolation" Wi-Fi** blocks devices from seeing each other. Use a phone hotspot or a home network.
 
@@ -85,8 +88,8 @@ Things to try once it opens, on both devices with the same account: log a readin
 | `npm run dev` | The app. |
 | `npm run typecheck` | TypeScript check. |
 | `npm run build` | Production build. |
-| `npm test` | Database rules (194 checks) and API (91 checks). About a minute. |
-| `npm run test:ui` | The patient portal in a headless browser (31 checks). Needs Playwright, see the top of `supabase/tests/ui.test.mjs`. |
+| `npm test` | Database rules (308 checks) and API (136 checks). About a minute. |
+| `npm run test:ui` | The patient, doctor, admin and assistant portals in a headless browser (58 checks). Needs Playwright, see the top of `supabase/tests/ui.test.mjs`. Takes several minutes. |
 
 - **Start again with an empty database:** stop the backend, delete the `supabase/.data` folder, start it and seed again.
 - **Back to demo mode:** delete `.env.local`.

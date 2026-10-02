@@ -18,7 +18,7 @@ const db = new PGlite()
 await db.exec(`
   create role authenticated nologin; create role anon nologin;
   create schema auth;
-  create table auth.users (id uuid primary key, email text, raw_user_meta_data jsonb default '{}');
+  create table auth.users (id uuid primary key, email text, raw_user_meta_data jsonb default '{}', email_confirmed_at timestamptz);
   create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
   grant usage on schema auth to authenticated, anon;
   -- Supabase's defaults: new tables and functions in public are granted to app users as they are created.
@@ -452,10 +452,436 @@ check('support request reaches the people who handle support', await (async () =
   return (await one(`select count(*)::int n from notifications where title like 'Support request:%'`)).n === before + 1   // the admin; the assistant lacks handle_support
 })())
 await as(ID.pat2, `select deactivate_my_account()`)
-check('a patient can suspend their own account, and it locks them out', (await one(`select status from profiles where id = $1`, [ID.pat2])).status === 'suspended'
-  && (await denied(ID.pat2, `select raise_sos('x')`)).blocked)
+check('a patient can close their own account, and it locks them out', (await one(`select status, status_reason from profiles where id = $1`, [ID.pat2])).status === 'deactivated'
+  && (await denied(ID.pat2, `select raise_sos('x')`)).blocked && (await as(ID.pat2, `select 1 from readings`)).length === 0)
 check('signed-out visitors cannot call the new functions', (await denied(null, `select accept_terms('1')`)).blocked && (await denied(null, `select doctor_rating_summary($1)`, [ID.doc])).blocked
   && (await denied(null, `select save_health_profile('{}')`)).blocked)
+
+/* ── Care integration (0005): invitations, nutrition, clinician readings, follow-up, vital definitions, document support ── */
+console.log('\nCare integration')
+const NEW = { nurse: '88888888-8888-4888-8888-888888888881', boss: '88888888-8888-4888-8888-888888888882', drnew: '88888888-8888-4888-8888-888888888883',
+  gone: '88888888-8888-4888-8888-888888888884', late: '88888888-8888-4888-8888-888888888885' }
+const roleOf = async id => (await one(`select role, status from profiles where id = $1`, [id]))
+const signUp = (id, email, meta = {}, confirmed = false) => db.query(`insert into auth.users (id, email, raw_user_meta_data, email_confirmed_at) values ($1, $2, $3, $4)`,
+  [id, email, JSON.stringify(meta), confirmed ? new Date().toISOString() : null])
+
+// Invitations: an admin says in advance what a person will be.
+check('only people who register users can invite', (await denied(ID.pat, `select invite_account('x@mcare.app', 'X', 'patient')`)).blocked
+  && (await denied(ID.asst, `select invite_account('x@mcare.app', 'X', 'patient')`)).blocked && (await denied(null, `select invite_account('x@mcare.app', 'X', 'patient')`)).blocked)
+const inv = (await as(ID.admin, `select invite_account(' Nurse@mCare.app ', 'Nurse Wanjiru', 'assistant', '+254 700 000 900') id`))[0].id
+check('admin invites an assistant; the invitation is audited', !!inv && (await one(`select count(*)::int n from audit_log where action = 'Invited user' and detail like 'Nurse Wanjiru (assistant)%'`)).n === 1)
+check('an email is invited once, and never when already registered', (await denied(ID.admin, `select invite_account('nurse@mcare.app', 'Again', 'patient')`)).blocked
+  && (await denied(ID.admin, `select invite_account('james@example.com', 'James', 'patient')`)).blocked)
+check('a bad email or an empty name is refused', (await denied(ID.admin, `select invite_account('not-an-email', 'X', 'patient')`)).blocked
+  && (await denied(ID.admin, `select invite_account('ok@mcare.app', '  ', 'patient')`)).blocked)
+check('invitations are read only by people who register users', (await as(ID.admin, `select 1 from account_invitations`)).length === 1
+  && (await as(ID.pat, `select 1 from account_invitations`)).length === 0 && (await as(ID.doc, `select 1 from account_invitations`)).length === 0)
+check('invitations cannot be written directly', (await denied(ID.admin, `insert into account_invitations (email, full_name, role) values ('direct@mcare.app', 'D', 'admin')`)).blocked)
+await db.query(`update staff set permissions = permissions || '{create_users}' where id = $1`, [ID.asst])
+check('an assistant who registers users can invite a doctor, never staff', (await as(ID.asst, `select invite_account('dr.new@knh.go.ke', 'Dr. New', 'doctor') id`)).length === 1
+  && (await denied(ID.asst, `select invite_account('boss2@mcare.app', 'Boss', 'admin')`)).blocked)
+
+await signUp(NEW.nurse, 'nurse@mcare.app', { role: 'admin' })
+check('an invited staff account is an ordinary patient until its email is confirmed', (await roleOf(NEW.nurse)).role === 'patient'
+  && (await one(`select accepted_at from account_invitations where id = $1`, [inv])).accepted_at === null)
+await db.query(`update auth.users set email_confirmed_at = now() where id = $1`, [NEW.nurse])
+check('confirming the email gives the invited role, with no permissions yet', (await roleOf(NEW.nurse)).role === 'assistant'
+  && (await one(`select is_assistant, permissions from staff where id = $1`, [NEW.nurse])).permissions.length === 0
+  && (await one(`select count(*)::int n from patients where id = $1`, [NEW.nurse])).n === 0
+  && (await one(`select accepted_by from account_invitations where id = $1`, [inv])).accepted_by === NEW.nurse)
+check('the inviter is told, and the name on the invitation is used', (await as(ID.admin, `select 1 from notifications where title = 'Invitation accepted' and body like 'Nurse Wanjiru%'`)).length === 1
+  && (await one(`select full_name, phone from profiles where id = $1`, [NEW.nurse])).full_name === 'Nurse Wanjiru')
+await as(ID.admin, `select invite_account('boss@mcare.app', 'Second Admin', 'admin')`)
+await signUp(NEW.boss, 'boss@mcare.app', {}, true)
+check('an already confirmed invited admin is an admin at once', (await roleOf(NEW.boss)).role === 'admin' && (await as(NEW.boss, `select is_admin() a`))[0].a === true)
+await signUp(NEW.drnew, 'dr.new@knh.go.ke', {})
+check('an invited doctor still waits for approval', (await roleOf(NEW.drnew)).role === 'doctor' && (await roleOf(NEW.drnew)).status === 'pending_approval'
+  && (await one(`select count(*)::int n from account_invitations where email = 'dr.new@knh.go.ke' and accepted_by = $1`, [NEW.drnew])).n === 1)
+const invGone = (await as(ID.admin, `select invite_account('gone@mcare.app', 'Withdrawn', 'admin') id`))[0].id
+check('only an admin withdraws a staff invitation', (await denied(ID.asst, `select revoke_invitation($1)`, [invGone])).blocked)
+await as(ID.admin, `select revoke_invitation($1)`, [invGone])
+await signUp(NEW.gone, 'gone@mcare.app', {}, true)
+check('a withdrawn invitation gives nothing, and cannot be withdrawn twice', (await roleOf(NEW.gone)).role === 'patient' && (await denied(ID.admin, `select revoke_invitation($1)`, [invGone])).blocked)
+const invLate = (await as(ID.admin, `select invite_account('late@mcare.app', 'Too Late', 'admin') id`))[0].id
+await db.query(`update account_invitations set expires_at = now() - interval '1 minute' where id = $1`, [invLate])
+await signUp(NEW.late, 'late@mcare.app', {}, true)
+check('an invitation that ran out gives nothing', (await roleOf(NEW.late)).role === 'patient')
+
+// Nutrition: James (pat) is treated by doc2 (DOC).
+const meals = [{ id: 'breakfast', name: 'Breakfast', at: 450, foods: 'Porridge, fruit', kcal: 350, icon: '🌅' }, { id: 'supper', name: 'Supper', at: 1140, foods: 'Ugali, greens, fish', kcal: 600, icon: '🌙' }]
+const plan = (await as(DOC, `insert into meal_plans (patient_id, meals, target_kcal, water_goal, dietary_note, set_by) values ($1, $2, 1900, 10, '  Low salt  ', $3)
+  on conflict (patient_id) do update set meals = excluded.meals, target_kcal = excluded.target_kcal, water_goal = excluded.water_goal, dietary_note = excluded.dietary_note, set_by = excluded.set_by
+  returning set_by, dietary_note`, [ID.pat, JSON.stringify(meals), ID.doc]))[0]
+check('the meal plan records the doctor who saved it, whatever was sent', plan.set_by === DOC && plan.dietary_note === 'Low salt')
+check('the patient reads the same plan and is told it changed', (await as(ID.pat, `select jsonb_array_length(meals) n, water_goal from meal_plans`))[0].n === 2
+  && (await as(ID.pat, `select 1 from notifications where title = 'Your meal plan was updated'`)).length >= 1
+  && (await one(`select count(*)::int n from audit_log where action = 'Set meal plan' and detail like 'James Mwangi%'`)).n >= 1)
+check('a plan with repeated meals or impossible energy is refused', (await denied(DOC, `update meal_plans set meals = $2 where patient_id = $1`, [ID.pat, JSON.stringify([meals[0], meals[0]])])).blocked
+  && (await denied(DOC, `update meal_plans set meals = $2 where patient_id = $1`, [ID.pat, JSON.stringify([{ ...meals[0], kcal: 9000 }])])).blocked
+  && (await denied(DOC, `update meal_plans set meals = '{"a":1}' where patient_id = $1`, [ID.pat])).blocked)
+check('a doctor who does not treat the patient cannot change the plan', (await as(ID.doc, `update meal_plans set target_kcal = 900 where patient_id = $1 returning patient_id`, [ID.pat])).length === 0
+  && (await denied(ID.doc, `insert into meal_plans (patient_id, set_by) values ($1, $2)`, [ID.pat, ID.doc])).blocked)
+check('the treating doctor sees what the patient ate and drank', (await as(ID.pat, `insert into meal_logs (patient_id, meal_id, day) values ($1, 'breakfast', current_date) returning meal_id`, [ID.pat])).length === 1
+  && (await as(DOC, `select 1 from meal_logs where patient_id = $1`, [ID.pat])).length === 1 && (await as(DOC, `select glasses from hydration_logs where patient_id = $1`, [ID.pat]))[0].glasses === 6
+  && (await as(ID.doc, `select 1 from meal_logs`)).length === 0)
+await as(DOC, `delete from meal_plans where patient_id = $1`, [ID.pat])
+check('removing the plan tells the patient', (await as(ID.pat, `select 1 from notifications where title = 'Your meal plan was removed'`)).length === 1)
+
+// A reading the doctor records.
+const beforeN = (await as(ID.pat, `select 1 from notifications where title = 'A reading was added to your record'`)).length
+await as(DOC, `insert into readings (patient_id, vital_id, value) values ($1, 'wt', '82')`, [ID.pat])
+check('a reading recorded by the doctor is announced to the patient and audited', (await as(ID.pat, `select 1 from notifications where title = 'A reading was added to your record'`)).length === beforeN + 1
+  && (await one(`select count(*)::int n from audit_log where action = 'Recorded reading for patient' and actor_id = $1`, [DOC])).n === 1)
+await as(ID.pat, `insert into readings (patient_id, vital_id, value) values ($1, 'wt', '81')`, [ID.pat])
+check("the patient's own readings are not announced to themself", (await as(ID.pat, `select 1 from notifications where title = 'A reading was added to your record'`)).length === beforeN + 1)
+
+// Follow-up from an alert: one transaction.
+const critJ = (await as(ID.pat, `insert into readings (patient_id, vital_id, value) values ($1, 'spo2', '84') returning id`, [ID.pat]))[0].id
+const alJ = (await one(`select id from alerts where reading_id = $1`, [critJ])).id
+const apptsN = async () => (await one(`select count(*)::int n from appointments where patient_id = $1`, [ID.pat])).n
+const apBefore = await apptsN()
+check('only the treating doctor books a follow-up, and not in the past', (await denied(ID.doc, `select schedule_follow_up($1, current_date + 3)`, [ID.pat])).blocked
+  && (await denied(ID.pat, `select schedule_follow_up($1, current_date + 3)`, [ID.pat])).blocked
+  && (await denied(DOC, `select schedule_follow_up($1, current_date - 1)`, [ID.pat])).blocked && await apptsN() === apBefore)
+check('"Appointment scheduled" cannot close an alert without the appointment',
+  (await denied(DOC, `update alerts set status = 'resolved', resolution_reason = ' appointment scheduled ' where id = $1`, [alJ])).blocked
+  && (await one(`select status from alerts where id = $1`, [alJ])).status !== 'resolved' && await apptsN() === apBefore)
+const fu = (await as(DOC, `select schedule_follow_up($1, current_date + 3, '10:00', ' Review oxygen ', $2) id`, [ID.pat, alJ]))[0].id
+const fuAlert = await one(`select status, resolution_reason, resolution_note, resolved_by from alerts where id = $1`, [alJ])
+check('the follow-up is booked and the alert resolved together', (await one(`select status, approval_note from appointments where id = $1`, [fu])).status === 'approved'
+  && fuAlert.status === 'resolved' && fuAlert.resolution_reason === 'Appointment scheduled' && fuAlert.resolution_note === 'Review oxygen' && fuAlert.resolved_by === DOC)
+check('if the alert cannot be resolved, no appointment is left behind', (await denied(DOC, `select schedule_follow_up($1, current_date + 4, null, null, $2)`, [ID.pat, alJ])).blocked && await apptsN() === apBefore + 1)
+check('the follow-up remembers its alert, and no other visit can claim one', (await one(`select alert_id from appointments where id = $1`, [fu])).alert_id === alJ
+  && (await as(DOC, `insert into appointments (patient_id, doctor_id, title, preferred_date, status, alert_id) values ($1, $2, 'Claimed', current_date + 5, 'approved', $3) returning alert_id`, [ID.pat, DOC, alJ]))[0].alert_id === null
+  && (await as(DOC, `update appointments set alert_id = null where id = $1 returning alert_id`, [fu]))[0].alert_id === alJ)
+check('a visit is not booked for, or moved to, a day already gone',
+  (await denied(DOC, `insert into appointments (patient_id, doctor_id, title, preferred_date, status) values ($1, $2, 'Past', current_date - 1, 'approved')`, [ID.pat, DOC])).blocked
+  && (await denied(DOC, `update appointments set status = 'rescheduled', rescheduled_date = current_date - 1 where id = $1`, [fu])).blocked)
+
+// The appointment record (0008): reference, history, clashes, no-show, staff lookup.
+const rec = await one(`select number from appointments where id = $1`, [fu])
+check('every appointment has a reference the browser cannot change', /^APT-\d{4}-\d{5}$/.test(rec.number)
+  && (await as(DOC, `update appointments set number = 'APT-0' where id = $1 returning number`, [fu]))[0].number === rec.number)
+const hist = async id => (await db.query(`select action, detail, actor_id from appointment_events where appointment_id = $1 order by created_at, action`, [id])).rows
+check('booking is the first line of its history', (await hist(fu)).some(e => e.action === 'booked' && e.actor_id === DOC))
+check('a second confirmed visit at the same time is refused, for the doctor and for the patient',
+  (await denied(DOC, `insert into appointments (patient_id, doctor_id, title, preferred_date, preferred_time, status) values ($1, $2, 'Clash', current_date + 3, '10:15', 'approved')`, [ID.pat, DOC])).blocked
+  && (await as(DOC, `insert into appointments (patient_id, doctor_id, title, preferred_date, preferred_time, status) values ($1, $2, 'Later', current_date + 3, '11:00', 'approved') returning id`, [ID.pat, DOC])).length === 1)
+await as(DOC, `update appointments set status = 'rescheduled', rescheduled_date = current_date + 6, rescheduled_time = '09:00', rescheduled_reason = 'In theatre' where id = $1`, [fu])
+check('a move keeps the time it was moved from', (await hist(fu)).some(e => e.action === 'rescheduled' && /10:00 AM → .* 9:00 AM · In theatre/.test(e.detail)))
+check('the patient reads the history of their own appointment, and cannot write it', (await as(ID.pat, `select 1 from appointment_events where appointment_id = $1`, [fu])).length === 2
+  && (await denied(ID.pat, `insert into appointment_events (appointment_id, action) values ($1, 'approved')`, [fu])).blocked
+  && (await as(ID.pat2, `select 1 from appointment_events where appointment_id = $1`, [fu])).length === 0)
+const today = (await as(DOC, `insert into appointments (patient_id, doctor_id, title, preferred_date, status) values ($1, $2, 'Today', current_date, 'approved') returning id`, [ID.pat, DOC]))[0].id
+check('only the doctor records a missed visit, and not for one still ahead',
+  (await denied(ID.pat, `update appointments set status = 'no_show' where id = $1`, [today])).blocked
+  && (await denied(DOC, `update appointments set status = 'no_show' where id = (select id from appointments where title = 'Later')`)).blocked
+  && (await as(DOC, `update appointments set status = 'no_show', rejection_reason = 'Did not attend' where id = $1 returning id`, [today])).length === 1
+  && (await denied(DOC, `update appointments set status = 'approved' where id = $1`, [today])).blocked)
+check('support staff can find an appointment but not change it', (await as(ID.admin, `select 1 from appointments where id = $1`, [fu])).length === 1
+  && (await as(ID.admin, `update appointments set status = 'cancelled' where id = $1 returning id`, [fu])).length === 0)
+
+// Vital definitions.
+await as(ID.admin, `update vital_defs set active = true where id = 'rr'`)
+await as(ID.admin, `update vital_defs set normal_max = 22 where id = 'rr'`)
+check('changes to a vital definition are audited', (await one(`select count(*)::int n from audit_log where action = 'Activated vital type' and detail = 'Respiratory Rate'`)).n === 1
+  && (await one(`select count(*)::int n from audit_log where action = 'Updated vital definition' and detail like 'Respiratory Rate%'`)).n === 1)
+check('an impossible range is refused, and only an admin edits definitions', (await denied(ID.admin, `update vital_defs set normal_min = 50, normal_max = 10 where id = 'rr'`)).blocked
+  && (await as(ID.doc, `update vital_defs set normal_max = 999 where id = 'rr' returning id`)).length === 0
+  && (await as(ID.asst, `update vital_defs set normal_max = 999 where id = 'rr' returning id`)).length === 0)
+
+// Document support.
+await as(ID.pat, `update documents set deleted_at = now() where id = $1`, [shared])
+check('only document support can restore for a patient', (await denied(ID.asst, `select staff_restore_document($1)`, [shared])).blocked
+  && (await denied(ID.doc, `select staff_restore_document($1)`, [shared])).blocked)
+await as(ID.admin, `select staff_restore_document($1)`, [shared])
+check('support restores a deleted upload; the patient is told and it is in the history', (await one(`select deleted_at from documents where id = $1`, [shared])).deleted_at === null
+  && (await as(ID.pat, `select 1 from notifications where title = 'A document was restored'`)).length === 1
+  && (await one(`select count(*)::int n from document_events where document_id = $1 and action = 'restore'`, [shared])).n >= 1
+  && (await one(`select count(*)::int n from audit_log where action = 'Restored document'`)).n === 1)
+check('what is not deleted cannot be "restored"', (await denied(ID.admin, `select staff_restore_document($1)`, [shared])).blocked)
+check('only a full admin purges', (await denied(ID.asst, `select purge_expired_documents()`)).blocked && (await denied(ID.pat, `select purge_expired_documents()`)).blocked
+  && (await as(ID.admin, `select purge_expired_documents() n`))[0].n === 0)
+check('signed-out visitors cannot call any of it', (await denied(null, `select schedule_follow_up($1, current_date + 1)`, [ID.pat])).blocked
+  && (await denied(null, `select revoke_invitation($1)`, [inv])).blocked && (await denied(null, `select staff_restore_document($1)`, [shared])).blocked)
+
+/* ── Integrity (0010): audit, account guards, prescriptions, report requests, targets, invalid readings, repeats ── */
+console.log('\nIntegrity')
+// James (pat) is treated by doc2 (DOC); Dr. Amara (doc) treats nobody; there are two admins (admin, boss).
+check('the browser cannot write the audit trail', (await denied(ID.pat, `insert into audit_log (actor_id, action, detail) values ($1, 'Forged', 'x')`, [ID.pat])).blocked
+  && (await denied(ID.admin, `insert into audit_log (actor_id, action, detail) values ($1, 'Forged', 'x')`, [ID.admin])).blocked
+  && (await one(`select count(*)::int n from audit_log where action = 'Forged'`)).n === 0)
+check('an entry carries the role its author held', (await one(`select actor_role from audit_log where action = 'Set meal plan' order by id desc limit 1`)).actor_role === 'doctor')
+
+await as(ID.admin, `update staff set permissions = '{approve_patient_requests,create_users,monitor_patients}' where id = $1`, [ID.asst])
+const permAudit = await one(`select before_state, after_state, resource_id from audit_log where action = 'Changed assistant permissions' order by id desc limit 1`)
+check('a permission change is audited with before and after, and the assistant is told', permAudit?.resource_id === ID.asst
+  && permAudit.after_state.includes('monitor_patients') && !permAudit.before_state.includes('monitor_patients')
+  && (await as(ID.asst, `select 1 from notifications where title = 'Your permissions changed'`)).length === 1)
+check('an unknown permission is refused, and an assistant cannot grant themself any', (await denied(ID.admin, `update staff set permissions = '{root}' where id = $1`, [ID.asst])).blocked
+  && (await as(ID.asst, `update staff set permissions = '{view_logs}' where id = $1 returning id`, [ID.asst])).length === 0)
+await as(ID.asst, `select log_patient_view($1)`, [ID.pat]); await as(ID.asst, `select log_patient_view($1)`, [ID.pat])
+check("opening a patient's vitals is recorded once, against that patient", (await one(`select count(*)::int n from audit_log where action = 'Viewed patient vitals' and patient_id = $1 and actor_id = $2`, [ID.pat, ID.asst])).n === 1
+  && (await denied(ID.doc, `select log_patient_view($1)`, [ID.pat])).blocked && (await denied(ID.pat, `select log_patient_view($1)`, [ID.pat])).blocked)
+
+check('the treating doctor stops a medicine the previous doctor prescribed', (await as(DOC, `update prescriptions set active = false where id = $1 returning stopped_by`, [rx]))[0]?.stopped_by === DOC)
+check('a prescription is never deleted', (await as(DOC, `delete from prescriptions where id = $1 returning id`, [rx])).length === 0
+  && (await one(`select count(*)::int n from prescriptions where id = $1`, [rx])).n === 1)
+check('the former doctor can no longer change it', (await as(ID.doc, `update prescriptions set active = true where id = $1 returning id`, [rx])).length === 0)
+
+const setStatus = (who, person, status, reason = null) => as(who, `select set_account_status($1, $2, $3)`, [person, status, reason])
+check('an admin cannot suspend themself, or change a role', (await denied(ID.admin, `select set_account_status($1, 'suspended', 'Testing the rule')`, [ID.admin])).blocked
+  && (await denied(ID.admin, `update profiles set role = 'admin' where id = $1`, [ID.pat])).blocked)
+check('a doctor who still has patients cannot be suspended', /still has patients/.test((await denied(ID.admin, `select set_account_status($1, 'suspended', 'Licence under review')`, [DOC])).why ?? ''))
+check('stopping an account needs a reason, by any route', /Give a reason/.test((await denied(ID.admin, `select set_account_status($1, 'suspended')`, [ID.doc])).why ?? '')
+  && (await denied(ID.admin, `update profiles set status = 'suspended' where id = $1`, [ID.doc])).blocked)
+await setStatus(ID.admin, ID.doc, 'suspended', 'Licence under review')
+const stopped = await one(`select status, status_reason, status_changed_by, status_changed_at > now() - interval '1 minute' fresh from profiles where id = $1`, [ID.doc])
+check('a doctor with no patients can; who, when and why are kept and it is audited', stopped.status === 'suspended' && stopped.status_reason === 'Licence under review'
+  && stopped.status_changed_by === ID.admin && stopped.fresh
+  && (await one(`select count(*)::int n from audit_log where action = 'Suspended user' and detail = 'Dr. Amara Osei · Licence under review' and resource_id = $1`, [ID.doc])).n === 1)
+check('only an administrator changes a status, and the reason cannot be forged', (await denied(ID.asst, `select set_account_status($1, 'active')`, [ID.doc])).blocked
+  && (await denied(ID.pat, `select set_account_status($1, 'active')`, [ID.doc])).blocked
+  && (await as(ID.doc, `update profiles set status_reason = 'x', phone = '1' where id = $1 returning status_reason`, [ID.doc]).catch(() => [{}]))[0]?.status_reason !== 'x')
+await setStatus(ID.admin, ID.doc, 'active')
+check('reactivating is audited and the person is told', (await one(`select count(*)::int n from audit_log where action = 'Reactivated user' and resource_id = $1`, [ID.doc])).n === 1
+  && (await as(ID.doc, `select 1 from notifications where title = 'Your account is active again'`)).length === 1)
+await setStatus(ID.admin, NEW.boss, 'deactivated', 'Left the organisation')
+check('the last active admin cannot leave mCare without one', /at least one active administrator/.test((await denied(ID.admin, `select deactivate_my_account()`)).why ?? '')
+  && (await as(NEW.boss, `select is_admin() a`))[0].a === false)
+await setStatus(ID.admin, NEW.boss, 'active')
+
+await setStatus(ID.admin, ID.pat, 'suspended', 'Requested by the patient while travelling')
+check('a suspended patient cannot share or open documents', (await denied(ID.pat, `select create_share_link($1, 'Clinic')`, [[v2]])).blocked
+  && (await denied(ID.pat, `select record_document_access($1)`, [v2])).blocked
+  && (await as(ID.pat, `select 1 from appointment_events`)).length === 0)
+await setStatus(ID.admin, ID.pat, 'active')
+
+check('an answered report request cannot be answered again', (await denied(DOC, `update report_requests set status = 'fulfilled', document_id = $1 where patient_id = $2`, [v2, ID.pat])).blocked)
+const rr2 = (await as(ID.pat, `insert into report_requests (patient_id, doctor_id, period_days) values ($1, $2, 14) returning id`, [ID.pat, DOC]))[0].id
+check('fulfilling a request needs the report; the request itself cannot be rewritten', (await denied(DOC, `update report_requests set status = 'fulfilled' where id = $1`, [rr2])).blocked
+  && (await denied(DOC, `update report_requests set period_days = 300 where id = $1`, [rr2])).blocked
+  && (await as(DOC, `update report_requests set status = 'fulfilled', document_id = $2 where id = $1 returning handled_at`, [rr2, v2]))[0]?.handled_at != null)
+
+const targetNotes = async () => (await as(ID.pat, `select 1 from notifications where title = 'Your target was updated'`)).length
+const notesBefore = await targetNotes()
+await as(DOC, `update thresholds set critical_min = 40, critical_max = 120 where patient_id = $1 and vital_id = 'hr'`, [ID.pat])
+const crit2 = await one(`select from_min, to_min, to_critical_max from threshold_changes where patient_id = $1 and vital_id = 'hr' order by id desc limit 1`, [ID.pat])
+check('a change to the critical range is kept in the history and audited, without announcing a new target', Number(crit2.to_critical_max) === 120 && Number(crit2.from_min) === Number(crit2.to_min)
+  && (await one(`select count(*)::int n from audit_log where action = 'Set critical range' and patient_id = $1`, [ID.pat])).n === 1 && await targetNotes() === notesBefore)
+
+const badReading = (await as(ID.pat, `insert into readings (patient_id, vital_id, value) values ($1, 'spo2', '83') returning id`, [ID.pat]))[0].id
+await as(DOC, `update readings set invalid = true, invalid_reason = 'Sensor fell off' where id = $1`, [badReading])
+const inv2 = await one(`select r.invalidated_by, r.invalidated_at is not null stamped, a.status, a.resolution_reason, a.resolved_by from readings r join alerts a on a.reading_id = r.id where r.id = $1`, [badReading])
+check('marking a reading invalid records who did it and closes its alert', inv2.invalidated_by === DOC && inv2.stamped && inv2.status === 'resolved'
+  && inv2.resolution_reason === 'Reading marked invalid' && inv2.resolved_by === DOC
+  && (await as(ID.pat, `select 1 from notifications where title = 'Alert closed'`)).length === 1)
+check('who marked it cannot be forged', (await as(ID.pat, `insert into readings (patient_id, vital_id, value, invalidated_by, invalidated_at) values ($1, 'wt', '80', $2, now()) returning invalidated_by`, [ID.pat, DOC]))[0].invalidated_by === null)
+
+const ref = '99999999-9999-4999-8999-999999999999'
+await as(ID.pat, `insert into readings (patient_id, vital_id, value, client_ref) values ($1, 'wt', '79', $2)`, [ID.pat, ref])
+check('the same form sent twice saves once', (await denied(ID.pat, `insert into readings (patient_id, vital_id, value, client_ref) values ($1, 'wt', '79', $2)`, [ID.pat, ref])).blocked
+  && (await one(`select count(*)::int n from readings where client_ref = $1`, [ref])).n === 1)
+
+const about = (await as(DOC, `select resource_type, resource_id from notifications where title like 'Critical:%' order by created_at desc limit 1`))[0]
+check('a care-team notification says which patient it is about', about?.resource_type === 'patient' && about?.resource_id === ID.pat)
+check('reading a notification stamps when, and what it is about cannot be changed', (await as(ID.pat, `update notifications set read = true where id = (select id from notifications where not read limit 1) returning read_at`))[0]?.read_at != null
+  && (await denied(DOC, `update notifications set resource_id = 'x'`)).blocked)
+
+/* ── Relationships and accounts (0011): assignment history, removing a doctor, past patients ── */
+console.log('\nRelationships')
+// So far James (pat) went from Dr. Amara (doc) to doc2, and so did Grace (pat2).
+const openFor = async pt => (await db.query(`select doctor_id, reason, assigned_by from care_assignments where patient_id = $1 and ended_at is null`, [pt])).rows
+const jamesHistory = (await db.query(`select doctor_id, ended_at, end_reason from care_assignments where patient_id = $1 order by started_at`, [ID.pat])).rows
+check('every assignment is kept, with one open at a time', jamesHistory.length === 2 && jamesHistory[0].doctor_id === ID.doc && jamesHistory[0].ended_at !== null
+  && /Moved to Dr\. Other/.test(jamesHistory[0].end_reason) && jamesHistory[1].ended_at === null && (await openFor(ID.pat))[0].doctor_id === DOC)
+check('a second open assignment for one patient cannot exist', await db.query(`insert into care_assignments (patient_id, doctor_id) values ($1, $2)`, [ID.pat, ID.doc]).then(() => false, () => true))
+const past = await as(ID.doc, `select full_name, ended_at from my_past_patients()`)
+check('a doctor sees who they used to treat, by name only', past.map(r => r.full_name).sort().join() === 'Grace Otieno,James Mwangi' && past.every(r => r.ended_at)
+  && (await as(ID.doc, `select 1 from readings`)).length === 0 && (await as(DOC, `select 1 from my_past_patients()`)).length === 0
+  && (await as(ID.pat, `select 1 from my_past_patients()`)).length === 0)
+check('the history is read by the patient, the doctors in it and care coordinators only', (await as(ID.pat, `select 1 from care_assignments`)).length === 2
+  && (await as(ID.doc, `select 1 from care_assignments`)).length === 2 && (await as(ID.evil, `select 1 from care_assignments`)).length === 0
+  && (await denied(ID.admin, `insert into care_assignments (patient_id, doctor_id) values ($1, $2)`, [ID.evil, ID.doc])).blocked)
+check('removing a doctor needs a reason', /Say why/.test((await denied(ID.admin, `update patients set assigned_doctor_id = null where id = $1`, [ID.pat])).why ?? '')
+  && /Say why/.test((await denied(ID.admin, `select assign_doctor($1, null, ' ')`, [ID.pat])).why ?? ''))
+check('only someone who assigns healthworkers uses assign_doctor', (await denied(ID.asst, `select assign_doctor($1, $2)`, [ID.pat, ID.doc])).blocked
+  && (await denied(ID.pat, `select assign_doctor($1, $2)`, [ID.pat, ID.doc])).blocked)
+await as(ID.admin, `select assign_doctor($1, null, 'Patient moved abroad')`, [ID.pat])
+check('removal ends the assignment with its reason, tells both and is audited', (await openFor(ID.pat)).length === 0
+  && (await one(`select end_reason, ended_by from care_assignments where patient_id = $1 and doctor_id = $2`, [ID.pat, DOC])).end_reason === 'Patient moved abroad'
+  && (await as(ID.pat, `select 1 from notifications where title = 'Care team updated' and body like 'You no longer%'`)).length === 1
+  && (await one(`select count(*)::int n from audit_log where action = 'Removed doctor assignment' and patient_id = $1 and detail like '%Patient moved abroad'`, [ID.pat])).n === 1)
+await as(ID.admin, `select assign_doctor($1, $2, 'Closer to the patient')`, [ID.pat, ID.doc])
+const reopened = (await openFor(ID.pat))[0]
+check('a new assignment records who made it and why; the doctor is told which patient', reopened.doctor_id === ID.doc && reopened.reason === 'Closer to the patient' && reopened.assigned_by === ID.admin
+  && (await as(ID.doc, `select resource_id from notifications where title = 'New patient assigned' order by created_at desc limit 1`))[0].resource_id === ID.pat)
+const TREAT = ID.doc   // Dr. Amara treats James again; doc2 no longer does
+
+/* ── Clinical record (0012): note visibility and amendments, prescription details and status, care plans ── */
+console.log('\nClinical record')
+const noteCount = async () => (await as(ID.pat, `select 1 from notifications where title = 'New note from your doctor'`)).length
+const noteTold = await noteCount()
+const noteWas = (await one(`select doctor_note from patients where id = $1`, [ID.pat])).doctor_note
+await as(TREAT, `insert into clinical_notes (patient_id, author_id, content, visibility, note_type) values ($1, $2, 'Consider anxiety as a contributor.', 'internal', 'assessment')`, [ID.pat, TREAT])
+check('an internal note stays with the treating doctor', (await as(TREAT, `select 1 from clinical_notes where visibility = 'internal'`)).length === 1
+  && (await as(ID.pat, `select 1 from clinical_notes where visibility = 'internal'`)).length === 0
+  && (await as(ID.asst, `select 1 from clinical_notes where visibility = 'internal'`)).length === 0
+  && await noteCount() === noteTold && (await one(`select doctor_note from patients where id = $1`, [ID.pat])).doctor_note === noteWas)
+const n1 = (await as(TREAT, `insert into clinical_notes (patient_id, author_id, content) values ($1, $2, 'Take the tablet with food.') returning id`, [ID.pat, TREAT]))[0].id
+const n2 = (await as(TREAT, `insert into clinical_notes (patient_id, author_id, content, amends) values ($1, $2, 'Take the tablet after food.', $3) returning id`, [ID.pat, TREAT, n1]))[0].id
+check("a correction replaces the note it amends as the patient's current note, and the patient is told", (await one(`select doctor_note from patients where id = $1`, [ID.pat])).doctor_note === 'Take the tablet after food.'
+  && (await as(ID.pat, `select 1 from notifications where title = 'Your doctor corrected a note'`)).length === 1
+  && (await as(ID.pat, `select 1 from clinical_notes where id = any ($1)`, [[n1, n2]])).length === 2)
+const graceNote = (await one(`select id from clinical_notes where patient_id = $1 limit 1`, [ID.pat2])).id
+check("a note is corrected once, and never with another patient's note", (await denied(TREAT, `insert into clinical_notes (patient_id, author_id, content, amends) values ($1, $2, 'Again', $3)`, [ID.pat, TREAT, n1])).blocked
+  && (await denied(TREAT, `insert into clinical_notes (patient_id, author_id, content, amends) values ($1, $2, 'Wrong record', $3)`, [ID.pat, TREAT, graceNote])).blocked)
+check('a note is audited against its patient', (await one(`select count(*)::int n from audit_log where action = 'Amended clinical note' and patient_id = $1 and resource_id = $2`, [ID.pat, n2])).n === 1)
+
+const rxNew = (await as(TREAT, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency, route, instructions, start_date, end_date)
+  values ($1, $2, 'Enalapril', '5mg', 'Once daily', 'oral', '  With breakfast  ', current_date, current_date + 13) returning id, status, instructions`, [ID.pat, TREAT]))[0]
+check('a prescription carries how and for how long it is taken', rxNew.status === 'active' && rxNew.instructions === 'With breakfast'
+  && (await as(ID.pat, `select action from prescription_events where prescription_id = $1`, [rxNew.id])).map(e => e.action).join() === 'prescribed')
+check('an end before the start, or an unknown route, is refused', (await denied(TREAT, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency, start_date, end_date) values ($1, $2, 'X', '1', 'Once daily', current_date, current_date - 1)`, [ID.pat, TREAT])).blocked
+  && (await denied(TREAT, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency, route) values ($1, $2, 'X', '1', 'Once daily', 'telepathy')`, [ID.pat, TREAT])).blocked)
+await as(TREAT, `update prescriptions set status = 'discontinued', stop_reason = 'Dry cough' where id = $1`, [rxNew.id])
+const stoppedRx = await one(`select active, status, stopped_by, stop_reason from prescriptions where id = $1`, [rxNew.id])
+check('stopping records the reason, in the history and to the patient', stoppedRx.active === false && stoppedRx.stopped_by === TREAT && stoppedRx.stop_reason === 'Dry cough'
+  && (await as(ID.pat, `select detail from prescription_events where prescription_id = $1 and action = 'stopped'`, [rxNew.id]))[0]?.detail === 'Dry cough'
+  && (await as(ID.pat, `select 1 from notifications where title = 'Medication stopped' and body like '%Dry cough'`)).length === 1)
+await as(TREAT, `update prescriptions set active = true where id = $1`, [rxNew.id])
+check('restarting clears the reason; status and the on/off switch always agree', (await one(`select status, stop_reason, stopped_at from prescriptions where id = $1`, [rxNew.id])).status === 'active'
+  && (await one(`select stop_reason from prescriptions where id = $1`, [rxNew.id])).stop_reason === null
+  && (await denied(ID.pat, `insert into prescription_events (prescription_id, patient_id, action) values ($1, $2, 'stopped')`, [rxNew.id, ID.pat])).blocked)
+const course = (await as(TREAT, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency, start_date, end_date) values ($1, $2, 'Amoxicillin', '500mg', 'Three times daily', current_date - 7, current_date - 1) returning id`, [ID.pat, TREAT]))[0].id
+check('a course whose last day has passed is completed by the schedule, and the patient is told', (await db.query(`select complete_ended_prescriptions() n`)).rows[0].n === 1
+  && (await one(`select status, active, stop_reason from prescriptions where id = $1`, [course])).status === 'completed'
+  && (await as(ID.pat, `select 1 from notifications where title = 'Course finished'`)).length === 1
+  && (await denied(TREAT, `select complete_ended_prescriptions()`)).blocked)
+
+const planJson = extra => JSON.stringify({ patient_id: ID.pat, title: ' Blood pressure control ', summary: 'Bring BP under 135/85 in three months.', review_date: null,
+  items: [{ kind: 'goal', text: 'Morning BP under 135/85 on 5 of 7 days', vital_id: 'bp' }, { kind: 'intervention', text: 'Walk 30 minutes, five days a week' }], ...extra })
+const plan1 = (await as(TREAT, `select save_care_plan($1) id`, [planJson()]))[0].id
+check('a care plan is saved with its goals in one step, as a draft only the treating doctor sees', (await one(`select status, title, doctor_id from care_plans where id = $1`, [plan1])).status === 'draft'
+  && (await one(`select title from care_plans where id = $1`, [plan1])).title === 'Blood pressure control'
+  && (await as(TREAT, `select 1 from care_plan_items where plan_id = $1`, [plan1])).length === 2
+  && (await as(ID.pat, `select 1 from care_plans`)).length === 0 && (await as(ID.pat, `select 1 from care_plan_items`)).length === 0
+  && (await as(DOC, `select 1 from care_plans`)).length === 0)
+check("a doctor who does not treat the patient cannot write their plan, nor a patient", (await denied(DOC, `select save_care_plan($1)`, [planJson()])).blocked
+  && (await denied(ID.pat, `select save_care_plan($1)`, [planJson()])).blocked
+  && (await denied(DOC, `select save_care_plan($1)`, [planJson({ id: plan1 })])).blocked)
+const plan2 = (await as(TREAT, `select save_care_plan($1) id`, [JSON.stringify({ patient_id: ID.pat, title: 'Sleep', items: [{ kind: 'intervention', text: 'No screens after 9pm' }] })]))[0].id
+check('a plan needs a goal before it starts; a draft can be dropped', /at least one goal/.test((await denied(TREAT, `select set_care_plan_status($1, 'active')`, [plan2])).why ?? '')
+  && (await as(TREAT, `delete from care_plans where id = $1 returning id`, [plan2])).length === 1)
+await as(TREAT, `select set_care_plan_status($1, 'active')`, [plan1])
+check('starting the plan shows it to the patient and tells them', (await as(ID.pat, `select status, start_date = current_date today from care_plans`))[0]?.status === 'active'
+  && (await as(ID.pat, `select 1 from care_plan_items`)).length === 2
+  && (await as(ID.pat, `select resource_id from notifications where kind = 'care_plan' and title = 'Your care plan is ready'`))[0]?.resource_id === plan1)
+const plan3 = (await as(TREAT, `select save_care_plan($1) id`, [planJson({ title: 'Second plan' })]))[0].id
+check('one active plan at a time', /already has an active care plan/.test((await denied(TREAT, `select set_care_plan_status($1, 'active')`, [plan3])).why ?? ''))
+const goal = (await as(TREAT, `select id from care_plan_items where plan_id = $1 and kind = 'goal'`, [plan1]))[0].id
+await as(TREAT, `update care_plan_items set status = 'achieved', progress_note = 'Six of seven mornings in range' where id = $1`, [goal])
+check('progress on a goal is kept in the history and the patient is told; the patient cannot change it', (await as(ID.pat, `select action from care_plan_events where plan_id = $1 and action = 'item_achieved'`, [plan1])).length === 1
+  && (await as(ID.pat, `select 1 from notifications where title = 'Goal reached'`)).length === 1
+  && (await as(ID.pat, `update care_plan_items set status = 'open' where id = $1 returning id`, [goal])).length === 0)
+await as(TREAT, `select save_care_plan($1)`, [JSON.stringify({ id: plan1, title: 'Blood pressure control', summary: 'Reviewed.', items: [{ id: goal, kind: 'goal', text: 'Morning BP under 130/80 on 5 of 7 days', vital_id: 'bp' }] })])
+const afterEdit = (await db.query(`select kind, status, text from care_plan_items where plan_id = $1`, [plan1])).rows
+check('editing a plan keeps the progress already made, and drops what was removed', afterEdit.length === 1 && afterEdit[0].status === 'achieved' && /130\/80/.test(afterEdit[0].text)
+  && (await as(ID.pat, `select 1 from care_plan_events where plan_id = $1 and action = 'edited'`, [plan1])).length >= 1)
+await as(TREAT, `select set_care_plan_status($1, 'on_hold', 'Patient travelling')`, [plan1])
+await as(TREAT, `select set_care_plan_status($1, 'active')`, [plan1])
+check('a plan cannot go back to draft', (await denied(TREAT, `select set_care_plan_status($1, 'draft')`, [plan1])).blocked)
+await as(TREAT, `select set_care_plan_status($1, 'completed', ' Target reached ')`, [plan1])
+const closedPlan = await one(`select status, closed_at is not null closed, close_note from care_plans where id = $1`, [plan1])
+check('a completed plan is closed: it and its goals stay as they were', closedPlan.status === 'completed' && closedPlan.closed && closedPlan.close_note === 'Target reached'
+  && (await denied(TREAT, `select set_care_plan_status($1, 'active')`, [plan1])).blocked
+  && (await denied(TREAT, `select save_care_plan($1)`, [planJson({ id: plan1 })])).blocked
+  && (await denied(TREAT, `update care_plan_items set status = 'open' where id = $1`, [goal])).blocked)
+check('the patient reads the whole history of their plan', (await as(ID.pat, `select action from care_plan_events where plan_id = $1 order by id`, [plan1])).map(e => e.action).join()
+  === 'created,active,item_achieved,edited,on_hold,active,completed')
+
+/* ── Availability (0013): working hours, days away, and booking checked against them ── */
+console.log('\nAvailability')
+const dow = async n => (await one(`select extract(dow from current_date + ${n})::int d`)).d
+const hours = JSON.stringify([{ weekday: await dow(7), start: '09:00', end: '12:00' }, { weekday: await dow(7), start: '14:00', end: '16:00' }])
+check('only a doctor sets working hours, and blocks cannot overlap', (await denied(ID.pat, `select set_doctor_hours($1)`, [hours])).blocked
+  && (await denied(ID.admin, `select set_doctor_hours($1)`, [hours])).blocked
+  && (await denied(TREAT, `select set_doctor_hours($1)`, [JSON.stringify([{ weekday: 1, start: '09:00', end: '12:00' }, { weekday: 1, start: '11:00', end: '13:00' }])])).blocked
+  && (await as(TREAT, `select 1 from doctor_hours`)).length === 0)
+await as(TREAT, `select set_doctor_hours($1, 30)`, [hours])
+const avail = async (n, who = ID.pat) => (await as(who, `select doctor_availability($1, current_date + ${n}) a`, [TREAT]))[0].a
+const day7 = await avail(7)
+check('a patient sees the open times of a day, and nothing else', day7.managed === true && day7.away === false && day7.slots.join() === '09:00,09:30,10:00,10:30,11:00,11:30,14:00,14:30,15:00,15:30'
+  && (await avail(8)).slots.length === 0 && !('reason' in day7))
+const ask = (n, time, who = ID.pat, doctor = TREAT) => as(who, `insert into appointments (patient_id, doctor_id, title, preferred_date, preferred_time) values ($1, $2, 'Review', current_date + ${n}, $3) returning id`, [ID.pat, doctor, time])
+const inHours = (await ask(7, '10:00'))[0].id
+check('a request inside the hours is taken; outside them, or on a day off, it is refused', !!inHours
+  && /outside the hours/.test((await ask(7, '12:30').then(() => ({}), e => ({ why: e.message }))).why ?? '')
+  && /outside the hours/.test((await ask(7, '11:45').then(() => ({}), e => ({ why: e.message }))).why ?? '')
+  && /does not see patients on that day/.test((await ask(8, '10:00').then(() => ({}), e => ({ why: e.message }))).why ?? ''))
+await as(TREAT, `insert into doctor_time_off (doctor_id, from_date, to_date, reason) values ($1, current_date + 14, current_date + 14, 'Conference')`, [TREAT])
+check('a day away takes no requests; why the doctor is away stays private', (await avail(14)).away === true && (await avail(14)).slots.length === 0
+  && /is away on that day/.test((await ask(14, '10:00').then(() => ({}), e => ({ why: e.message }))).why ?? '')
+  && (await as(ID.pat, `select 1 from doctor_time_off`)).length === 0 && (await as(ID.admin, `select reason from doctor_time_off`))[0].reason === 'Conference')
+await as(TREAT, `update appointments set status = 'approved' where id = $1`, [inHours])
+check('a confirmed visit takes its time off the list', !(await avail(7)).slots.includes('10:00') && (await avail(7)).slots.includes('10:30'))
+check('the doctor can still place a visit in their own day; a doctor with no timetable is unrestricted',
+  (await as(TREAT, `insert into appointments (patient_id, doctor_id, title, preferred_date, preferred_time, status) values ($1, $2, 'Evening call', current_date + 7, '18:00', 'approved') returning id`, [ID.pat, TREAT])).length === 1
+  && (await ask(8, '06:15', ID.pat, DOC)).length === 1 && (await as(ID.pat, `select doctor_availability($1, current_date + 8) a`, [DOC]))[0].a.managed === false)
+
+/* ── Administration (0014): support acts on the one appointment; support requests; the operational report ── */
+console.log('\nAdministration')
+const move = (who, id, date, time, reason) => denied(who, `select admin_update_appointment($1, 'move', current_date + ${date}, $2, $3)`, [id, time, reason])
+check('only someone who handles support changes an appointment for others, and always with a reason', (await move(ID.asst, inHours, 7, '11:00', 'Patient asked by phone')).blocked
+  && (await move(ID.pat, inHours, 7, '11:00', 'I want to')).blocked && (await move(ID.admin, inHours, 7, '11:00', ' ')).blocked)
+check("a move is still checked against the doctor's hours", /outside the hours/.test((await move(ID.admin, inHours, 7, '13:00', 'Patient asked by phone')).why ?? ''))
+const movedOk = await move(ID.admin, inHours, 7, '11:00', 'Patient asked by phone')
+const movedAppt = await one(`select preferred_time::text t, status from appointments where id = $1`, [inHours])
+check('support moves the same appointment; both are told; it is in the history and the audit trail', !movedOk.blocked && movedAppt.t === '11:00:00' && movedAppt.status === 'approved'
+  && (await hist(inHours)).some(e => e.action === 'moved' && e.actor_id === ID.admin && /Patient asked by phone/.test(e.detail))
+  && (await as(ID.pat, `select 1 from notifications where title = 'Appointment moved by mCare support' and resource_id = $1`, [inHours])).length === 1
+  && (await as(TREAT, `select 1 from notifications where title = 'Appointment moved by mCare support' and resource_id = $1`, [inHours])).length === 1
+  && (await one(`select count(*)::int n from audit_log where action = 'Moved appointment' and resource_id = $1 and patient_id = $2`, [inHours, ID.pat])).n === 1
+  && (await one(`select count(*)::int n from appointments where patient_id = $1 and title = 'Review' and doctor_id = $2`, [ID.pat, TREAT])).n === 1)
+await as(ID.admin, `select admin_update_appointment($1, 'cancel', null, null, 'Doctor called away')`, [inHours])
+check('support cancels it with the reason; a closed appointment is not changed again', (await one(`select status, rejection_reason from appointments where id = $1`, [inHours])).rejection_reason === 'Doctor called away'
+  && (await as(TREAT, `select 1 from notifications where title = 'Appointment cancelled by mCare support'`)).length === 1
+  && (await move(ID.admin, inHours, 7, '09:00', 'Trying again')).blocked)
+
+const ticket = (await as(ID.pat, `insert into support_tickets (user_id, subject, message) values ($1, 'Wrong phone number', 'Please correct it') returning id`, [ID.pat]))[0].id
+check('a support request reaches the people who handle support, as its own kind of notification', (await as(ID.admin, `select resource_id from notifications where kind = 'support' and title like 'Support request:%' order by created_at desc limit 1`))[0]?.resource_id === ticket)
+await as(ID.admin, `update support_tickets set status = 'resolved', resolution_note = ' Number corrected ' where id = $1`, [ticket])
+check('it is answered once, the person is told and it is audited', (await one(`select resolution_note, resolved_by from support_tickets where id = $1`, [ticket])).resolution_note === 'Number corrected'
+  && (await as(ID.pat, `select 1 from notifications where title = 'Support request answered' and body = 'Number corrected'`)).length === 1
+  && (await denied(ID.admin, `update support_tickets set resolution_note = 'changed' where id = $1`, [ticket])).blocked
+  && (await one(`select count(*)::int n from audit_log where action = 'Answered support request' and resource_id = $1`, [ticket])).n === 1)
+
+const report = (await as(ID.admin, `select admin_report(current_date - 30, current_date) r`))[0].r
+check('the operational report is counted from the records', report.accounts.patient >= 1 && report.alerts.raised >= 1 && report.activity.readings >= 1
+  && report.doctors.some(d => d.name === 'Dr. Amara Osei' && d.patients === 1) && typeof report.waiting.support_requests === 'number'
+  && !JSON.stringify(report).includes('James'))
+check('it is for an administrator or someone who reads the audit log, and for a year at most', (await denied(TREAT, `select admin_report(current_date - 30, current_date)`)).blocked
+  && (await denied(ID.asst, `select admin_report(current_date - 30, current_date)`)).blocked && (await denied(ID.pat, `select admin_report(current_date - 30, current_date)`)).blocked
+  && (await denied(ID.admin, `select admin_report(current_date - 800, current_date)`)).blocked)
+
+/* ── Synchronisation (0015): one token that changes when anything a person may see changes ── */
+console.log('\nSynchronisation')
+const changeToken = async who => (await as(who, `select my_change_token() t`))[0].t
+const [docT, patT, adminT, otherT] = [await changeToken(TREAT), await changeToken(ID.pat), await changeToken(ID.admin), await changeToken(ID.evil)]
+await as(ID.pat, `insert into dose_logs (patient_id, prescription_id, slot, day) values ($1, $2, 600, current_date)`, [ID.pat, rxNew.id])
+check("a change that writes no notification still changes the token of everyone who sees that patient", await changeToken(TREAT) !== docT && await changeToken(ID.pat) !== patT && await changeToken(ID.admin) !== adminT)
+check('and of nobody else', await changeToken(ID.evil) === otherT)
+const docT2 = await changeToken(TREAT), adminT2 = await changeToken(ID.admin)
+await as(ID.evil, `insert into readings (patient_id, vital_id, value) values ($1, 'hr', '70')`, [ID.evil])
+check("another patient's record does not move a doctor's token, but does move the staff's", await changeToken(TREAT) === docT2 && await changeToken(ID.admin) !== adminT2)
+const patT2 = await changeToken(ID.pat)
+await as(ID.admin, `select invite_account('sync.test@mcare.app', 'Sync Test', 'patient')`)
+check('a change to the shared lists moves every token', await changeToken(ID.pat) !== patT2)
+check('the counters are read only by those who may see the patient, and written by nobody', (await as(ID.pat, `select 1 from patient_changes`)).length === 1
+  && (await as(ID.evil, `select 1 from patient_changes where patient_id = $1`, [ID.pat])).length === 0
+  && (await as(ID.pat, `update patient_changes set version = 0 returning patient_id`).catch(() => [])).length === 0
+  && (await denied(ID.pat, `insert into system_changes (topic) values ('x')`)).blocked)
+check('a signed-out visitor or a closed account gets no token', (await denied(null, `select my_change_token()`)).blocked && (await denied(ID.pat2, `select my_change_token()`)).blocked)
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

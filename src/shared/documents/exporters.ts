@@ -129,6 +129,13 @@ function reportBlocks(doc: MedicalDocument, users: AppUser[]): DocxBlock[] {
       out.push(h2('Current medications'))
       out.push({ t: 'table', rows: [['Medication', 'Dose', 'Frequency', 'Indication'], ...b.medications.map(m => [m.name, m.dose, m.frequency, m.purpose || '—'])] })
     }
+    if (b.notes?.length) {
+      out.push(h2('Clinical notes'))
+      b.notes.forEach(n => {
+        out.push({ t: 'p', runs: [{ text: `${n.at} · ${n.author}`, i: true }] })
+        n.content.split('\n').forEach(l => out.push({ t: 'p', runs: [{ text: l }] }))
+      })
+    }
     out.push(h2("Clinician's interpretation & plan"))
     ;(b.interpretation ? b.interpretation.split('\n') : ['To be completed by the signing clinician before release.']).forEach(l => out.push({ t: 'p', runs: [{ text: l, i: !b.interpretation }] }))
   } else if (b?.type === 'lab') {

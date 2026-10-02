@@ -10,7 +10,7 @@
  * loading popup) for every role, so they always show the same hue and
  * beat in phase.
  *
- * `size="xl"` is the boot splash hero; `size="sm"` is the compact variant
+ * The boot splash in index.html is the same mark in plain HTML and CSS; `size="sm"` is the compact variant
  * used in the in-app loading popup.
  */
 import { useState, useSyncExternalStore } from 'react'
@@ -76,8 +76,8 @@ function scheduleBeat() {
 
 function subscribe(listener: () => void) {
   listeners.add(listener)
-  const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-  if (listeners.size === 1 && !reduced) scheduleBeat()
+  // The beat runs under reduced motion too: the heartbeat is the brand, and it changes colour rather than place.
+  if (listeners.size === 1) scheduleBeat()
   return () => {
     listeners.delete(listener)
     if (!listeners.size) clearTimeout(timer)

@@ -10,8 +10,9 @@
  */
 import type {
   AccountStatus, AdminUser, AppAlert, AppNotification, AppUser, Appointment, ApprovalStatus, AssistantPerm, AuditEntry,
-  ClinicalNote, DocEvent, DoctorRating, DoctorRequest, DoctorUser, HydrationLog, MealDone, MealPlan, MedDose, MedicalDocument,
-  PatientMessage, PatientUser, ReportRequest, ShareLink, SupportTicket, TargetChange, VitalDef, VitalReading,
+  CareAssignment, CarePlan, PastPatient, TimeOff,
+  ClinicalNote, DocEvent, DoctorRating, DoctorRequest, DoctorUser, HydrationLog, Invitation, MealDone, MealPlan, MedDose, MedicalDocument,
+  PatientMessage, PatientUser, ReportRequest, ShareLink, SupportGrant, SupportTicket, TargetChange, UserRole, VitalDef, VitalReading,
 } from '@/shared/lib/types'
 import { dateLabel, dayKey, stamp } from '@/shared/lib/vitals'
 import { getSupabase } from './supabase'
@@ -43,6 +44,17 @@ export interface Records {
   documents: MedicalDocument[]
   docEvents: DocEvent[]
   shareLinks: ShareLink[]
+  /** Admins: the documents they have opened for a support case, and until when. */
+  supportGrants: SupportGrant[]
+  /** People registered in advance who have not signed up yet. Empty unless the person may register users. */
+  invitations: Invitation[]
+  carePlans: CarePlan[]
+  /** Who treated whom, and when. */
+  careAssignments: CareAssignment[]
+  /** A doctor's former patients, by name only. */
+  pastPatients: PastPatient[]
+  /** Days a doctor is away: their own, or everyone's for staff. */
+  timeOff: TimeOff[]
 }
 
 /* ─── Dates and times ───────────────────────────────────────────────── */
@@ -96,8 +108,17 @@ export const fromVitalDef = (v: VitalDef): Row => ({
 export const toReading = (r: Row): VitalReading => ({
   id: r.id, vitalId: r.vital_id, value: r.value, at: ms(r.taken_at), loggedAt: when(r.taken_at) ?? '',
   note: r.note ?? undefined, invalid: r.invalid || undefined, invalidReason: r.invalid_reason ?? undefined,
-  recordedBy: r.recorded_by ?? undefined, correctedFrom: r.corrected_from ?? undefined,
+  recordedBy: r.recorded_by ?? undefined, correctedFrom: r.corrected_from ?? undefined, invalidatedBy: r.invalidated_by ?? undefined,
 })
+
+/** One page of the audit trail, as a screen shows it. */
+export const toAudit = (r: Row): AuditEntry => ({
+  id: String(r.id), actorId: r.actor_id ?? 'system', actorRole: r.actor_role ?? undefined, action: r.action, detail: r.detail ?? '',
+  resourceType: r.resource_type ?? undefined, resourceId: r.resource_id ?? undefined, patientId: r.patient_id ?? undefined,
+  at: ms(r.created_at) ?? 0, createdAt: when(r.created_at) ?? '',
+})
+/** "09:00:00" → "09:00" */
+const hm = (time: string) => time.slice(0, 5)
 
 const toAlert = (r: Row, defs: VitalDef[]): AppAlert => ({
   id: r.id, patientId: r.patient_id, type: r.type, severity: r.severity, status: r.status, resolved: r.status === 'resolved',
@@ -111,13 +132,17 @@ const toAlert = (r: Row, defs: VitalDef[]): AppAlert => ({
   resolutionReason: r.resolution_reason ?? undefined, resolutionNote: r.resolution_note ?? undefined,
 })
 
-const toAppointment = (r: Row): Appointment => ({
+const toAppointment = (r: Row, events: Row[]): Appointment => ({
   id: r.id, patientId: r.patient_id, doctorId: r.doctor_id, title: r.title, reason: r.reason ?? '',
   preferredDate: dayLabel(r.preferred_date) ?? '', preferredTime: clockLabel(r.preferred_time) ?? 'Any time',
   location: r.location ?? undefined, status: r.status,
   approvalNote: r.approval_note ?? undefined, rejectionReason: r.rejection_reason ?? undefined,
   rescheduledTo: dayLabel(r.rescheduled_date), rescheduledTime: clockLabel(r.rescheduled_time),
   rescheduledReason: r.rescheduled_reason ?? undefined,
+  createdBy: r.created_by ?? undefined, alertId: r.alert_id ?? undefined, number: r.number ?? undefined,
+  history: events.filter(e => e.appointment_id === r.id).map(e => ({
+    id: e.id, actorId: e.actor_id ?? undefined, action: e.action, detail: e.detail ?? undefined, at: ms(e.created_at) ?? 0, createdAt: when(e.created_at) ?? '',
+  })),
   createdAt: dateLabel(new Date(r.created_at)), at: ms(r.created_at),
 })
 
@@ -128,6 +153,7 @@ const toMessage = (r: Row): PatientMessage => ({
 const toNotification = (r: Row): AppNotification => ({
   id: r.id, userId: r.user_id, kind: r.kind, title: r.title, body: r.body, link: r.link ?? undefined, read: r.read,
   at: ms(r.created_at) ?? 0, createdAt: when(r.created_at) ?? '',
+  resource: r.resource_type && r.resource_id ? { type: r.resource_type, id: r.resource_id } : undefined,
 })
 
 export const toDocument = (r: Row): MedicalDocument => ({
@@ -149,8 +175,22 @@ export const toDocument = (r: Row): MedicalDocument => ({
   seenByPatient: r.origin === 'patient_upload' ? undefined : r.seen_by_patient,
 })
 
+/**
+ * A document as staff see it: that it exists, whose it is, its kind and its state.
+ * The registry never sends the title, the text or the file, so there is nothing here to show by mistake.
+ */
+const fromRegistry = (r: Row): MedicalDocument => ({
+  id: r.id, patientId: r.patient_id, title: '', category: r.category, origin: r.origin, documentDate: r.document_date,
+  createdAt: when(r.created_at) ?? '', at: ms(r.created_at) ?? 0, createdBy: '',
+  upload: r.upload_state ? { state: r.upload_state, progress: r.upload_state === 'ready' ? 100 : 0, attempts: 1, idempotencyKey: r.id } : undefined,
+  status: r.status ?? undefined, seriesId: r.id, version: r.version, links: [], visibility: r.visibility, deletedAt: ms(r.deleted_at),
+})
+
 /* ─── Loading ───────────────────────────────────────────────────────── */
-class LoadError extends Error {}
+class LoadError extends Error {
+  /** The backend's error code is kept, so `explain` can word the message for the person. */
+  constructor(error: { message: string; code?: string }, readonly code = error.code) { super(error.message) }
+}
 
 /**
  * Everything the signed-in person may see, in one round of requests.
@@ -163,7 +203,7 @@ export async function loadRecords(me: AppUser): Promise<Records> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rows = async (table: string, shape: (query: any) => any = query => query): Promise<Row[]> => {
     const { data, error } = await shape(supabase.from(table).select('*'))
-    if (error) throw new LoadError(error.message)
+    if (error) throw new LoadError(error)
     return data ?? []
   }
   const since = daysAgo(HISTORY_DAYS).toISOString()
@@ -175,7 +215,7 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     vitalDefRows, tracked, thresholds, thresholdChanges, readings, alertRows,
     prescriptions, doseLogs, mealLogs, mealPlanRows, hydrationRows,
     appointmentRows, messageRows, notificationRows, reportRows, noteRows, ticketRows, auditRows,
-    ratingRows, consentRows, documentRows, docEventRows, shareRows,
+    ratingRows, consentRows, documentRows, docEventRows, shareRows, registryRows, grantRows, invitationRows,
   ] = await Promise.all([
     rows('profiles'), rows('patients'), rows('doctors'), rows('staff'), rows('allergies'), rows('conditions'),
     rows('emergency_contacts', q => q.order('created_at')),
@@ -190,7 +230,8 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     rows('meal_plans'),
     rows('hydration_logs', q => q.gte('day', logsSince)),
     rows('appointments', q => q.order('created_at', { ascending: false })),
-    rows('messages', q => q.order('created_at').limit(2000)),
+    // Newest first, so the limit drops the oldest; put back in reading order below.
+    rows('messages', q => q.order('created_at', { ascending: false }).limit(2000)),
     rows('notifications', q => q.order('created_at', { ascending: false }).limit(100)),
     rows('report_requests', q => q.order('created_at', { ascending: false })),
     rows('clinical_notes', q => q.order('created_at', { ascending: false })),
@@ -201,6 +242,22 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     rows('documents', q => q.order('document_date', { ascending: false })),
     rows('document_events', q => q.order('created_at', { ascending: false }).limit(500)),
     rows('share_links', q => q.order('created_at', { ascending: false })),
+    // Staff find documents through the registry (metadata only). Without the permission it is refused, which means "none".
+    staff ? supabase.rpc('document_registry').then(({ data }) => (data ?? []) as Row[], () => [] as Row[]) : Promise.resolve([] as Row[]),
+    staff ? rows('support_grants', q => q.eq('admin_id', me.id).gt('expires_at', new Date().toISOString())) : Promise.resolve([] as Row[]),
+    staff ? rows('account_invitations', q => q.is('accepted_at', null).is('revoked_at', null).order('created_at', { ascending: false })) : Promise.resolve([] as Row[]),
+  ])
+
+  // The newer parts of the record, and what belongs to one role.
+  const [rxEvents, planRows, planItemRows, planEventRows, assignmentRows, hourRows, timeOffRows, pastRows] = await Promise.all([
+    rows('prescription_events', q => q.order('id')),
+    rows('care_plans', q => q.order('created_at', { ascending: false })),
+    rows('care_plan_items', q => q.order('position')),
+    rows('care_plan_events', q => q.order('id')),
+    rows('care_assignments', q => q.order('started_at', { ascending: false })),
+    rows('doctor_hours'),
+    rows('doctor_time_off', q => q.order('from_date')),
+    me.role === 'doctor' ? supabase.rpc('my_past_patients').then(({ data }) => (data ?? []) as Row[], () => [] as Row[]) : Promise.resolve([] as Row[]),
   ])
 
   const vitalDefs = vitalDefRows.map(toVitalDef)
@@ -221,6 +278,7 @@ export async function loadRecords(me: AppUser): Promise<Records> {
       id: p.id as string, name: p.full_name as string, email: p.email as string, phone: (p.phone as string) ?? '',
       status: p.status as AccountStatus, createdAt: dateLabel(new Date(p.created_at)),
       dob: p.dob ?? undefined, avatar: p.avatar ?? undefined, theme: p.theme ?? undefined, fontSize: p.font_size ?? undefined,
+      statusReason: p.status_reason ?? undefined, statusChangedAt: p.status_changed_at ? dateLabel(new Date(p.status_changed_at)) : undefined,
       // Passwords and codes are held by the sign-in service; the app never sees them.
       verificationCode: '', password: '',
       ...(p.id === me.id ? { authProvider: me.authProvider, termsAcceptedAt: termsAt } : {}),
@@ -233,6 +291,9 @@ export async function loadRecords(me: AppUser): Promise<Records> {
         approvedBy: d?.approved_by ?? undefined, approvedAt: d?.approved_at ? dateLabel(new Date(d.approved_at)) : undefined,
         signature: d?.signature ?? undefined,
         assignedPatientIds: patients.filter(pt => pt.assigned_doctor_id === p.id).map(pt => pt.id as string),
+        hours: hourRows.filter(h => h.doctor_id === p.id).map(h => ({ weekday: h.weekday as number, start: hm(h.start_time), end: hm(h.end_time) }))
+          .sort((a, b) => a.weekday - b.weekday || a.start.localeCompare(b.start)),
+        slotMinutes: d?.slot_minutes ?? 30,
       }
       return doctor
     }
@@ -259,7 +320,8 @@ export async function loadRecords(me: AppUser): Promise<Records> {
       trackedVitalIds: trackedOf(p.id).map(t => t.vital_id as string),
       thresholds: Object.fromEntries(targets.map(t => [t.vital_id, { min: Number(t.target_min), max: Number(t.target_max) }])),
       criticalThresholds: critical.length ? Object.fromEntries(critical.map(t => [t.vital_id, { min: Number(t.critical_min), max: Number(t.critical_max) }])) : undefined,
-      targetLog: changesOf(p.id).filter(c => c.to_min !== null).map((c): TargetChange => ({
+      // A row that only moved the critical range is not a change of target.
+      targetLog: changesOf(p.id).filter(c => c.to_min !== null && !(Number(c.from_min) === Number(c.to_min) && Number(c.from_max) === Number(c.to_max) && c.from_min !== null)).map((c): TargetChange => ({
         vitalId: c.vital_id, at: ms(c.changed_at) ?? 0, by: c.changed_by ?? '',
         from: c.from_min !== null ? { min: Number(c.from_min), max: Number(c.from_max) } : undefined,
         to: { min: Number(c.to_min), max: Number(c.to_max) },
@@ -268,6 +330,12 @@ export async function loadRecords(me: AppUser): Promise<Records> {
       prescriptions: prescriptionsOf(p.id).map(r => ({
         id: r.id, medication: r.medication, dosage: r.dosage, frequency: r.frequency, purpose: r.purpose ?? '',
         prescribedAt: dateLabel(new Date(r.prescribed_at)), doctorId: r.doctor_id, active: r.active,
+        status: r.status ?? (r.active ? 'active' : 'discontinued'), route: r.route ?? undefined, instructions: r.instructions ?? undefined,
+        startDate: r.start_date ?? undefined, endDate: r.end_date ?? undefined, stopReason: r.stop_reason ?? undefined,
+        stoppedAt: when(r.stopped_at), stoppedBy: r.stopped_by ?? undefined,
+        history: rxEvents.filter(e => e.prescription_id === r.id).map(e => ({
+          id: String(e.id), action: e.action, actorId: e.actor_id ?? undefined, detail: e.detail ?? undefined, at: ms(e.created_at) ?? 0, createdAt: when(e.created_at) ?? '',
+        })),
       })),
       readings: readingsOf(p.id).map(toReading),
       doctorNote: pt?.doctor_note ?? undefined,
@@ -290,11 +358,13 @@ export async function loadRecords(me: AppUser): Promise<Records> {
   // The signed-in account is always present, even if its profile row could not be read.
   if (!users.some(u => u.id === me.id)) users.push(me)
 
+  const appointmentEvents = await rows('appointment_events', q => q.order('created_at'))
+
   return {
     users, vitalDefs,
     alerts: alertRows.map(r => toAlert(r, vitalDefs)),
-    appointments: appointmentRows.map(toAppointment),
-    messages: messageRows.map(toMessage),
+    appointments: appointmentRows.map(r => toAppointment(r, appointmentEvents)),
+    messages: messageRows.map(toMessage).reverse(),
     notifications: notificationRows.map(toNotification),
     doses: doseLogs.map(r => ({ patientId: r.patient_id, rxId: r.prescription_id, slot: r.slot, day: r.day, takenAt: when(r.taken_at) ?? '' })),
     mealsDone: mealLogs.map(r => ({ patientId: r.patient_id, mealId: r.meal_id, day: r.day, takenAt: when(r.taken_at) ?? '', note: r.note ?? undefined })),
@@ -303,20 +373,42 @@ export async function loadRecords(me: AppUser): Promise<Records> {
       at: ms(r.created_at) ?? 0, createdAt: when(r.created_at) ?? '', docId: r.document_id ?? undefined,
       declineReason: r.decline_reason ?? undefined, handledAt: when(r.handled_at),
     })),
-    clinicalNotes: noteRows.map(r => ({ id: r.id, patientId: r.patient_id, authorId: r.author_id, content: r.content, at: ms(r.created_at) ?? 0, createdAt: when(r.created_at) ?? '' })),
+    clinicalNotes: noteRows.map(r => ({
+      id: r.id, patientId: r.patient_id, authorId: r.author_id, content: r.content, at: ms(r.created_at) ?? 0, createdAt: when(r.created_at) ?? '',
+      visibility: r.visibility ?? 'shared', noteType: r.note_type ?? 'progress', appointmentId: r.appointment_id ?? undefined, amends: r.amends ?? undefined,
+      amendedBy: noteRows.find(n => n.amends === r.id)?.id,
+    })),
     supportTickets: ticketRows.map(r => ({
       id: r.id, userId: r.user_id, subject: r.subject, message: r.message ?? '', status: r.status,
       at: ms(r.created_at) ?? 0, createdAt: when(r.created_at) ?? '',
       resolvedBy: r.resolved_by ?? undefined, resolutionNote: r.resolution_note ?? undefined, resolvedAt: when(r.resolved_at),
     })),
-    audit: auditRows.map(r => ({ id: String(r.id), actorId: r.actor_id ?? 'system', action: r.action, detail: r.detail ?? '', at: ms(r.created_at) ?? 0, createdAt: when(r.created_at) ?? '' })),
+    audit: auditRows.map(toAudit),
+    carePlans: planRows.map(r => ({
+      id: r.id, patientId: r.patient_id, doctorId: r.doctor_id, title: r.title, summary: r.summary ?? undefined, status: r.status,
+      startDate: r.start_date ?? undefined, reviewDate: r.review_date ?? undefined,
+      createdAt: dateLabel(new Date(r.created_at)), at: ms(r.created_at) ?? 0, closedAt: when(r.closed_at), closeNote: r.close_note ?? undefined,
+      items: planItemRows.filter(i => i.plan_id === r.id).map(i => ({
+        id: i.id, kind: i.kind, text: i.text, vitalId: i.vital_id ?? undefined, targetDate: i.target_date ?? undefined, status: i.status, progressNote: i.progress_note ?? undefined,
+      })),
+      history: planEventRows.filter(e => e.plan_id === r.id).map(e => ({
+        id: String(e.id), action: e.action, actorId: e.actor_id ?? undefined, detail: e.detail ?? undefined, at: ms(e.created_at) ?? 0, createdAt: when(e.created_at) ?? '',
+      })),
+    })),
+    careAssignments: assignmentRows.map(r => ({
+      id: r.id, patientId: r.patient_id, doctorId: r.doctor_id, startedAt: ms(r.started_at) ?? 0, endedAt: ms(r.ended_at),
+      assignedBy: r.assigned_by ?? undefined, endedBy: r.ended_by ?? undefined, reason: r.reason ?? undefined, endReason: r.end_reason ?? undefined,
+    })),
+    pastPatients: pastRows.map(r => ({ patientId: r.patient_id, name: r.full_name, startedAt: ms(r.started_at) ?? 0, endedAt: ms(r.ended_at) ?? 0, endReason: r.end_reason ?? undefined })),
+    timeOff: timeOffRows.map(r => ({ id: r.id, doctorId: r.doctor_id, from: r.from_date, to: r.to_date, reason: r.reason ?? undefined })),
     mealPlans: mealPlanRows.map(r => ({
       patientId: r.patient_id, meals: Array.isArray(r.meals) ? r.meals : [], targetKcal: r.target_kcal ?? undefined,
       waterGoal: r.water_goal ?? 8, dietaryNote: r.dietary_note ?? undefined, setBy: r.set_by ?? undefined,
     })),
     hydration: hydrationRows.map(r => ({ patientId: r.patient_id, day: r.day, glasses: r.glasses })),
     ratings: ratingRows.map(r => ({ patientId: r.patient_id, doctorId: r.doctor_id, rating: r.rating, comment: r.comment ?? undefined })),
-    documents: documentRows.map(toDocument),
+    // A document the person may open comes whole; the rest of the registry comes as metadata.
+    documents: [...documentRows.map(toDocument), ...registryRows.filter(r => !documentRows.some(d => d.id === r.id)).map(fromRegistry)],
     docEvents: docEventRows.map(r => ({
       id: String(r.id), docId: r.document_id, patientId: r.patient_id, actorId: r.actor_id ?? (r.actor_label ? `external:${r.actor_label}` : 'system'),
       action: r.action, detail: r.detail ?? undefined, at: ms(r.created_at) ?? 0, createdAt: when(r.created_at) ?? '',
@@ -327,13 +419,29 @@ export async function loadRecords(me: AppUser): Promise<Records> {
       at: ms(r.created_at) ?? 0, createdAt: when(r.created_at) ?? '', expiresAt: ms(r.expires_at) ?? 0,
       usedAt: r.one_time && r.opened_count > 0 ? ms(r.created_at) : undefined, revokedAt: ms(r.revoked_at),
     })),
+    supportGrants: grantRows.map(r => ({ id: r.id, adminId: r.admin_id, docId: r.document_id, reason: r.reason, at: ms(r.created_at) ?? 0, expiresAt: ms(r.expires_at) ?? 0 })),
+    invitations: invitationRows.map(r => ({
+      id: r.id, email: r.email, name: r.full_name, phone: r.phone ?? '', role: r.role as UserRole, invitedBy: r.invited_by ?? undefined,
+      createdAt: dateLabel(new Date(r.created_at)), expiresAt: ms(r.expires_at) ?? 0,
+    })),
   }
 }
 
-/** The id of the newest notification, or '' when there are none: a cheap way to learn that something changed. */
-export async function latestNotificationId(): Promise<string> {
+/**
+ * One short value that changes whenever anything this person may see has changed
+ * (their patients' records, the shared lists, their notifications): a cheap way to learn it is time to reload.
+ */
+export async function changeToken(): Promise<string> {
   const supabase = await getSupabase()
-  const { data, error } = await supabase.from('notifications').select('id').order('created_at', { ascending: false }).limit(1)
-  if (error) throw new LoadError(error.message)
-  return (data?.[0]?.id as string | undefined) ?? ''
+  const { data, error } = await supabase.rpc('my_change_token')
+  if (error) throw new LoadError(error)
+  return (data as string | null) ?? ''
+}
+
+/** Older entries of the audit trail, before the oldest one already on screen. */
+export async function loadAuditBefore(beforeId: string, limit = 300): Promise<AuditEntry[]> {
+  const supabase = await getSupabase()
+  const { data, error } = await supabase.from('audit_log').select('*').lt('id', Number(beforeId)).order('created_at', { ascending: false }).limit(limit)
+  if (error) throw new LoadError(error)
+  return (data ?? []).map(toAudit)
 }

@@ -191,10 +191,10 @@ const INITIAL_ALERTS: AppAlert[] = [
 ]
 
 const INITIAL_APPOINTMENTS: Appointment[] = [
-  { id: 'ap1', patientId: 'p1', doctorId: 'd1', title: 'Cardiology Consultation', reason: 'Follow up on elevated blood pressure readings', preferredDate: 'Oct 4, 2026', preferredTime: '9:00 AM', location: 'Kenyatta National Hospital', status: 'approved', createdAt: 'Sep 20, 2026' },
-  { id: 'ap2', patientId: 'p3', doctorId: 'd1', title: 'Diabetic Review', reason: 'Monthly glucose and weight check', preferredDate: 'Oct 10, 2026', preferredTime: '11:00 AM', status: 'requested', createdAt: 'Sep 25, 2026' },
-  { id: 'ap3', patientId: 'p1', doctorId: 'd1', title: 'General Check-up', reason: 'Routine monitoring and medication review', preferredDate: 'Oct 28, 2026', preferredTime: '10:00 AM', status: 'requested', createdAt: 'Sep 27, 2026' },
-  { id: 'ap4', patientId: 'p3', doctorId: 'd1', title: 'SpO₂ Follow-up', reason: 'SpO₂ has been consistently low, need evaluation', preferredDate: 'Oct 2, 2026', preferredTime: '2:00 PM', status: 'rescheduled', rescheduledTo: 'Oct 5, 2026', rescheduledTime: '3:00 PM', rescheduledReason: 'Doctor unavailable Oct 2 — rescheduled to Oct 5.', createdAt: 'Sep 22, 2026' },
+  { id: 'ap1', patientId: 'p1', doctorId: 'd1', title: 'Cardiology Consultation', reason: 'Follow up on elevated blood pressure readings', preferredDate: 'Oct 4, 2026', preferredTime: '9:00 AM', location: 'Kenyatta National Hospital', status: 'approved', createdBy: 'p1', createdAt: 'Sep 20, 2026' },
+  { id: 'ap2', patientId: 'p3', doctorId: 'd1', title: 'Diabetic Review', reason: 'Monthly glucose and weight check', preferredDate: 'Oct 10, 2026', preferredTime: '11:00 AM', status: 'requested', createdBy: 'p3', createdAt: 'Sep 25, 2026' },
+  { id: 'ap3', patientId: 'p1', doctorId: 'd1', title: 'General Check-up', reason: 'Routine monitoring and medication review', preferredDate: 'Oct 28, 2026', preferredTime: '10:00 AM', status: 'requested', createdBy: 'p1', createdAt: 'Sep 27, 2026' },
+  { id: 'ap4', patientId: 'p3', doctorId: 'd1', title: 'SpO₂ Follow-up', reason: 'SpO₂ has been consistently low, need evaluation', preferredDate: 'Oct 2, 2026', preferredTime: '2:00 PM', status: 'rescheduled', rescheduledTo: 'Oct 5, 2026', rescheduledTime: '3:00 PM', rescheduledReason: 'Doctor unavailable Oct 2 — rescheduled to Oct 5.', createdBy: 'p3', createdAt: 'Sep 22, 2026' },
 ]
 
 const INITIAL_MESSAGES: PatientMessage[] = [
@@ -204,8 +204,8 @@ const INITIAL_MESSAGES: PatientMessage[] = [
 ]
 
 const INITIAL_NOTES: ClinicalNote[] = [
-  { id: 'cn1', patientId: 'p1', authorId: 'd1', content: p1.doctorNote!, createdAt: stamp(new Date(NOW - 1 * DAY)), at: NOW - DAY },
-  { id: 'cn2', patientId: 'p3', authorId: 'd1', content: p3.doctorNote!, createdAt: stamp(new Date(NOW - 20 * MIN)), at: NOW - 20 * MIN },
+  { id: 'cn1', patientId: 'p1', authorId: 'd1', content: p1.doctorNote!, createdAt: stamp(new Date(NOW - 1 * DAY)), at: NOW - DAY, visibility: 'shared', noteType: 'instruction' },
+  { id: 'cn2', patientId: 'p3', authorId: 'd1', content: p3.doctorNote!, createdAt: stamp(new Date(NOW - 20 * MIN)), at: NOW - 20 * MIN, visibility: 'shared', noteType: 'instruction' },
 ]
 
 const notifSeed = (id: string, userId: string, kind: NotifKind, title: string, body: string, msAgo: number, link?: string, read = false): AppNotification =>

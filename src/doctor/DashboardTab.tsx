@@ -1,24 +1,38 @@
 import { useState } from 'react'
-import { useApp, isActiveAlert } from '@/shared/state/AppContext'
-import { Avatar, Pill, ResolveAlertSheet, PortalHeader, HeroCard, QuickGrid, NoticeCard, NoticeRow, SectionHead } from '@/shared'
-import type { DoctorUser, AppAlert } from '@/shared/lib/types'
-import { ago } from '@/shared/lib/vitals'
+import { useApp } from '@/shared/state/AppContext'
+import { Avatar, Pill, ResolveAlertSheet, PortalHeader, HeroCard, QuickGrid, NoticeCard, NoticeRow, SectionHead, EmptyState } from '@/shared'
+import type { AppAlert, AppNotification } from '@/shared/lib/types'
+import { ago, dateLabel } from '@/shared/lib/vitals'
+import { apptWhen } from '@/shared/lib/schedule'
 import { isOfficial } from '@/shared/documents/documents'
 import { AlertCard } from './AlertCard'
 import { PatientChips } from './PatientChips'
 import { useBoard } from './useBoard'
+import { useDoctor } from './useDoctor'
 
-const BAND_EDGE: Record<string, string> = { red: '#ef4444', amber: '#f59e0b' }
+const BAND_EDGE: Record<string, string> = { red: 'border-red-500', amber: 'border-amber-500' }
 
-/* ─── Dashboard ─────────────────────────────────────────────────────── */
-export function DashboardTab({ doctor, goTo, openPatient }: { doctor: DoctorUser; goTo: (t: string) => void; openPatient: (id: string, section?: 'docs') => void }) {
-  const { appointments, users, alerts, now, documentsFor } = useApp()
+/* ─── Dashboard ───────────────────────────────────────────────────────
+   Every figure here is counted from the doctor's own records: nothing is
+   a fixed number. */
+export function DashboardTab({ goTo, openPatient, openAppt }: {
+  goTo: (t: string, about?: AppNotification['resource']) => void
+  openPatient: (id: string, section?: 'docs') => void
+  openAppt: (id: string) => void
+}) {
+  const { documentsFor } = useApp()
+  const { doctor, appointments, activeAlerts, nameOf, now } = useDoctor()
   const unsigned = documentsFor().filter(e => isOfficial(e.doc) && e.doc.status !== 'released' && (!e.doc.upload || e.doc.upload.state === 'ready'))
-  const board = useBoard(doctor)
-  const myIds = new Set(doctor.assignedPatientIds)
-  const activeAlerts = alerts.filter(a => isActiveAlert(a) && myIds.has(a.patientId)).sort((a, b) => (a.severity === 'danger' ? 0 : 1) - (b.severity === 'danger' ? 0 : 1))
-  const confirmed = appointments.filter(a => a.doctorId === doctor.id && a.status === 'approved').length
-  const pendingAppts = appointments.filter(a => a.doctorId === doctor.id && a.status === 'requested')
+  const board = useBoard()
+  const confirmed = appointments.filter(a => a.status === 'approved').length
+  const pendingAppts = appointments.filter(a => a.status === 'requested')
+  // Confirmed visits still ahead, soonest first.
+  const today = dateLabel()
+  const nextVisits = appointments.filter(a => a.status === 'approved')
+    .map(a => ({ a, w: apptWhen(a) }))
+    .filter(x => x.w.date === today || (x.w.at ?? 0) >= now)
+    .sort((x, y) => (x.w.at ?? 0) - (y.w.at ?? 0))
+  const visitsToday = nextVisits.filter(x => x.w.date === today).length
   const unreadMsgs = board.reduce((n, b) => n + b.unread, 0)
   const atRisk = board.filter(b => b.band.color === 'red').length
   const stable = board.filter(b => b.band.color === 'green').length
@@ -40,17 +54,17 @@ export function DashboardTab({ doctor, goTo, openPatient }: { doctor: DoctorUser
       />
 
       <QuickGrid items={[
-        { icon: '👥', label: 'Patients', onClick: () => goTo('patients'), badge: unreadMsgs },
+        { icon: '👥', label: 'Patients', onClick: () => goTo('patients') },
+        { icon: '💬', label: 'Messages', onClick: () => goTo('messages'), badge: unreadMsgs },
         { icon: '🔔', label: 'Alerts', onClick: () => goTo('alerts'), badge: activeAlerts.length },
         { icon: '📅', label: 'Appts', onClick: () => goTo('appts'), badge: pendingAppts.length },
-        { icon: '👤', label: 'Profile', onClick: () => goTo('profile') },
       ]} />
 
       {activeAlerts.length > 0 && (
         <div className="flex flex-col gap-2">
           <NoticeCard tone="red" title={`${activeAlerts.length} Active Alert${activeAlerts.length > 1 ? 's' : ''}`} action="View all →" onAction={() => goTo('alerts')} />
           {activeAlerts.slice(0, 2).map(a => (
-            <AlertCard key={a.id} a={a} patientName={users.find(u => u.id === a.patientId)?.name} onResolve={setResolve} compact />
+            <AlertCard key={a.id} a={a} patientName={nameOf(a.patientId)} onResolve={setResolve} compact />
           ))}
         </div>
       )}
@@ -60,7 +74,7 @@ export function DashboardTab({ doctor, goTo, openPatient }: { doctor: DoctorUser
           {unsigned.slice(0, 3).map(({ doc }) => (
             <NoticeRow key={doc.id} onClick={() => openPatient(doc.patientId, 'docs')}
               title={`${doc.title}${doc.version > 1 ? ` · v${doc.version}` : ''}`}
-              sub={`${users.find(u => u.id === doc.patientId)?.name} · ${doc.status === 'signed' ? 'signed, not released' : 'draft'} · ${ago(doc.at, now)}`}
+              sub={`${nameOf(doc.patientId)} · ${doc.status === 'signed' ? 'signed, not released' : 'draft'} · ${ago(doc.at, now)}`}
               right={<span className="text-[10px] font-bold text-amber-700">Review →</span>} />
           ))}
         </NoticeCard>
@@ -68,18 +82,34 @@ export function DashboardTab({ doctor, goTo, openPatient }: { doctor: DoctorUser
 
       {pendingAppts.length > 0 && (
         <NoticeCard tone="amber" pulse={false} title={`📅 ${pendingAppts.length} appointment request${pendingAppts.length > 1 ? 's' : ''} to review`}
-          action="Review →" onAction={() => goTo('appts')} />
+          action="Review all →" onAction={() => goTo('appts')}>
+          {pendingAppts.slice(0, 3).map(a => (
+            <NoticeRow key={a.id} onClick={() => openAppt(a.id)} title={a.title}
+              sub={`${nameOf(a.patientId)} · asks for ${a.preferredDate} · ${a.preferredTime}`}
+              right={<span className="text-[10px] font-bold text-amber-700">Answer →</span>} />
+          ))}
+        </NoticeCard>
       )}
 
-      {/* Live patient board — sorted by risk */}
+      {nextVisits.length > 0 && (
+        <NoticeCard tone="teal" pulse={false} title={visitsToday ? `📅 ${visitsToday} visit${visitsToday > 1 ? 's' : ''} today` : '📅 Next visits'}
+          action="All visits →" onAction={() => goTo('appts')}>
+          {nextVisits.slice(0, 3).map(({ a, w }) => (
+            <NoticeRow key={a.id} onClick={() => openAppt(a.id)} title={`${nameOf(a.patientId)} · ${a.title}`}
+              sub={`${w.date === today ? 'Today' : w.date} · ${w.time}${a.location ? ` · ${a.location}` : ''}`}
+              right={<span className="text-[10px] font-bold text-teal-700">Open →</span>} />
+          ))}
+        </NoticeCard>
+      )}
+
+      {/* Patient board, sorted by risk */}
       <div>
-        <SectionHead title="Live Patient Board" />
-        <p className="text-[10px] text-gray-400 mb-2">Sorted by risk · updates live</p>
-        {board.length === 0 && <p className="text-sm text-gray-400 text-center py-6">No patients assigned yet.</p>}
+        <SectionHead title="Patient Board" />
+        <p className="text-[10px] text-gray-400 mb-2">Most urgent first</p>
+        {board.length === 0 && <EmptyState icon="👥" title="No patients assigned yet" text="A patient appears here once the care coordination team assigns them to you." />}
         {board.map(({ p, band, open, lastAt, unread, score }) => (
           <button key={p.id} onClick={() => openPatient(p.id)}
-            className="w-full bg-white rounded-2xl px-4 py-3 shadow-sm mb-2 text-left active:bg-gray-50"
-            style={{ borderLeft: `4px solid ${BAND_EDGE[band.color] ?? '#10b981'}` }}>
+            className={`w-full bg-white rounded-2xl px-4 py-3 shadow-sm mb-2 text-left active:bg-gray-50 border-l-4 ${BAND_EDGE[band.color] ?? 'border-emerald-500'}`}>
             <div className="flex items-center gap-3">
               <Avatar name={p.name} avatar={p.avatar} size="sm" />
               <div className="flex-1 min-w-0">
@@ -96,7 +126,7 @@ export function DashboardTab({ doctor, goTo, openPatient }: { doctor: DoctorUser
         ))}
       </div>
 
-      <ResolveAlertSheet alert={resolve} patientName={users.find(u => u.id === resolve?.patientId)?.name} onClose={() => setResolve(null)} />
+      <ResolveAlertSheet alert={resolve} patientName={nameOf(resolve?.patientId)} onClose={() => setResolve(null)} />
     </div>
   )
 }

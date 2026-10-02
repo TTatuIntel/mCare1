@@ -463,13 +463,13 @@ export function DeactivateAccountSheet({ open, onClose }: { open: boolean; onClo
   if (!currentUser) return null
 
   const confirmDeactivate = async () => {
-    if (!(await saving.run(() => setUserStatus(currentUser.id, 'suspended'))).ok) return
+    if (!(await saving.run(() => setUserStatus(currentUser.id, 'deactivated'))).ok) return
     setCurrentUser(null)
   }
 
   return (
     <BottomSheet open={open} onClose={onClose} title="Deactivate Account"
-      subtitle="This will sign you out and suspend your account until an administrator reactivates it."
+      subtitle="This signs you out and closes your account. Your record is kept, and an administrator can make the account active again."
       footer={
         <>
           <SheetButton tone="ghost" onClick={onClose}>Cancel</SheetButton>

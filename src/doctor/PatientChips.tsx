@@ -1,9 +1,9 @@
-import { useApp } from '@/shared/state/AppContext'
+import { useDoctor } from './useDoctor'
 import type { PatientUser } from '@/shared/lib/types'
 import { evaluate, latestValid } from '@/shared/lib/vitals'
 
 export function PatientChips({ p }: { p: PatientUser }) {
-  const { vitalDefs } = useApp()
+  const { vitalDefs } = useDoctor()
   return (
     <div className="flex gap-1.5 mt-2 flex-wrap">
       {p.trackedVitalIds.slice(0, 4).map(id => {

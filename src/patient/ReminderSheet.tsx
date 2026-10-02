@@ -11,7 +11,7 @@ import { LogAllSheet } from './VitalLogSheets'
    Opened from a Home reminder. Shows the real record behind it (the
    prescription, meal plan, vitals or appointment) with the form to act
    on it in place: mark a dose taken, log a meal, record vitals, answer
-   an appointment. */type Props = { item: ScheduleItem | null; onClose: () => void; go: (t: string) => void; onDone: (msg: string) => void }
+   an appointment. */type Props = { item: ScheduleItem | null; onClose: () => void; go: (t: string, target?: string) => void; onDone: (msg: string) => void }
 
 export function ReminderSheet({ item, onClose, go, onDone }: Props) {
   const day = useDaySchedule()
@@ -28,7 +28,7 @@ export function ReminderSheet({ item, onClose, go, onDone }: Props) {
     : <ApptSheet key={live.key} {...props} />
 }
 
-type SheetProps = { item: ScheduleItem; onClose: () => void; go: (t: string) => void; onDone: (msg: string) => void }
+type SheetProps = { item: ScheduleItem; onClose: () => void; go: (t: string, target?: string) => void; onDone: (msg: string) => void }
 
 /* ─── Small building blocks ─── */
 function StatusBanner({ item }: { item: ScheduleItem }) {
@@ -190,7 +190,7 @@ function ApptSheet({ item, onClose, go, onDone }: SheetProps) {
     ? <div className="flex gap-2"><SheetButton tone="ghost" onClick={() => setConfirmCancel(false)}>Keep it</SheetButton><SheetButton tone="danger" disabled={save.busy} onClick={cancel}>{save.busy ? 'Cancelling…' : 'Yes, cancel'}</SheetButton></div>
     : proposed
       ? <div className="flex gap-2"><SheetButton tone="ghost" onClick={() => setConfirmCancel(true)}>Decline</SheetButton><SheetButton tone="success" disabled={save.busy} onClick={accept}>{save.busy ? 'Saving…' : 'Accept new time'}</SheetButton></div>
-      : <div className="flex gap-2"><SheetButton tone="ghost" onClick={() => { onClose(); go('appts') }}>All visits</SheetButton><SheetButton disabled={!note.trim() || save.busy} onClick={send}>{save.busy ? 'Sending…' : 'Send note'}</SheetButton></div>
+      : <div className="flex gap-2"><SheetButton tone="ghost" onClick={() => { onClose(); go('appts', a.id) }}>All visits</SheetButton><SheetButton disabled={!note.trim() || save.busy} onClick={send}>{save.busy ? 'Sending…' : 'Send note'}</SheetButton></div>
 
   return (
     <BottomSheet open onClose={onClose} title={`📅 ${a.title}`} subtitle={`${w.date} · ${w.time} · ${countdown(item.inMin)}`} footer={footer}>

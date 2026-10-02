@@ -17,7 +17,7 @@
  *   const { patient, doctor, status, error, reload, setTrackedVitals } = usePatient()
  */
 import { useApp } from '@/shared/state/AppContext'
-import type { LoadStatus } from '@/shared'
+import { useLoadStatus } from '@/shared/state/useLoadStatus'
 import type {
   AppUser, Appointment, DoctorUser, EmergencyContact, HealthProfile, MealPlan, Outcome, PatientUser, AvatarSpec, PlannedMeal,
 } from '@/shared/lib/types'
@@ -71,9 +71,7 @@ export function usePatient() {
 
   // The record is loaded before the portal opens (the sign-in screen waits for it), so a screen always has data.
   // If the backend then becomes unreachable, the banner at the top of the portal says so; screens keep the last load.
-  const status: LoadStatus = 'ready'
-  const error: string | undefined = undefined
-  const reload = () => { void app.refresh() }
+  const { status, error, reload } = useLoadStatus()
 
   /** Demo mode: PATCH /me — whitelisted fields only. */
   const patchSelf = (patch: SelfPatch) => app.updateUser(patient.id, patch as Partial<AppUser>)
@@ -104,6 +102,10 @@ export function usePatient() {
     doctorById,
     /** GET doctors — approved, active clinicians a patient can ask for. */
     doctors: app.getDoctors().filter(d => d.status === 'active' && d.approvalStatus === 'approved').map(toPublicDoctor),
+    /** GET care_plans: the plans the doctor has started for this patient (never a draft), newest first. */
+    carePlans: app.carePlans.filter(p => p.patientId === patient.id && p.status !== 'draft'),
+    /** RPC doctor_availability: the open times of a doctor on a day (YYYY-MM-DD). */
+    availabilityFor: app.availabilityFor,
     /** Display name for anyone the patient's record mentions (prescriber, who resolved an alert…). */
     nameOf: (id: string | undefined, fallback = 'Your care team') => app.users.find(u => u.id === id)?.name ?? fallback,
 

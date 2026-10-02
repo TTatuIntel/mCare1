@@ -1,55 +1,70 @@
 import { useState } from 'react'
-import { useApp, isActiveAlert } from '@/shared/state/AppContext'
-import { PageTitle, AlertStatusPill, ResolveAlertSheet } from '@/shared'
-import type { DoctorUser, AppAlert } from '@/shared/lib/types'
+import { Page, EmptyState, AlertStatusPill, ResolveAlertSheet, ChipFilter, inputCls } from '@/shared'
+import type { AppAlert } from '@/shared/lib/types'
+import { apptWhen } from '@/shared/lib/schedule'
 import { AlertCard } from './AlertCard'
+import { useDoctor } from './useDoctor'
 
-/* ─── Alerts ────────────────────────────────────────────────────────── */
-export function AlertsTab({ doctor, openPatient }: { doctor: DoctorUser; openPatient: (id: string) => void }) {
-  const { alerts, users } = useApp()
-  const mine = alerts.filter(a => doctor.assignedPatientIds.includes(a.patientId))
-  const active = mine.filter(isActiveAlert).sort((a, b) => (a.severity === 'danger' ? 0 : 1) - (b.severity === 'danger' ? 0 : 1) || b.at - a.at)
-  const resolved = mine.filter(a => a.status === 'resolved')
+type View = 'active' | 'resolved'
+
+/* ─── Alerts ──────────────────────────────────────────────────────────
+   What needs the doctor now, then everything already closed: an alert is
+   never removed, so the history shows who acknowledged and resolved it,
+   why, and the visit that was booked from it. */
+export function AlertsTab({ openPatient, openAppt }: { openPatient: (id: string) => void; openAppt: (id: string) => void }) {
+  const { alerts, activeAlerts, appointments, nameOf, status, error, reload } = useDoctor()
+  const resolved = alerts.filter(a => a.status === 'resolved')
+  const [view, setView] = useState<View>('active')
+  const [q, setQ] = useState('')
   const [resolve, setResolve] = useState<AppAlert | null>(null)
-  const [showResolved, setShowResolved] = useState(false)
+  const needle = q.trim().toLowerCase()
+  const history = resolved.filter(a => !needle
+    || `${nameOf(a.patientId)} ${a.vitalName} ${a.resolutionReason ?? ''} ${a.resolutionNote ?? ''}`.toLowerCase().includes(needle))
 
   return (
-    <div className="flex flex-col gap-3 card-flow">
-      <PageTitle title="Alerts" />
-      {active.length === 0 && (
-        <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-5 text-center">
-          <p className="text-2xl mb-2">✅</p>
-          <p className="text-sm font-bold text-emerald-700">All clear!</p>
-          <p className="text-xs text-emerald-600 mt-1">No active alerts for your patients.</p>
-        </div>
+    <Page title="Alerts" status={status} error={error} onRetry={reload}>
+      <ChipFilter label="Which alerts" value={view} onChange={setView}
+        options={[{ id: 'active', label: `Active (${activeAlerts.length})` }, { id: 'resolved', label: `Resolved (${resolved.length})` }]} />
+
+      {view === 'active' && activeAlerts.length === 0 && (
+        <div className="span-all"><EmptyState icon="✅" title="All clear" text="No active alerts for your patients." /></div>
       )}
-      {active.map(a => (
+      {view === 'active' && activeAlerts.map(a => (
         <div key={a.id}>
-          <AlertCard a={a} patientName={users.find(u => u.id === a.patientId)?.name} onResolve={setResolve} />
+          <AlertCard a={a} patientName={nameOf(a.patientId)} onResolve={setResolve} />
           <button onClick={() => openPatient(a.patientId)} className="text-[11px] text-teal-700 font-semibold mt-1 ml-1">Open patient →</button>
         </div>
       ))}
 
-      {resolved.length > 0 && (
-        <div>
-          <button onClick={() => setShowResolved(v => !v)} className="text-xs text-gray-500 font-semibold mb-2">
-            {showResolved ? '▾' : '▸'} Resolved history ({resolved.length})
-          </button>
-          {showResolved && resolved.map(a => (
-            <div key={a.id} className="bg-gray-50 rounded-2xl p-3.5 mb-2 border border-gray-100">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="text-xs font-semibold text-gray-700">{users.find(u => u.id === a.patientId)?.name} · {a.type === 'sos' ? 'SOS' : `${a.vitalName}: ${a.value} ${a.unit}`}</p>
-                  <p className="text-[10px] text-gray-400">{a.loggedAt} · resolved {a.resolvedAt}</p>
-                  <p className="text-[11px] text-emerald-700 mt-1">✓ {a.resolutionReason}{a.resolutionNote ? ` — ${a.resolutionNote}` : ''}</p>
-                </div>
-                <AlertStatusPill alert={a} />
-              </div>
-            </div>
-          ))}
-        </div>
+      {view === 'resolved' && resolved.length > 0 && (
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by patient, vital or reason…" aria-label="Search resolved alerts" className={`${inputCls} span-all`} />
       )}
-      <ResolveAlertSheet alert={resolve} patientName={users.find(u => u.id === resolve?.patientId)?.name} onClose={() => setResolve(null)} />
-    </div>
+      {view === 'resolved' && history.length === 0 && (
+        <div className="span-all"><EmptyState icon="🗂️" title={resolved.length ? 'No match' : 'No resolved alerts yet'} text={resolved.length ? 'Try another search.' : 'Alerts you resolve stay here as history.'} /></div>
+      )}
+      {view === 'resolved' && history.map(a => {
+        // The visit booked when this alert was resolved.
+        const visit = appointments.find(x => x.alertId === a.id)
+        const w = visit && apptWhen(visit)
+        return (
+          <div key={a.id} className="bg-white rounded-2xl p-3.5 shadow-sm">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <button onClick={() => openPatient(a.patientId)} className="text-xs font-bold text-gray-900 text-left">{nameOf(a.patientId)}</button>
+                <p className="text-xs text-gray-700 font-mono">{a.type === 'sos' ? `SOS · ${a.value}` : `${a.vitalName}: ${a.value} ${a.unit}`}</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">Raised {a.loggedAt}</p>
+                {a.acknowledgedAt && <p className="text-[10px] text-gray-400">Acknowledged {a.acknowledgedAt} · {nameOf(a.acknowledgedBy, 'care team')}</p>}
+                {a.escalatedAt && <p className="text-[10px] text-purple-700">Escalated {a.escalatedAt}</p>}
+                <p className="text-[10px] text-gray-400">Resolved {a.resolvedAt} · {nameOf(a.resolvedBy, 'care team')}</p>
+                <p className="text-[11px] text-emerald-700 mt-1">✓ {a.resolutionReason}{a.resolutionNote ? ` · ${a.resolutionNote}` : ''}</p>
+                {visit && w && <button onClick={() => openAppt(visit.id)} className="mt-1 text-[11px] font-bold text-teal-700">📅 Follow-up visit · {w.date} · {w.time} →</button>}
+              </div>
+              <AlertStatusPill alert={a} />
+            </div>
+          </div>
+        )
+      })}
+      <ResolveAlertSheet alert={resolve} patientName={nameOf(resolve?.patientId)} onClose={() => setResolve(null)} />
+    </Page>
   )
 }

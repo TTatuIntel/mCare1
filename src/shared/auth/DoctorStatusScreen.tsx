@@ -1,12 +1,24 @@
 import { useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import type { DoctorUser } from '@/shared/lib/types'
+import { SaveError, useSave } from '@/shared/ui/BottomSheet'
 
 export function DoctorStatusScreen() {
   const { currentUser, setCurrentUser, updateUser, getAdmins, notify } = useApp()
   const doctor = currentUser as DoctorUser
   const [editing, setEditing] = useState(false)
-  const [form, setForm] = useState({ specialty: doctor.specialty, licenseNo: doctor.licenseNo, hospital: doctor.hospital, licenseFile: '' })
+  const [form, setForm] = useState({ specialty: doctor.specialty, licenseNo: doctor.licenseNo, hospital: doctor.hospital })
+  const save = useSave()
+  // The application goes back into the queue only once it is saved; the approvers are told by the database (in demo mode, here).
+  const resubmit = async () => {
+    const saved = await save.run(() => updateUser(doctor.id, {
+      specialty: form.specialty.trim(), licenseNo: form.licenseNo.trim(), hospital: form.hospital.trim(),
+      approvalStatus: 'pending', approvalNote: undefined, status: 'pending_approval',
+    } as Partial<DoctorUser>))
+    if (!saved.ok) return
+    getAdmins().forEach(a => notify(a.id, 'account', 'Doctor application resubmitted', `${doctor.name} updated their details`, 'approvals'))
+    setEditing(false)
+  }
 
   if (editing) {
     const ok = form.specialty.trim() && form.licenseNo.trim() && form.hospital.trim()
@@ -26,21 +38,10 @@ export function DoctorStatusScreen() {
               className="w-full bg-gray-50 border-2 border-gray-200 rounded-2xl px-4 py-3 text-sm outline-none focus:border-teal-400" />
           </div>
         ))}
-        <div>
-          <p className="text-[10px] text-gray-400 mb-1.5 uppercase tracking-wide font-semibold">Licence Certificate</p>
-          <label className="block border-2 border-dashed border-gray-200 rounded-2xl p-4 text-center cursor-pointer">
-            <input type="file" accept=".pdf,image/*" className="hidden" onChange={e => setForm(f => ({ ...f, licenseFile: e.target.files?.[0]?.name ?? '' }))} />
-            <p className="text-xs text-gray-500">{form.licenseFile || 'Tap to attach an updated licence (PDF or image)'}</p>
-          </label>
-        </div>
-        <button disabled={!ok}
-          onClick={() => {
-            updateUser(doctor.id, { specialty: form.specialty.trim(), licenseNo: form.licenseNo.trim(), hospital: form.hospital.trim(), approvalStatus: 'pending', approvalNote: undefined, status: 'pending_approval' } as Partial<DoctorUser>)
-            getAdmins().forEach(a => notify(a.id, 'account', 'Doctor application resubmitted', `${doctor.name} updated their details`, 'approvals'))
-            setEditing(false)
-          }}
-          className={`w-full py-3.5 rounded-2xl text-sm font-bold shadow ${ok ? 'bg-teal-700 text-white' : 'bg-gray-200 text-gray-400'}`}>
-          Resubmit for Review
+        <SaveError message={save.error} />
+        <button disabled={!ok || save.busy} onClick={resubmit}
+          className={`w-full py-3.5 rounded-2xl text-sm font-bold shadow ${ok && !save.busy ? 'bg-teal-700 text-white' : 'bg-gray-200 text-gray-400'}`}>
+          {save.busy ? 'Sending…' : 'Resubmit for Review'}
         </button>
         <button onClick={() => setEditing(false)} className="text-xs text-gray-400 text-center">Cancel</button>
       </div>

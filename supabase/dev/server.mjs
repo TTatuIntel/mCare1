@@ -211,25 +211,44 @@ export async function startBackend(options = {}) {
 
   /* database */
   const db = memory ? new PGlite() : new PGlite(join(dataDir, 'pg'))
+  // The engine aborts if the folder was left half-written (the backend was killed, not stopped with Ctrl+C).
+  try { await db.waitReady } catch {
+    throw new Error(`The local database in ${join(dataDir, 'pg')} cannot be opened: it was not shut down cleanly.\n`
+      + `  Rename or delete that folder, then run "npm run backend" and "npm run backend:seed" to start with a new one.`)
+  }
   await db.exec(`set timezone = 'UTC'`)
   const fresh = (await db.query(`select 1 from pg_namespace where nspname = 'supabase_migrations'`)).rows.length === 0
   if (fresh) await db.exec(fs.readFileSync(join(HERE, 'bootstrap.sql'), 'utf8'))
   const applied = new Set((await db.query(`select version from supabase_migrations.schema_migrations`)).rows.map(r => r.version))
-  for (const file of fs.readdirSync(MIGRATIONS).filter(f => f.endsWith('.sql')).sort()) {
-    if (applied.has(file)) continue
-    try {
-      await db.exec(`begin;\n${fs.readFileSync(join(MIGRATIONS, file), 'utf8')}\n;insert into supabase_migrations.schema_migrations (version) values ('${file}'); commit;`)
-      say(`  applied migration ${file}`)
-    } catch (e) {
-      await db.exec('rollback').catch(() => {})
-      throw new Error(`Migration ${file} failed: ${e.message}`)
+  /** Applies the migrations this database has not had yet, in order. Returns how many. */
+  async function migrate() {
+    let count = 0
+    for (const file of fs.readdirSync(MIGRATIONS).filter(f => f.endsWith('.sql')).sort()) {
+      if (applied.has(file)) continue
+      try {
+        await db.exec(`begin;\n${fs.readFileSync(join(MIGRATIONS, file), 'utf8')}\n;insert into supabase_migrations.schema_migrations (version) values ('${file}'); commit;`)
+        applied.add(file); count++
+        say(`  applied migration ${file}`)
+      } catch (e) {
+        await db.exec('rollback').catch(() => {})
+        throw new Error(`Migration ${file} failed: ${e.message}`)
+      }
     }
+    return count
   }
+  await migrate()
 
   // One query at a time: PGlite is a single connection, and a request's role must never leak into another's.
   let chain = Promise.resolve()
   const exclusive = work => { const run = chain.then(work, work); chain = run.catch(() => {}); return run }
   const q = (sql, params) => exclusive(() => db.query(sql, params))
+
+  /**
+   * A migration added while the backend is running. The app asking for a table, column or function
+   * the database does not have is the sign of one, so it is applied then, without a restart.
+   */
+  const MISSING = new Set(['42P01', '42883', '42703', 'PGRST202'])
+  const catchUp = () => exclusive(migrate).catch(e => { console.error(`  ${e.message}`); return 0 })
 
   /** Runs `work` as the caller. Their role and id are set for this transaction only, so the row rules decide what they reach. */
   const asCaller = (claims, work) => exclusive(() => db.transaction(async tx => {
@@ -646,7 +665,12 @@ export async function startBackend(options = {}) {
       let body
       try { body = raw.length ? JSON.parse(raw.toString('utf8')) : undefined } catch { throw new HttpError(400, { code: 'PGRST102', message: 'The request body is not valid JSON' }) }
       if (area === 'auth') return await auth(req, res, url, claims, body ?? {})
-      return await rest(req, res, url, claims, body)
+      try { return await rest(req, res, url, claims, body) }
+      catch (e) {
+        if (!(e instanceof HttpError) || !MISSING.has(e.body.code) || !(await catchUp())) throw e
+        primaryKeys.clear()
+        return await rest(req, res, url, claims, body)
+      }
     } catch (e) {
       if (res.headersSent) return res.end()
       if (e instanceof HttpError) return send(res, e.status, e.body)
@@ -661,6 +685,7 @@ export async function startBackend(options = {}) {
   const timers = options.jobs === false ? [] : [
     setInterval(() => { q(`select public.escalate_stale_alerts()`).catch(e => console.error('escalation job:', e.message)) }, 60_000),
     setInterval(() => { q(`select public.purge_deleted_documents()`).catch(e => console.error('purge job:', e.message)) }, 6 * 3600_000),
+    setInterval(() => { q(`select public.complete_ended_prescriptions()`).catch(e => console.error('prescription job:', e.message)) }, 3600_000),
   ]
   timers.forEach(t => t.unref())
 

@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import type { Outcome } from '@/shared/lib/types'
+import { newRef } from '@/shared/lib/ids'
 
 /* ─── BottomSheet: always pinned to the bottom of the phone screen ─── */
 export function BottomSheet({ open, onClose, title, subtitle, children, footer }: {
@@ -108,10 +109,15 @@ export const inputCls = 'w-full bg-gray-50 border border-gray-200 rounded-xl px-
  *   const submit = async () => { if ((await save.run(() => requestAppointment(form))).ok) onClose() }
  *   <SaveError message={save.error} />
  *   <SheetButton disabled={save.busy} onClick={submit}>{save.busy ? 'Saving…' : 'Save'}</SheetButton>
+ *
+ * `ref` names this attempt at the form: it stays the same until a save goes through, then changes.
+ * Pass it to an action that creates a record (`clientRef: save.ref`), and a save that is sent again
+ * after its answer was lost is recognised by the database instead of creating a second record.
  */
 export function useSave() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [ref, setRef] = useState(newRef)
   const running = useRef(false)
   const run = async <T,>(job: () => Promise<Outcome<T>>): Promise<Outcome<T>> => {
     if (running.current) return { ok: false, error: '' }
@@ -120,10 +126,11 @@ export function useSave() {
     const result = await job()
     running.current = false
     setBusy(false)
-    if (!result.ok) setError(result.error)
+    if (result.ok) setRef(newRef())
+    else setError(result.error)
     return result
   }
-  return { busy, error, run, clear: () => setError('') }
+  return { busy, error, run, ref, clear: () => setError('') }
 }
 
 /** Why a save did not go through, shown beside the form that tried it. */

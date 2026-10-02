@@ -1,73 +1,79 @@
 import { useState } from 'react'
-import { useApp, isActiveAlert } from '@/shared/state/AppContext'
-import { PageTitle, useToast, AlertStatusPill } from '@/shared'
+import { Page, EmptyState, Segmented, AlertStatusPill, ResolveAlertSheet, SaveError, useAct } from '@/shared'
 import { ago } from '@/shared/lib/vitals'
-import type { AdminUser, PatientUser } from '@/shared/lib/types'
+import type { AppAlert } from '@/shared/lib/types'
 import DoctorPicker from './DoctorPicker'
+import { useAdmin } from './useAdmin'
 
-/* ─── Alert monitor ───────────────────────────────────────────────── */
-export default function AlertsMonitorTab({ admin }: { admin: AdminUser }) {
-  const { alerts, users, now, chaseDoctor, acknowledgeAlert, resolveAlert } = useApp()
-  const [filter, setFilter] = useState<'escalated' | 'all' | 'resolved'>('escalated')
+type View = 'escalated' | 'all' | 'resolved'
+
+/* ─── Alert monitor ───────────────────────────────────────────────────
+   Staff who monitor patients make sure every alert gets a clinician: they
+   chase the treating doctor, move the patient to a doctor who can respond,
+   or close an alert once the patient is confirmed safe, giving the reason. */
+export default function AlertsMonitorTab() {
+  const { can, alerts, activeAlerts, patient, nameOf, chaseDoctor, assignDoctor, now, status, error, reload } = useAdmin()
+  const [view, setView] = useState<View>('escalated')
   const [reassign, setReassign] = useState<string | null>(null)
-  const { assignPatientToDoctor } = useApp()
-  const toast = useToast()
-  const active = alerts.filter(isActiveAlert)
-  const list = filter === 'escalated' ? active.filter(a => a.status === 'escalated' || a.type === 'sos')
-    : filter === 'all' ? active : alerts.filter(a => a.status === 'resolved')
-  const ptOf = (id: string) => users.find(u => u.id === id) as PatientUser | undefined
+  const [resolve, setResolve] = useState<AppAlert | null>(null)
+  const act = useAct()
+  const canAssign = can('assign_healthworkers')
+  const urgent = activeAlerts.filter(a => a.status === 'escalated' || a.type === 'sos')
+  const list = view === 'escalated' ? urgent : view === 'all' ? activeAlerts : alerts.filter(a => a.status === 'resolved')
+
   return (
-    <div className="flex flex-col gap-3 card-flow">
-      <PageTitle title="Alert Monitor" />
-      <p className="text-xs text-gray-500 -mt-2">Admins do not make clinical decisions. Chase the doctor, reassign, or close an SOS once the patient is safe.</p>
-      {toast.node}
-      <div className="flex bg-gray-100 rounded-xl p-[3px] gap-[2px]">
-        {([['escalated', `Needs action (${active.filter(a => a.status === 'escalated' || a.type === 'sos').length})`], ['all', `All open (${active.length})`], ['resolved', 'Resolved']] as const).map(([id, l]) => (
-          <button key={id} onClick={() => setFilter(id)}
-            className={`flex-1 text-[11px] px-2 py-1.5 rounded-lg font-semibold ${filter === id ? 'bg-white text-teal-700 shadow-sm' : 'text-gray-400'}`}>{l}</button>
-        ))}
+    <Page title="Alert Monitor" status={status} error={error} onRetry={reload}>
+      <p className="text-xs text-gray-500 -mt-2 span-all">Clinical decisions stay with the treating doctor. Chase them, reassign the patient, or close an alert once the patient is confirmed safe.</p>
+      {act.node && <div className="span-all">{act.node}</div>}
+      <div className="span-all">
+        <Segmented label="Which alerts" value={view} onChange={setView} options={[
+          { id: 'escalated', label: `Needs action (${urgent.length})` }, { id: 'all', label: `All open (${activeAlerts.length})` }, { id: 'resolved', label: 'Resolved' },
+        ]} />
       </div>
       {list.length === 0 && (
-        <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-5 text-center">
-          <p className="text-sm font-bold text-emerald-700">Nothing here</p>
-          <p className="text-xs text-emerald-600 mt-1">No alerts in this view.</p>
+        <div className="span-all">
+          <EmptyState icon="✅" title={view === 'resolved' ? 'No resolved alerts yet' : 'Nothing needs action'}
+            text={view === 'escalated' ? 'No escalated alerts and no open SOS.' : view === 'all' ? 'No alerts are open.' : 'Alerts that are closed stay here as history.'} />
         </div>
       )}
       {list.map(a => {
-        const pt = ptOf(a.patientId)
-        const doc = users.find(u => u.id === pt?.assignedDoctorId)
+        const pt = patient(a.patientId)
+        const doctorName = pt?.assignedDoctorId ? nameOf(pt.assignedDoctorId, 'Assigned doctor') : null
         return (
           <div key={a.id} className={`rounded-2xl p-4 border ${a.status === 'resolved' ? 'bg-gray-50 border-gray-100' : a.severity === 'danger' ? 'bg-red-50 border-red-100' : 'bg-amber-50 border-amber-100'}`}>
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="text-sm font-bold text-gray-900">{pt?.name}</p>
+                <p className="text-sm font-bold text-gray-900">{pt?.name ?? 'Patient'}</p>
                 <p className={`text-sm font-black ${a.severity === 'danger' ? 'text-red-600' : 'text-amber-600'} font-mono`}>
                   {a.type === 'sos' ? `🚨 ${a.value}` : `${a.vitalName}: ${a.value} ${a.unit}`}
                 </p>
-                <p className="text-[11px] text-gray-500 mt-0.5">Doctor: {doc?.name ?? <span className="text-orange-600 font-semibold">none assigned</span>} · {ago(a.at, now)}</p>
-                {a.status === 'resolved' && <p className="text-[11px] text-emerald-700 mt-1">✓ {a.resolutionReason}{a.resolutionNote ? ` — ${a.resolutionNote}` : ''} · {users.find(u => u.id === a.resolvedBy)?.name}</p>}
+                <p className="text-[11px] text-gray-500 mt-0.5">Doctor: {doctorName ?? <span className="text-orange-600 font-semibold">none assigned</span>} · {ago(a.at, now)}</p>
+                {a.acknowledgedAt && a.status !== 'resolved' && <p className="text-[11px] text-gray-500">Acknowledged by {nameOf(a.acknowledgedBy, 'the care team')}</p>}
+                {a.status === 'resolved' && <p className="text-[11px] text-emerald-700 mt-1">✓ {a.resolutionReason}{a.resolutionNote ? ` · ${a.resolutionNote}` : ''} · {nameOf(a.resolvedBy, 'care team')}</p>}
               </div>
               <AlertStatusPill alert={a} />
             </div>
             {a.status !== 'resolved' && (
               <div className="flex gap-2 mt-3 flex-wrap">
-                {doc && (
-                  <button onClick={async () => { if ((await chaseDoctor(a.id)).ok) toast.show(`${doc.name} has been chased`) }}
-                    className="flex-1 py-2 bg-white text-gray-700 text-[11px] font-bold rounded-xl border border-gray-200">📣 Chase doctor</button>
+                {doctorName && (
+                  <button disabled={act.busy} onClick={() => act.run(() => chaseDoctor(a.id), `${doctorName} has been chased`)}
+                    className="flex-1 py-2 bg-white text-gray-700 text-[11px] font-bold rounded-xl border border-gray-200 disabled:opacity-50">📣 Chase doctor</button>
                 )}
-                <button onClick={() => setReassign(a.patientId)} className="flex-1 py-2 bg-white text-blue-700 text-[11px] font-bold rounded-xl border border-blue-100">↻ Reassign</button>
+                {canAssign && (
+                  <button onClick={() => { act.clear(); setReassign(a.patientId) }} className="flex-1 py-2 bg-white text-gray-700 text-[11px] font-bold rounded-xl border border-gray-200">↻ {doctorName ? 'Reassign' : 'Assign a doctor'}</button>
+                )}
                 {a.type === 'sos' && (
-                  <button onClick={() => { acknowledgeAlert(a.id); resolveAlert(a.id, 'Contacted patient, condition stable', `Closed by admin ${admin.name}`) }}
-                    className="flex-1 py-2 bg-emerald-600 text-white text-[11px] font-bold rounded-xl">Patient safe</button>
+                  <button onClick={() => setResolve(a)} className="flex-1 py-2 bg-teal-700 text-white text-[11px] font-bold rounded-xl">Patient safe…</button>
                 )}
               </div>
             )}
           </div>
         )
       })}
-      <DoctorPicker open={!!reassign} onClose={() => setReassign(null)} title="Reassign patient"
-        currentId={reassign ? ptOf(reassign)?.assignedDoctorId : undefined}
-        onPick={async id => { const ok = !!reassign && (await assignPatientToDoctor(reassign, id)).ok; setReassign(null); if (ok) toast.show('Patient reassigned; new doctor notified') }} />
-    </div>
+      <DoctorPicker open={!!reassign} onClose={() => setReassign(null)} title={patient(reassign)?.assignedDoctorId ? 'Reassign patient' : 'Assign a doctor'}
+        currentId={patient(reassign)?.assignedDoctorId} busy={act.busy} error={<SaveError message={act.error} />}
+        onPick={async id => { if (reassign && (await act.run(() => assignDoctor(reassign, id), 'Patient assigned · the doctor has been told')).ok) setReassign(null) }} />
+      <ResolveAlertSheet alert={resolve} patientName={nameOf(resolve?.patientId, 'Patient')} onClose={() => setResolve(null)} />
+    </Page>
   )
 }

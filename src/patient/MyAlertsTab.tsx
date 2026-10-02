@@ -4,6 +4,7 @@ import { Page, AlertStatusPill, SaveError, useSave } from '@/shared'
 import { usePatient } from './usePatient'
 import type { AppAlert } from '@/shared/lib/types'
 import { ago } from '@/shared/lib/vitals'
+import { apptWhen } from '@/shared/lib/schedule'
 import { useAlertView, SELF_CLEAR_NOTE } from './alertKit'
 
 /** How many resolved alerts show before "Show all". */
@@ -126,10 +127,10 @@ export function MyAlertsTab({ openVital, onLog, go }: {
   openVital: (vitalId: string) => void
   /** Opens the log sheet for one vital. */
   onLog: (vitalId: string) => void
-  go: (tab: string) => void
+  go: (tab: string, target?: string) => void
 }) {
   const { alerts } = useApp()
-  const { patient, nameOf, status, error, reload } = usePatient()
+  const { patient, nameOf, appointments, status, error, reload } = usePatient()
   const view = useAlertView()
   const [showAll, setShowAll] = useState(false)
 
@@ -185,6 +186,17 @@ export function MyAlertsTab({ openVital, onLog, go }: {
                   </p>
                   <p className="text-[11px] text-emerald-700 leading-snug">{a.resolutionReason}{a.resolutionNote ? `: ${a.resolutionNote}` : ''}</p>
                   <p className="text-[10px] text-gray-400">{nameOf(a.resolvedBy, 'You')} · {a.resolvedAt}</p>
+                  {(() => {
+                    // The visit booked when this alert was resolved.
+                    const visit = appointments.find(x => x.alertId === a.id)
+                    if (!visit) return null
+                    const w = apptWhen(visit)
+                    return (
+                      <button onClick={() => go('appts', visit.id)} className="mt-1 text-[11px] font-bold text-teal-700">
+                        📅 Follow-up visit · {w.date} · {w.time} →
+                      </button>
+                    )
+                  })()}
                 </div>
               </div>
             )

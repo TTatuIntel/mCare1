@@ -91,11 +91,6 @@ body {
 /* Loading popup logo: settles in over the frosted page. */
 @keyframes loader-pop { from { opacity: 0; transform: scale(.94) translateY(4px); } to { opacity: 1; transform: none; } }
 .loader-pop { animation: loader-pop .24s cubic-bezier(.2,.8,.2,1); }
-/* Boot splash: the logo comes into focus, then the tagline rises in after it. */
-@keyframes splash-logo-in { from { opacity: 0; transform: scale(.92) translateY(8px); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
-@keyframes splash-tag-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-.splash-logo-in { animation: splash-logo-in .6s cubic-bezier(.2,.8,.2,1) both; }
-.splash-tag-in { animation: splash-tag-in .5s ease-out .3s both; }
 /* Welcome screen: sections rise in one after another (delay set inline). */
 @keyframes rise-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 .rise-in { animation: rise-in .55s cubic-bezier(.2,.8,.2,1) both; }
@@ -208,12 +203,17 @@ body {
   .social-btn:hover .social-mark { animation: social-mark .45s cubic-bezier(.2,.8,.2,1) forwards; }
   .social-btn:hover .social-sheen { animation: social-sheen .7s ease-out; }
 }
+/* Reduced motion (the phone's "Reduce motion" / "Remove animations" setting, often switched on by battery saver):
+   nothing slides, flies or loops, but things still arrive with a short fade, so the app never looks frozen. */
+@keyframes calm-in { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .social-btn .social-mark, .social-btn .social-sheen { animation: none; }
-  .sheet-up, .sheet-fade, .screen-in, .loader-pop, .splash-logo-in, .splash-tag-in, .rise-in,
-  .auth-float, .auth-drift, .auth-shake, .auth-pop, .auth-check,
-  .auth-item-in, .auth-ekg, .auth-shimmer,
-  .auth-tile-in, .auth-stage-open, .auth-scene-in, .auth-slide-next, .auth-slide-prev,
+  /* arrivals: a fade in place of the movement */
+  .sheet-up, .sheet-fade, .screen-in, .loader-pop, .rise-in,
+  .auth-pop, .auth-check, .auth-item-in, .auth-tile-in, .auth-stage-open, .auth-scene-in,
+  .auth-slide-next, .auth-slide-prev { animation: calm-in .25s ease-out both; }
+  /* loops and shakes: off */
+  .auth-float, .auth-drift, .auth-shake, .auth-ekg, .auth-shimmer,
   .auth-icon-vitals, .auth-icon-pill, .auth-icon-chat, .auth-icon-bell, .auth-icon-users { animation: none; }
   .auth-ekg { stroke-dashoffset: 0; }
   .auth-word-up, .auth-glow, .auth-nudge, .auth-stagger > * { animation: none; }
@@ -279,10 +279,9 @@ body {
 .fab-in { animation: fab-in .5s cubic-bezier(.2,.8,.2,1) .15s both; }
 .fab-float { animation: fab-float 3.6s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
-  .alert-pop, .fab-in, .fab-float { animation: none; }
-  .upnext-in { animation: none; }
-  /* No auto-rotation when motion is reduced; the dots still switch items. */
-  .upnext-progress { animation: none; width: 100%; }
+  .fab-float { animation: none; }
+  .alert-pop, .fab-in, .upnext-in { animation: calm-in .25s ease-out both; }
+  /* The ticker keeps rotating: its progress bar is what advances it, and a bar filling is not movement across the screen. */
 }
 
 /* ─── mCare logo: hospital-monitor EKG trace ─────────────────────────
@@ -355,15 +354,10 @@ body {
   animation-delay: var(--mcare-beat-delay, 0s);
 }
 
+/* The heartbeat is the brand and stays on under reduced motion: the trace still draws and the colour still changes.
+   Only the "m" stops pulsing in size. */
 @media (prefers-reduced-motion: reduce) {
-  .mcare-heartbeat,
-  .mcare-trace-path,
-  .mcare-sweep-dot { animation: none; }
-  .mcare-trace-path { stroke-dashoffset: 0; opacity: 1; }
-  .mcare-sweep-dot { opacity: 0; }
-  /* No beat means no color changes either — pin the resting hue. */
-  .mcare-pulse-text,
-  .mcare-trace { color: #047857; }
+  .mcare-heartbeat { animation: none; }
 }
 
 /* ─── Theme: dark mode via filter flip ───────────────────────────────

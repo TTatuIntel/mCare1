@@ -2,18 +2,22 @@
 import { useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import type { DoctorUser } from '@/shared/lib/types'
-import { BottomSheet, SheetButton } from '@/shared/ui/BottomSheet'
+import { BottomSheet, SheetButton, SaveError, useSave } from '@/shared/ui/BottomSheet'
 import { SignaturePad } from '@/shared/ui/SignaturePad'
 
 export function SignatureSheet({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved?: () => void }) {
   const { setMySignature } = useApp()
   const [drawn, setDrawn] = useState<string | null>(null)
+  const save = useSave()
+  // The sheet closes once the signature is saved; until then it stays, with the reason if it could not be.
+  const submit = async () => { if (drawn && (await save.run(() => setMySignature(drawn))).ok) { onClose(); onSaved?.() } }
   return (
     <BottomSheet open={open} onClose={onClose} title="Your signature"
       subtitle="Placed on every report you sign, with your name, licence number and a verification code. Reports already signed keep the signature they were signed with."
       footer={<><SheetButton tone="ghost" onClick={onClose}>Cancel</SheetButton>
-        <SheetButton disabled={!drawn} onClick={() => { setMySignature(drawn!); onClose(); onSaved?.() }}>Save signature</SheetButton></>}>
+        <SheetButton disabled={!drawn || save.busy} onClick={submit}>{save.busy ? 'Saving…' : 'Save signature'}</SheetButton></>}>
       {open && <SignaturePad key={String(open)} onChange={setDrawn} />}
+      <SaveError message={save.error} className="mt-3" />
     </BottomSheet>
   )
 }
@@ -22,14 +26,16 @@ export function SignatureSheet({ open, onClose, onSaved }: { open: boolean; onCl
 export function SignatureCard() {
   const { currentUser, setMySignature } = useApp()
   const [open, setOpen] = useState(false)
+  const removing = useSave()
   if (currentUser?.role !== 'doctor') return null
   const sig = (currentUser as DoctorUser).signature
   return (
     <div className="bg-white rounded-2xl p-4 shadow-sm">
       <div className="flex items-center justify-between mb-2">
         <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Report signature</p>
-        {sig && <button onClick={() => setMySignature(undefined)} className="text-[10px] font-bold text-gray-400">Remove</button>}
+        {sig && <button disabled={removing.busy} onClick={() => removing.run(() => setMySignature(undefined))} className="text-[10px] font-bold text-gray-400 disabled:opacity-50">{removing.busy ? 'Removing…' : 'Remove'}</button>}
       </div>
+      <SaveError message={removing.error} className="mb-2" />
       {sig ? (
         <div className="rounded-xl bg-gray-50 border border-gray-100 px-4 py-3">
           <img src={sig} alt="Your signature" className="h-14 max-w-full object-contain" />

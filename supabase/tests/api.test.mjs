@@ -226,6 +226,177 @@ check('the patient deletes and restores their upload', !(await pat.from('documen
   && (await pat.from('documents').select('deleted_at').eq('id', row.data.id).single()).data?.deleted_at === null)
 check('the patient cannot forge an official report', !!(await pat.from('documents').insert({ patient_id: patId, title: 'Fake', category: 'vitals_report', origin: 'system_generated', status: 'released' })).error)
 
+/* ── Care integration: one record, seen from every role ── */
+console.log('\nCare integration')
+const audited = async action => (await staff.from('audit_log').select('action, detail').eq('action', action)).data ?? []
+const planMeals = [
+  { id: 'breakfast', name: 'Breakfast', at: 450, foods: 'Porridge, fruit', kcal: 350, icon: '🌅' },
+  { id: 'supper', name: 'Supper', at: 1140, foods: 'Ugali, greens, fish', kcal: 600, icon: '🌙' },
+]
+const mp = await doc.from('meal_plans').upsert({ patient_id: patId, meals: planMeals, target_kcal: 1900, water_goal: 10, dietary_note: 'Low salt' }).select().single()
+check('the doctor saves a full meal plan; it is attributed to them', mp.data?.set_by === docId && mp.data?.meals?.length === 2, mp.error?.message)
+const seen = await pat.from('meal_plans').select('meals, target_kcal, water_goal').single()
+check('the patient reads that same plan and is told it changed', seen.data?.meals?.[1]?.name === 'Supper' && seen.data?.water_goal === 10
+  && (await pat.from('notifications').select('id').eq('title', 'Your meal plan was updated')).data?.length >= 1)
+check('the change is in the audit trail the admin reads', (await audited('Set meal plan')).some(a => a.detail.startsWith('Test Patient One')))
+const badPlan = await doc.from('meal_plans').update({ meals: [{ ...planMeals[0], kcal: 9000 }] }).eq('patient_id', patId)
+check('an impossible plan is refused with a readable reason', /between 0 and 3000/.test(badPlan.error?.message ?? ''), badPlan.error?.message)
+check('the doctor sees what the patient ate and drank; another doctor does not', (await doc.from('meal_logs').select('note').eq('patient_id', patId)).data?.[0]?.note === 'Ugali and sukuma wiki'
+  && (await doc.from('hydration_logs').select('glasses').eq('patient_id', patId)).data?.[0]?.glasses === 5
+  && (await doc2.from('meal_logs').select('meal_id')).data?.length === 0 && (await doc2.from('meal_plans').select('patient_id')).data?.length === 0)
+check('another doctor cannot change the plan', (await doc2.from('meal_plans').update({ target_kcal: 900 }).eq('patient_id', patId).select()).data?.length === 0)
+
+check('a reading the doctor recorded was announced to the patient and audited', (await pat.from('notifications').select('body').eq('title', 'A reading was added to your record')).data?.[0]?.body?.includes('Dr. Test Achieng')
+  && (await audited('Recorded reading for patient')).length === 1)
+
+const c2 = await log(pat, 'spo2', '85')
+const openAlert = (await doc.from('alerts').select('id').eq('reading_id', c2.data.id).single()).data
+const countAppts = async () => (await pat.from('appointments').select('id')).data?.length
+const apptsBefore = await countAppts()
+check('only the treating doctor books a follow-up', !!(await doc2.rpc('schedule_follow_up', { patient: patId, visit_date: inDays(3) })).error
+  && !!(await pat.rpc('schedule_follow_up', { patient: patId, visit_date: inDays(3) })).error && await countAppts() === apptsBefore)
+const fu = await doc.rpc('schedule_follow_up', { patient: patId, visit_date: inDays(3), visit_time: '10:00', visit_note: 'Review oxygen', alert: openAlert.id })
+const fuAppt = (await pat.from('appointments').select('status, title, preferred_date').eq('id', fu.data).single()).data
+check('the follow-up is booked and the alert resolved in one request', fuAppt?.status === 'approved' && fuAppt?.preferred_date === inDays(3)
+  && (await pat.from('alerts').select('status, resolution_reason').eq('id', openAlert.id).single()).data?.resolution_reason === 'Appointment scheduled', fu.error?.message)
+check('the patient is told of both', (await pat.from('notifications').select('id').eq('title', 'Appointment booked')).data?.length === 1
+  && (await pat.from('notifications').select('body').eq('title', 'Alert resolved')).data?.some(n => n.body.includes('Appointment scheduled')))
+check('asked again for a resolved alert, nothing is booked', !!(await doc.rpc('schedule_follow_up', { patient: patId, visit_date: inDays(4), alert: openAlert.id })).error
+  && await countAppts() === apptsBefore + 1)
+
+// Registering people in advance.
+check('a patient or a doctor cannot register users', !!(await pat.rpc('invite_account', { invite_email: 'x@mcare.test', invite_name: 'X', invite_role: 'admin' })).error
+  && !!(await doc.rpc('invite_account', { invite_email: 'x@mcare.test', invite_name: 'X', invite_role: 'patient' })).error)
+const invStaff = await staff.rpc('invite_account', { invite_email: 'Test.Nurse@mcare.test', invite_name: 'Test Nurse', invite_role: 'assistant', invite_phone: '+254 700 000 300' })
+const invPat = await staff.rpc('invite_account', { invite_email: 'test.patient3@mcare.test', invite_name: 'Test Patient Three', invite_role: 'patient' })
+check('the admin registers an assistant and a patient in advance', typeof invStaff.data === 'string' && typeof invPat.data === 'string'
+  && (await staff.from('account_invitations').select('email').is('accepted_at', null).is('revoked_at', null)).data?.length === 2, invStaff.error?.message ?? invPat.error?.message)
+check('an address already registered or already invited is refused', /already registered/.test((await staff.rpc('invite_account', { invite_email: 'test.patient@mcare.test', invite_name: 'Dup', invite_role: 'patient' })).error?.message ?? '')
+  && /already been invited/.test((await staff.rpc('invite_account', { invite_email: 'test.nurse@mcare.test', invite_name: 'Dup', invite_role: 'patient' })).error?.message ?? ''))
+check('nobody else can read the invitations', (await pat.from('account_invitations').select('id')).data?.length === 0 && (await doc.from('account_invitations').select('id')).data?.length === 0
+  && (await client().from('account_invitations').select('id')).data?.length === 0)
+const nurse = client()
+const nurseUp = await nurse.auth.signUp({ email: 'test.nurse@mcare.test', password: PW, options: { data: {} } })
+const nurseProfile = (await nurse.from('profiles').select('role, status, full_name, phone').eq('id', nurseUp.data.user.id).single()).data
+check('the invited assistant signs up and has that role, with no permissions until granted', nurseProfile?.role === 'assistant' && nurseProfile?.full_name === 'Test Nurse'
+  && (await nurse.from('staff').select('is_assistant, permissions').eq('id', nurseUp.data.user.id).single()).data?.permissions?.length === 0
+  && (await nurse.from('patients').select('id')).data?.length === 0, nurseUp.error?.message ?? nurseProfile?.role)
+const pat3 = client()
+const pat3Up = await pat3.auth.signUp({ email: 'test.patient3@mcare.test', password: PW })
+check('the invited patient signs up as a patient, under the name they were registered with', (await pat3.from('profiles').select('role, full_name').eq('id', pat3Up.data.user.id).single()).data?.full_name === 'Test Patient Three'
+  && (await pat3.from('patients').select('id')).data?.length === 1)
+check('the admin is told, and nobody is left waiting', (await staff.from('notifications').select('id').eq('title', 'Invitation accepted')).data?.length === 2
+  && (await staff.from('account_invitations').select('id').is('accepted_at', null).is('revoked_at', null)).data?.length === 0)
+const invGone = await staff.rpc('invite_account', { invite_email: 'test.gone@mcare.test', invite_name: 'Test Gone', invite_role: 'admin' })
+check('a withdrawn registration gives nothing', !(await staff.rpc('revoke_invitation', { invitation: invGone.data })).error && await (async () => {
+  const c = client(); const r = await c.auth.signUp({ email: 'test.gone@mcare.test', password: PW })
+  return (await c.from('profiles').select('role').eq('id', r.data.user.id).single()).data?.role === 'patient'
+})())
+
+// Vital definitions and the document registry.
+const rrDef = (await staff.from('vital_defs').select('*').eq('id', 'rr').single()).data
+check('the admin switches a vital on; it is audited', !(await staff.from('vital_defs').upsert({ ...rrDef, active: true })).error
+  && (await pat.from('vital_defs').select('active').eq('id', 'rr').single()).data?.active === true && (await audited('Activated vital type')).length === 1)
+check('nobody else edits definitions, and an impossible range is refused', (await doc.from('vital_defs').update({ normal_max: 999 }).eq('id', 'rr').select()).data?.length === 0
+  && !!(await staff.from('vital_defs').update({ normal_min: 50, normal_max: 10 }).eq('id', 'rr')).error)
+const registry = await staff.rpc('document_registry')
+check('staff see that documents exist, never their titles or content', registry.data?.length >= 2 && registry.data.every(r => !('title' in r) && !('body' in r) && !('file_name' in r)), registry.error?.message)
+check('the registry is refused to everyone else', !!(await pat.rpc('document_registry')).error && !!(await doc.rpc('document_registry')).error && !!(await nurse.rpc('document_registry')).error)
+await pat.from('documents').update({ deleted_at: new Date().toISOString() }).eq('id', row.data.id)
+check('only document support restores for a patient', !!(await doc.rpc('staff_restore_document', { doc: row.data.id })).error && !!(await nurse.rpc('staff_restore_document', { doc: row.data.id })).error)
+check('support restores a deleted upload; the patient is told', !(await staff.rpc('staff_restore_document', { doc: row.data.id })).error
+  && (await pat.from('documents').select('deleted_at').eq('id', row.data.id).single()).data?.deleted_at === null
+  && (await pat.from('notifications').select('id').eq('title', 'A document was restored')).data?.length === 1)
+check('purging is for a full admin', (await staff.rpc('purge_expired_documents')).data === 0 && !!(await nurse.rpc('purge_expired_documents')).error && !!(await pat.rpc('purge_expired_documents')).error)
+
+/* ── Doctor and admin modules: the same records, through the API each portal uses ── */
+console.log('\nDoctor and admin modules')
+const ref = '7f3c2a10-5b1e-4c7a-9d21-0a1b2c3d4e5f'
+const firstSend = await pat.from('readings').insert({ patient_id: patId, vital_id: 'wt', value: '80', client_ref: ref }).select('id').single()
+const secondSend = await pat.from('readings').insert({ patient_id: patId, vital_id: 'wt', value: '80', client_ref: ref }).select('id').single()
+check('a form sent twice saves once, and the second answer says which rule refused it', !!firstSend.data?.id && secondSend.error?.code === '23505' && /client_ref/.test(secondSend.error.message)
+  && (await pat.from('readings').select('id').eq('client_ref', ref)).data?.length === 1, secondSend.error?.message)
+check('the audit trail cannot be written through the API', !!(await pat.from('audit_log').insert({ actor_id: patId, action: 'Forged', detail: 'x' })).error
+  && !!(await staff.from('audit_log').insert({ actor_id: staffId, action: 'Forged', detail: 'x' })).error
+  && (await audited('Forged')).length === 0)
+
+const rxFull = await doc.from('prescriptions').insert({ patient_id: patId, doctor_id: docId, medication: 'TEST Enalapril', dosage: '5mg', frequency: 'Once daily', route: 'oral', instructions: 'With breakfast', end_date: inDays(13) }).select().single()
+check('a prescription carries route, instructions and dates; the patient reads its history', rxFull.data?.status === 'active' && rxFull.data?.start_date === today
+  && (await pat.from('prescription_events').select('action').eq('prescription_id', rxFull.data.id)).data?.[0]?.action === 'prescribed', rxFull.error?.message)
+const stop = await doc.from('prescriptions').update({ status: 'discontinued', stop_reason: 'Dry cough' }).eq('id', rxFull.data.id).select().single()
+check('stopping it with a reason reaches the patient; deleting it is not possible', stop.data?.active === false && stop.data?.stopped_by === docId
+  && (await pat.from('notifications').select('body').eq('title', 'Medication stopped')).data?.some(n => n.body.includes('Dry cough'))
+  && (await doc.from('prescriptions').delete().eq('id', rxFull.data.id).select()).data?.length === 0, stop.error?.message)
+
+const internal = await doc.from('clinical_notes').insert({ patient_id: patId, author_id: docId, content: 'TEST internal working note', visibility: 'internal', note_type: 'assessment' }).select().single()
+check('an internal note is saved for the doctor and never reaches the patient or staff', !!internal.data?.id
+  && (await pat.from('clinical_notes').select('id').eq('id', internal.data.id)).data?.length === 0
+  && (await staff.from('clinical_notes').select('id').eq('id', internal.data.id)).data?.length === 0, internal.error?.message)
+
+const draft = await doc.rpc('save_care_plan', { plan: { patient_id: patId, title: 'TEST Blood pressure control', summary: 'Three months',
+  items: [{ kind: 'goal', text: 'Morning BP under 135/85', vital_id: 'bp' }, { kind: 'intervention', text: 'Walk 30 minutes a day' }] } })
+check('the doctor drafts a care plan in one request; the patient does not see a draft', typeof draft.data === 'string'
+  && (await doc.from('care_plan_items').select('id').eq('plan_id', draft.data)).data?.length === 2
+  && (await pat.from('care_plans').select('id')).data?.length === 0, draft.error?.message)
+check('only the treating doctor writes or starts it', !!(await doc2.rpc('save_care_plan', { plan: { patient_id: patId, title: 'x', items: [] } })).error
+  && !!(await pat.rpc('set_care_plan_status', { plan: draft.data, new_status: 'active' })).error)
+const started = await doc.rpc('set_care_plan_status', { plan: draft.data, new_status: 'active' })
+check('once started, the patient reads the plan and its goals, and is told', !started.error
+  && (await pat.from('care_plans').select('status, title').single()).data?.status === 'active'
+  && (await pat.from('care_plan_items').select('id')).data?.length === 2
+  && (await pat.from('notifications').select('id').eq('kind', 'care_plan')).data?.length === 1, started.error?.message)
+
+const weekday = new Date(`${inDays(7)}T00:00:00Z`).getUTCDay()
+const setHours = await doc.rpc('set_doctor_hours', { hours: [{ weekday, start: '09:00', end: '12:00' }], visit_minutes: 30 })
+const open = await pat.rpc('doctor_availability', { doctor: docId, day: inDays(7) })
+check('the doctor sets working hours; a patient is offered that day\'s open times', !setHours.error && open.data?.managed === true
+  && open.data.slots.join() === '09:00,09:30,10:00,10:30,11:00,11:30', setHours.error?.message ?? open.error?.message)
+const outside = await pat.from('appointments').insert({ patient_id: patId, doctor_id: docId, title: 'TEST outside hours', preferred_date: inDays(7), preferred_time: '15:00' })
+const inside = await pat.from('appointments').insert({ patient_id: patId, doctor_id: docId, title: 'TEST in hours', preferred_date: inDays(7), preferred_time: '09:30' }).select().single()
+check('a request outside those hours is refused with a readable reason; inside them it is taken', /outside the hours/.test(outside.error?.message ?? '') && inside.data?.status === 'requested', outside.error?.message)
+
+check('only support staff move an appointment for someone, and with a reason', !!(await pat.rpc('admin_update_appointment', { appt: inside.data.id, action: 'move', new_date: inDays(7), new_time: '11:00', reason: 'I prefer it' })).error
+  && !!(await nurse.rpc('admin_update_appointment', { appt: inside.data.id, action: 'move', new_date: inDays(7), new_time: '11:00', reason: 'Asked by phone' })).error
+  && !!(await staff.rpc('admin_update_appointment', { appt: inside.data.id, action: 'move', new_date: inDays(7), new_time: '11:00', reason: '' })).error)
+const moved = await staff.rpc('admin_update_appointment', { appt: inside.data.id, action: 'move', new_date: inDays(7), new_time: '11:00', reason: 'Patient asked by phone' })
+check('the admin moves the same appointment; patient and doctor are told and it is in the history', !moved.error
+  && (await pat.from('appointments').select('preferred_time').eq('id', inside.data.id).single()).data?.preferred_time?.startsWith('11:00')
+  && (await pat.from('appointment_events').select('action').eq('appointment_id', inside.data.id).eq('action', 'moved')).data?.length === 1
+  && (await pat.from('notifications').select('id').eq('title', 'Appointment moved by mCare support')).data?.length === 1
+  && (await doc.from('notifications').select('id').eq('title', 'Appointment moved by mCare support')).data?.length === 1
+  && (await audited('Moved appointment')).length === 1, moved.error?.message)
+
+const assigned = await staff.rpc('assign_doctor', { patient: pat2Id, doctor: doc2Id, reason: 'Nearest clinic' })
+check('the admin assigns a doctor; the assignment is kept as history both can read', !assigned.error
+  && (await pat2.from('care_assignments').select('doctor_id, reason, ended_at')).data?.[0]?.reason === 'Nearest clinic'
+  && (await doc2.from('patients').select('id')).data?.length === 1 && (await doc.from('care_assignments').select('id').eq('patient_id', pat2Id)).data?.length === 0, assigned.error?.message)
+check('removing the doctor needs a reason', /Say why/.test((await staff.rpc('assign_doctor', { patient: pat2Id, doctor: null })).error?.message ?? '')
+  && !!(await staff.from('patients').update({ assigned_doctor_id: null }).eq('id', pat2Id)).error)
+const removed = await staff.rpc('assign_doctor', { patient: pat2Id, doctor: null, reason: 'Patient left the programme' })
+const pastList = await doc2.rpc('my_past_patients')
+check('with a reason it ends; the doctor keeps a name and dates, not the record', !removed.error && pastList.data?.length === 1 && pastList.data[0].full_name === 'Test Patient Two'
+  && pastList.data[0].end_reason === 'Patient left the programme' && (await doc2.from('patients').select('id')).data?.length === 0, removed.error?.message ?? pastList.error?.message)
+
+check('stopping an account needs an administrator and a reason', !!(await nurse.rpc('set_account_status', { person: doc2Id, new_status: 'suspended', reason: 'Testing' })).error
+  && /Give a reason/.test((await staff.rpc('set_account_status', { person: doc2Id, new_status: 'suspended' })).error?.message ?? '')
+  && /still has patients/.test((await staff.rpc('set_account_status', { person: docId, new_status: 'suspended', reason: 'Licence under review' })).error?.message ?? ''))
+const susp = await staff.rpc('set_account_status', { person: doc2Id, new_status: 'suspended', reason: 'Licence under review' })
+check('a suspended doctor is refused at once, on the session they already hold; reactivating restores it', !susp.error
+  && (await doc2.from('doctor_hours').select('id')).data?.length === 0 && !!(await doc2.rpc('my_change_token')).error
+  && (await staff.from('profiles').select('status, status_reason').eq('id', doc2Id).single()).data?.status_reason === 'Licence under review'
+  && !(await staff.rpc('set_account_status', { person: doc2Id, new_status: 'active' })).error && !(await doc2.rpc('my_change_token')).error, susp.error?.message)
+
+const reportData = await staff.rpc('admin_report', { from_day: inDays(-30), to_day: today })
+check('the operational report is counted by the database, for staff who may see it', reportData.data?.accounts?.patient >= 2 && Array.isArray(reportData.data?.doctors)
+  && reportData.data.activity.readings >= 1 && !!(await pat.rpc('admin_report', { from_day: inDays(-30), to_day: today })).error
+  && !!(await doc.rpc('admin_report', { from_day: inDays(-30), to_day: today })).error, reportData.error?.message)
+
+const tokenBefore = (await pat.rpc('my_change_token')).data
+await doc.from('thresholds').upsert({ patient_id: patId, vital_id: 'wt', target_min: 60, target_max: 85 })
+const tokenAfter = (await pat.rpc('my_change_token')).data
+check('the change token moves when the doctor changes the patient\'s record', typeof tokenBefore === 'string' && tokenBefore.length === 32 && tokenAfter !== tokenBefore
+  && !!(await client().rpc('my_change_token')).error)
+
 /* ── Sessions end ── */
 console.log('\nPassword and sign-out')
 await client().auth.resetPasswordForEmail('test.patient2@mcare.test')
@@ -248,7 +419,7 @@ check('deactivating an account locks it out', await (async () => {
   const c = client(); await c.auth.signInWithPassword({ email: 'test.patient@mcare.test', password: PW })
   await c.rpc('deactivate_my_account')
   return (await c.from('readings').select('id')).data?.length === 0 && !!(await c.rpc('raise_sos', { message: 'x' })).error
-    && (await staff.from('profiles').select('status').eq('id', patId).single()).data?.status === 'suspended'
+    && (await staff.from('profiles').select('status').eq('id', patId).single()).data?.status === 'deactivated'
 })())
 
 console.log(`\n${pass} passed, ${fail} failed`)

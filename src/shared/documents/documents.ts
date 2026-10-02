@@ -9,7 +9,7 @@
  */
 import type {
   AppUser, AdminUser, DoctorUser, PatientUser, VitalDef, AppAlert,
-  MedicalDocument, DocCategory, DocBody, DocSourceLink, SupportGrant, VitalsReportRow, VitalsReportInclude,
+  MedicalDocument, DocCategory, DocBody, DocSourceLink, SupportGrant, VitalsReportRow, VitalsReportInclude, ReportNote,
 } from '@/shared/lib/types'
 import { evaluate, latestValid, targetRange, vitalTrend, stamp, parseValue } from '@/shared/lib/vitals'
 import { SUPPORTED_SUMMARY, formatByExt, extOf, verifyContent, FORMATS } from './fileFormats'
@@ -313,6 +313,8 @@ export const DEFAULT_REPORT_INCLUDE: VitalsReportInclude = {
 export function buildVitalsReport(
   patient: PatientUser, defs: VitalDef[], alerts: AppAlert[], days: number, now = Date.now(), interpretation?: string,
   include: VitalsReportInclude = DEFAULT_REPORT_INCLUDE,
+  /** Clinical notes the doctor chose to attach. */
+  notes: ReportNote[] = [],
 ): { body: DocBody; links: DocSourceLink[] } {
   const cutoff = now - days * DAY_MS
   const allTracked = defs.filter(d => patient.trackedVitalIds.includes(d.id))
@@ -382,6 +384,7 @@ export function buildVitalsReport(
   const links: DocSourceLink[] = [
     ...used.map(r => ({ kind: 'reading' as const, id: r.id, label: `${nameOf(r.vitalId)} ${r.value} · ${r.loggedAt}` })),
     ...inPeriod.map(a => ({ kind: 'alert' as const, id: a.id, label: `${a.type === 'sos' ? 'SOS' : `${a.vitalName} ${a.value} ${a.unit}`} · ${a.loggedAt}` })),
+    ...notes.map(n => ({ kind: 'note' as const, id: n.id, label: `Clinical note · ${n.at}` })),
   ]
   return {
     body: {
@@ -396,6 +399,7 @@ export function buildVitalsReport(
         ? patient.prescriptions.filter(rx => rx.active).map(rx => ({ name: rx.medication, dose: rx.dosage, frequency: rx.frequency, purpose: rx.purpose }))
         : [],
       interpretation: interpretation?.trim() || undefined,
+      notes: notes.length ? notes : undefined,
       include: { ...include, vitalIds: picked.length ? picked.map(d => d.id) : undefined },
     },
     links,
