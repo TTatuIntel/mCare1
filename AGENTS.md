@@ -59,12 +59,11 @@ npm run backend:seed   # once: the test accounts
 
 ### Test accounts
 
-Created by `npm run backend:seed`. Every one is named "Test …" with an `@mcare.test` address so test records cannot be mistaken for real patients. Password: `Mcare-Test-2026` (set `MCARE_SEED_PASSWORD` before seeding to choose another).
+Created by `npm run backend:seed`. Every one is named "Test …" with an `@mcare.test` address so test records cannot be mistaken for real patients. Password: `A1b23` (exactly five characters; set `MCARE_SEED_PASSWORD` before seeding to choose another). Reseeding resets existing seeded accounts to this password.
 
 | Role | Email | Notes |
 | --- | --- | --- |
 | Patient | `test.patient@mcare.test` | Under Dr. Test Achieng; one prescription, one target and one note, labelled TEST. |
-| Patient | `test.patient2@mcare.test` | No doctor yet: use it to try the doctor request. |
 | Doctor | `test.doctor@mcare.test` | Dr. Test Achieng, approved. |
 | Doctor | `test.doctor2@mcare.test` | Dr. Test Mutua, approved. |
 | Admin | `test.admin@mcare.test` | |
@@ -91,6 +90,8 @@ Try: log a reading on the phone and watch it reach the laptop within about 15 se
 | `npm run dev` | The app with hot reload (port 8443). |
 | `npm run backend` | The local database and API. Data is kept in `supabase/.data`. |
 | `npm run backend:seed` | Creates the test accounts. Safe to repeat. |
+| `npm run backend:reset` | Deletes the local database (`supabase/.data/pg`); start the backend and seed again after it. |
+| `npm run db:schema` | Prints everything the migrations build, for comparing two versions of them. |
 | `npm run phone` | Production build served on port 8444, for phones. |
 | `npm run build` / `npm run preview` | Production build into `dist/` / serve it. |
 | `npm run typecheck` | TypeScript check. Run after changing `src/`. |
@@ -98,7 +99,7 @@ Try: log a reading on the phone and watch it reach the laptop within about 15 se
 | `npm test` | Database rules and API workflows (`test:db` + `test:api`). Run after changing a migration. |
 | `npm run test:ui` | The four portals in a headless browser. Needs Playwright (see the top of `supabase/tests/ui.test.mjs`); several minutes. |
 
-- **Empty database:** stop the backend, delete `supabase/.data`, start it and seed again.
+- **Empty database:** stop the backend, `npm run backend:reset`, start it and seed again.
 - **Back to demo mode:** delete `.env.local`.
 - **Backend not running:** the sign-in page says so and names the command; nothing is shown as saved.
 
@@ -111,7 +112,7 @@ Environment (all optional): `MCARE_BACKEND_PORT` (54321), `MCARE_BACKEND_HOST` (
 The app code does not change.
 
 1. Create a project and run `supabase/migrations` in order (SQL editor, or `supabase db push`).
-2. Enable `pg_cron` first: migration `0004` then schedules alert escalation (every minute) and the nightly purge of deleted documents, and `0012` the completion of finished prescriptions. Migration `0004` also creates the private `documents` storage bucket and its rules when the storage schema exists.
+2. Enable `pg_cron` first: `0010_reference_data_jobs.sql` then schedules alert escalation (every minute), the nightly purge of deleted documents and the completion of finished prescriptions, and creates the private `documents` storage bucket and its rules when the storage schema exists.
 3. In `.env.local`: `VITE_SUPABASE_URL=https://<project>.supabase.co`, `VITE_SUPABASE_ANON_KEY=<anon key>`.
 4. Test accounts there: `SUPABASE_URL=… SUPABASE_ANON_KEY=… SUPABASE_SERVICE_ROLE_KEY=… npm run backend:seed`. The service key never goes into the app.
 5. Deploy `supabase/functions/deliver` for email, SMS and push ([§8](#8-notifications-and-delivery)).
@@ -181,8 +182,8 @@ Import rules: `@/…` for anything in another folder, `./…` within the same fo
 - **Nothing clinical is deleted or rewritten.** A reading is marked invalid, a note is corrected by a new note, a prescription is stopped, a care plan is cancelled. Keep the history tables the database writes (`*_events`, `care_assignments`, `threshold_changes`).
 - **Live and demo.** `AppContext` loads the record from the backend at sign-in (live) or from `demoData` (demo); a new action needs both a live branch (`run(() => api.something())`) and the in-memory one. Never put sample people or sample numbers in a screen: show an `EmptyState`.
 - **The database decides.** Access rules, clinical rules (grading, alerts), notifications and the audit trail belong to `supabase/migrations`, not to a screen. A screen may hide a button the person cannot use; it must never be the only thing stopping them. The browser cannot write the audit trail: audit inside the trigger or function that makes the change (`audit_event(...)`).
-- **Staying current.** A table that belongs to a patient needs the `zz_touch_patient` trigger (see `0015_sync.sql`), or open screens will not learn of its changes.
-- **Migrations.** Add a new numbered file; never edit one that has been applied.
+- **Staying current.** A table that belongs to a patient needs the `zz_touch_patient` trigger (see `0002_helpers.sql`), or open screens will not learn of its changes.
+- **Migrations.** Add a new numbered file; never edit one that has been applied. See [Migrations](#migrations).
 - **Sending.** Never send email, SMS or push from a screen: the database queues every channel ([§8](#8-notifications-and-delivery)).
 
 ---
@@ -310,29 +311,26 @@ Postgres, in `supabase/migrations`, applied in order.
 
 ### Migrations
 
+Postgres, in `supabase/migrations`, applied in order. The files are organised by domain; each one says at the top what it holds.
+
 | File | Holds |
 | --- | --- |
-| `0001_core.sql` | People, the patient record, vitals, alerts, medication, appointments, messages, notifications, audit; row-level security on every table. |
-| `0002_documents.sql` | Documents and their history, share links, support access, report requests, support tickets, meal plans, hydration. |
-| `0003_profile_setup_skipped.sql` | A patient may skip the first-run setup. |
-| `0004_patient_module.sql` | Who recorded a reading, corrections, alert steps, clinical notes, target history, consent, ratings; notifications and audit written by the database; suspended-account lockout; storage bucket and scheduled jobs where available; indexes. |
-| `0005_care_integration.sql` | Invitations, meal-plan rules, readings recorded by a clinician, follow-up from an alert as one transaction, audit of vital definitions, document recovery by support. |
-| `0006_follow_up_required.sql` | "Appointment scheduled" is only possible through `schedule_follow_up`, which books the visit in the same transaction. |
-| `0007_appointment_links.sql` | `appointments.alert_id` (one follow-up per alert); no booking on, or move to, a past day. |
-| `0008_appointment_record.sql` | Appointment reference (`APT-2026-00042`), `appointment_events`, `no_show`, no two confirmed visits within half an hour, read-only lookup for monitors and support. |
-| `0009_enum_values.sql` | New enum values (`deactivated`; `care_plan` and `support` notifications), alone because Postgres cannot use a new value in the transaction that adds it. |
-| `0010_integrity.sql` | Audit written by the database only, with `resource_type`, `resource_id`, `patient_id`, before and after; account-status guards; an answered report request stays answered; critical-range history; an invalid reading closes its alert; `client_ref`; notifications name their record. |
-| `0011_relationships_accounts.sql` | `care_assignments`, `assign_doctor()`, `my_past_patients()`; account status with who, when, why; `set_account_status()`. |
-| `0012_clinical.sql` | Note visibility, kind, visit and `amends`; prescription route, instructions, dates, `status`, stop reason, `prescription_events`; care plans with items and events. |
-| `0013_availability.sql` | `doctor_hours`, `doctor_time_off`, `doctors.slot_minutes`, `set_doctor_hours()`, `doctor_availability()`; bookings checked and serialised per doctor. |
-| `0014_admin_ops.sql` | `admin_update_appointment()`; support requests answered once; `admin_report()`. |
-| `0015_sync.sql` | `patient_changes` and `system_changes`, their triggers, `my_change_token()`, Realtime publication. |
-| `0016_vital_resolution.sql` | `alert_remeasures`, `alert_comments`, `alerts.resolved_how`; a warning clears on an in-range re-measurement at any time; a still-abnormal re-measurement stays on the same alert. |
-| `0017_messaging.sql` | A message notification names the conversation. |
-| `0018_care_team.sql` | `care_team_members`, `consults()`, `add_consulting_doctor()`, `remove_consulting_doctor()`. |
-| `0019_delivery.sql` | `notification_deliveries`; `claim_deliveries()`, `finish_delivery()` (service key only); retried up to five times, then `failed` with the reason. |
-| `0020_audit_search.sql` | `search_audit()`: the whole trail searched in the database, by words, person and kind of person, a page at a time. |
-| `0021_delivery_channels.sql` | Per-person channel choice (`profiles.notify_*`); SMS only for SOS, escalations and critical readings; `push_subscriptions`; the invitation email; `claim_deliveries_for()`; `delivery_report()`. |
+| `0001_schema.sql` | Every type and table, grouped by domain (people, care relationships, vitals and alerts, medication and nutrition, appointments, clinical record, documents, messages and delivery, support and audit, change counters), with keys, constraints and indexes beside each table. |
+| `0002_helpers.sql` | Who is asking (`my_role`, `is_admin`, `staff_can`, `treats`, `consults`, `can_see_patient`, `account_active`), the audit trail (`audit_event`), notifications (`notify_*`), the change counters and their triggers, `my_change_token()`. |
+| `0003_accounts.sql` | Sign-up and invitations, account status, doctor approval, staff permissions, assignment and its history, consulting doctors, the patient's own profile, support requests, `admin_report()`, `search_audit()`. |
+| `0004_vitals_alerts.sql` | Targets and tracked vitals, reading validation and grading, alerts and their steps, re-measurements, alert comments, escalation, SOS. |
+| `0005_clinical.sql` | Prescriptions and their history, clinical notes, care plans, meal plans. |
+| `0006_appointments.sql` | Appointment guards, clash checks, history and notifications; follow-up from an alert; working hours and availability; support's changes. |
+| `0007_documents.sql` | Document access (`can_open_document`), history, signing, release, correction, the registry, support access and recovery, share links, report requests. |
+| `0008_messages_delivery.sql` | Message guards and notifications, the delivery queue for email, SMS and push, and the sender's functions. |
+| `0009_security.sql` | Row-level security on every table, every access rule (grouped by domain), the restrictive "active accounts only" rule on every table, and every function grant. The one file to read to know who reaches what. |
+| `0010_reference_data_jobs.sql` | The vital definitions, the shared change topics, the storage bucket, scheduled jobs (`pg_cron`) and Realtime publication, each only where the feature exists. |
+
+**Adding a change.** Add a new numbered file (`0011_…`) that alters what is there; never edit a file that has been applied to a database you keep. Put the table in `0001`'s domain section only when rebuilding the baseline (see below). A table that belongs to a patient needs `patient_id`, row-level security and rules in the same migration, the `zz_touch_patient` trigger, and the "active accounts only" policy (`as restrictive … using (account_active())`). Run `npm test`.
+
+**The baseline.** These ten files replaced a history of 21 incremental migrations on 3 October 2026, before any hosted database existed. `npm run db:schema` (`supabase/dev/fingerprint.mjs`) prints everything a migrations folder builds (types, columns, constraints, indexes, policies, function bodies and grants, triggers, seed rows); the consolidated files were checked against the old history with it and differ only by added foreign-key indexes and consistent names for the "active accounts only" rule. Use it the same way to prove any future refactor of the migrations changes nothing.
+
+**A local database built from the old history** is detected by `npm run backend`, which says so and stops. Run `npm run backend:reset`, then `npm run backend` and `npm run backend:seed` (test data only).
 
 ### Relationships
 
@@ -581,26 +579,65 @@ Rules: the audit trail is written by the database with the author's role, the re
 
 ## 8. Notifications and delivery
 
-Every notification the database writes is also queued in `notification_deliveries` for the channels the person allows (`profiles.notify_email`, `notify_sms`, `notify_push`, chosen in the app):
+Every notification appears in the app. mCare can also send it by email, text message and push.
 
-- **Email**: every notification; the invitation email for someone registered in advance.
-- **SMS**: only what cannot wait (SOS, escalation, critical reading).
-- **Push**: each device the person has allowed (`push_subscriptions`; service worker `public/sw.js`, client `src/shared/lib/push.ts`).
+### How it works
 
-A sender claims a batch (`claim_deliveries()` / `claim_deliveries_for()`, service key only), sends, and reports each result (`finish_delivery()`); a failure is retried up to five times, then marked `failed` with the reason. A channel with no provider configured waits in the queue, so nothing is lost.
+1. The database writes the notification in the same transaction as the change that caused it.
+2. A trigger queues one row per channel in `notification_deliveries` (`0008_messages_delivery.sql`):
+   - **Email**: every notification.
+   - **Text message**: only what cannot wait: an SOS, an escalation, a critical reading.
+   - **Push**: every notification, once for each device the person allowed (`push_subscriptions`; service worker `public/sw.js`, client `src/shared/lib/push.ts`).
+   - Nothing is queued for a channel the person switched off (Profile → Notifications: `profiles.notify_email`, `notify_sms`, `notify_push`), or for a suspended or deactivated account.
+   - Someone registered in advance gets an invitation email telling them to sign up.
+3. A **sender** outside the database takes a batch (`claim_deliveries_for()`, service key only), sends each one and reports back (`finish_delivery()`). A failure goes back in the queue and is marked `failed` with the reason after five attempts. A push device the browser has withdrawn is forgotten.
+4. Admins see the counts and the latest failures (never an address or a message) in Reports → *Messages sent outside the app* (`delivery_report()`).
 
-- **Local backend**: prints every email, SMS and push instead of sending it (every 10 seconds).
-- **Hosted**: deploy `supabase/functions/deliver` and call it on a schedule with `Authorization: Bearer <service role key>`. Its settings:
+A channel whose provider is not configured is **left waiting in the queue**, untouched. Nothing is lost while providers are being chosen; once one is configured, what was waiting goes out, urgent first.
 
-| Setting | For |
-| --- | --- |
-| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Access to the queue. |
-| `MCARE_APP_URL` | Links in messages. |
-| `MCARE_EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, `MCARE_MAIL_FROM` | Email. |
-| `MCARE_SMS_PROVIDER=africastalking` (`AT_USERNAME`, `AT_API_KEY`, optional `AT_SENDER_ID`) or `twilio` (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`) | SMS. |
-| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Push. The same public key goes to the app as `VITE_VAPID_PUBLIC_KEY`. |
+| Where | Sender | What it does |
+| --- | --- | --- |
+| Local backend (`npm run backend`) | built into `supabase/dev/server.mjs`, every 10 s | Prints every email, text and push in its terminal. Nothing is sent. |
+| Hosted Supabase | Edge Function `supabase/functions/deliver` | Sends through the providers below. |
 
-Email HTML is built only in `src/shared/email/emailTemplate.ts` (in-app previews) and the sender; never send from a screen.
+Never send from a screen. In-app email previews are built only by `src/shared/email/emailTemplate.ts`.
+
+### Configuring the hosted sender
+
+Set the secrets for the providers you have, deploy, and call the function every minute.
+
+```sh
+supabase secrets set MCARE_APP_URL=https://your-mcare-address
+# Email (Resend)
+supabase secrets set MCARE_EMAIL_PROVIDER=resend RESEND_API_KEY=… MCARE_MAIL_FROM="mCare <no-reply@your-domain>"
+# Text messages: Africa's Talking …
+supabase secrets set MCARE_SMS_PROVIDER=africastalking AT_USERNAME=… AT_API_KEY=… AT_SENDER_ID=…   # sender id optional
+# … or Twilio
+supabase secrets set MCARE_SMS_PROVIDER=twilio TWILIO_ACCOUNT_SID=… TWILIO_AUTH_TOKEN=… TWILIO_FROM=+1…
+# Push (Web Push): generate a key pair once with  npx web-push generate-vapid-keys
+supabase secrets set VAPID_PUBLIC_KEY=… VAPID_PRIVATE_KEY=… VAPID_SUBJECT=mailto:support@your-domain
+
+supabase functions deploy deliver --no-verify-jwt
+```
+
+Run it every minute with the service key (it refuses any other caller), for example from the database with `pg_cron` and `pg_net`:
+
+```sql
+select cron.schedule('mcare-deliver', '* * * * *', $$
+  select net.http_post(url := 'https://<project>.supabase.co/functions/v1/deliver',
+                       headers := jsonb_build_object('Authorization', 'Bearer <service role key>'))
+$$);
+```
+
+For push, the app also needs the **public** key in its build environment: `VITE_VAPID_PUBLIC_KEY=<the same VAPID_PUBLIC_KEY>`. Push needs the app on an https address (or `localhost`). Without the key, Profile → Notifications says push is not set up yet and offers nothing to switch on.
+
+### Another provider
+
+Each channel's provider is one small function in `supabase/functions/deliver/index.ts` (`emailSender`, `smsSender`, `pushSender`). To use another mail or SMS service, add a branch there that sends one message and returns `{ problem: null }` when it was accepted, or `{ problem: '<why>' }` when it was not. Nothing else changes.
+
+### Not yet verified
+
+The queue, the choices, the invitation email and the delivery report are tested (`npm test`), and the local sender is exercised by the browser tests. The calls to Resend, Africa's Talking, Twilio and Web Push are written to their published APIs and **have not been run**: no provider keys or hosted project were available. Try one message per channel after configuring.
 
 ---
 

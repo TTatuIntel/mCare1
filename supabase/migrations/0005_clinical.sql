@@ -1,113 +1,13 @@
--- mCare clinical record: what the treating doctor writes, with its history.
+-- mCare clinical record: prescriptions, clinical notes, care plans and meal plans.
 --
---   • a clinical note says who may read it (the care team only, or the patient too),
---     what kind of note it is, and which visit it belongs to; a note is still never
---     rewritten: a correction is a new note that replaces the one it amends
---   • a prescription carries how it is taken, from when to when, and a status with
---     the reason it was stopped; every step is kept as a row of history
---   • a care plan: goals and interventions for one patient, moved through defined
---     steps (draft → active → on hold → completed or cancelled), with its own history
---
--- Every row still hangs off patients.id, and the patient portal reads these same rows.
+-- What the treating doctor writes, with its history. Nothing is rewritten: a
+-- prescription is stopped, a note is corrected by a new note, a care plan is
+-- completed or cancelled. Each step is a row in its events table, the patient
+-- is told, and the change is audited, all in one transaction.
 
 
-/* ─── Clinical notes ───────────────────────────────────────────────── */
-alter table clinical_notes add column visibility     text not null default 'shared'   check (visibility in ('internal', 'shared'));
-alter table clinical_notes add column note_type      text not null default 'progress' check (note_type in ('progress', 'assessment', 'plan', 'instruction', 'other'));
-alter table clinical_notes add column appointment_id uuid references appointments (id);
-alter table clinical_notes add column amends         uuid references clinical_notes (id);
--- A note is corrected once; a further correction amends the correction, so the versions form one line.
-create unique index clinical_notes_one_amendment on clinical_notes (amends) where amends is not null;
-
--- An internal note is the treating doctor's working note: not the patient's, and not the staff's who monitor patients.
-drop policy clinical_notes_read on clinical_notes;
-create policy clinical_notes_read on clinical_notes for select to authenticated using (
-  treats(patient_id) or (visibility = 'shared' and can_see_patient(patient_id)));
-
-create function clinical_note_before() returns trigger language plpgsql security definer set search_path = public as $$
-declare prior clinical_notes;
-begin
-  new.created_at := now();
-  new.content := trim(new.content);
-  if new.amends is not null then
-    select * into prior from clinical_notes where id = new.amends;
-    if not found or prior.patient_id <> new.patient_id then
-      raise exception 'That note cannot be amended' using errcode = '22023';
-    end if;
-    if exists (select 1 from clinical_notes where amends = new.amends) then
-      raise exception 'That note has already been corrected. Amend the latest version.' using errcode = '22023';
-    end if;
-  end if;
-  if new.appointment_id is not null and not exists (
-    select 1 from appointments a where a.id = new.appointment_id and a.patient_id = new.patient_id) then
-    raise exception 'That visit is not this patient''s' using errcode = '22023';
-  end if;
-  return new;
-end $$;
-create trigger clinical_note_before before insert on clinical_notes for each row execute function clinical_note_before();
-
-/** The patient's "note from your doctor" is always the newest shared note that has not been replaced. */
-create or replace function clinical_note_added() returns trigger language plpgsql security definer set search_path = public as $$
-declare latest text;
-begin
-  select n.content into latest from clinical_notes n
-  where n.patient_id = new.patient_id and n.visibility = 'shared'
-    and not exists (select 1 from clinical_notes c where c.amends = n.id)
-  order by n.created_at desc limit 1;
-  perform set_config('mcare.note_action', '1', true);
-  update patients set doctor_note = latest where id = new.patient_id and doctor_note is distinct from latest;
-  perform set_config('mcare.note_action', '', true);
-  if new.visibility = 'shared' then
-    perform notify_user(new.patient_id, 'message',
-      case when new.amends is null then 'New note from your doctor' else 'Your doctor corrected a note' end, left(new.content, 80), 'vitals');
-  end if;
-  perform audit_event(case when new.amends is null then 'Added clinical note' else 'Amended clinical note' end,
-    name_of(new.patient_id) || ' · ' || new.note_type || case when new.visibility = 'internal' then ' · internal' else ' · shared with patient' end,
-    'clinical_note', new.id::text, new.patient_id, null, null, new.author_id);
-  return new;
-end $$;
-
-
-/* ─── Prescriptions ────────────────────────────────────────────────── */
-alter table prescriptions add column route        text check (route is null or route in ('oral', 'topical', 'inhaled', 'injection', 'sublingual', 'eye', 'ear', 'nasal', 'rectal', 'other'));
-alter table prescriptions add column instructions text check (instructions is null or length(instructions) <= 500);
-alter table prescriptions add column start_date   date;
-alter table prescriptions add column end_date     date;
-alter table prescriptions add column status       text not null default 'active';
-alter table prescriptions add column stop_reason  text check (stop_reason is null or length(stop_reason) <= 300);
-
-alter table prescriptions disable trigger user;
-update prescriptions set start_date = prescribed_at::date, status = case when active then 'active' else 'discontinued' end;
-alter table prescriptions enable trigger user;
-
-alter table prescriptions alter column start_date set not null;
-alter table prescriptions alter column start_date set default current_date;
-alter table prescriptions add constraint prescriptions_status check (status in ('active', 'completed', 'discontinued'));
-alter table prescriptions add constraint prescriptions_status_matches check ((status = 'active') = active);
-alter table prescriptions add constraint prescriptions_dates check (end_date is null or end_date >= start_date);
-
--- What happened to a prescription, in order. Written by the database only.
-create table prescription_events (
-  id              bigint generated always as identity primary key,
-  prescription_id uuid not null references prescriptions (id) on delete cascade,
-  patient_id      uuid not null references patients (id) on delete cascade,
-  actor_id        uuid references profiles (id) on delete set null,
-  action          text not null check (action in ('prescribed', 'stopped', 'completed', 'restarted')),
-  detail          text,
-  created_at      timestamptz not null default now()
-);
-create index prescription_events_idx on prescription_events (prescription_id, created_at);
-insert into prescription_events (prescription_id, patient_id, actor_id, action, created_at)
-select id, patient_id, doctor_id, 'prescribed', prescribed_at from prescriptions;
-insert into prescription_events (prescription_id, patient_id, actor_id, action, created_at)
-select id, patient_id, stopped_by, 'stopped', coalesce(stopped_at, now()) from prescriptions where not active;
-
-alter table prescription_events enable row level security;
-create policy prescription_events_read on prescription_events for select to authenticated using (can_see_patient(patient_id));
-create policy prescription_events_active_only on prescription_events as restrictive for all to authenticated
-  using (account_active()) with check (account_active());
-
-create or replace function prescription_before() returns trigger language plpgsql as $$
+/* ═══ Prescriptions ═══════════════════════════════════════════════════ */
+create function prescription_before() returns trigger language plpgsql as $$
 begin
   if tg_op = 'INSERT' then
     new.medication := trim(new.medication); new.dosage := trim(new.dosage);
@@ -140,7 +40,7 @@ begin
   return new;
 end $$;
 
-create or replace function prescription_changed() returns trigger language plpgsql security definer set search_path = public as $$
+create function prescription_changed() returns trigger language plpgsql security definer set search_path = public as $$
 declare who text := name_of(new.patient_id); doc_id uuid := gen_random_uuid(); what text;
 begin
   if tg_op = 'INSERT' then
@@ -189,59 +89,62 @@ begin
   get diagnostics n = row_count;
   return n;
 end $$;
-revoke execute on function complete_ended_prescriptions() from public, anon, authenticated;
 
 
-/* ─── Care plans ───────────────────────────────────────────────────────
-   A patient may have several plans over time and one active plan at a time.
-   The patient sees a plan once it leaves draft. A plan that is completed or
-   cancelled is closed: it stays as it was. */
-create table care_plans (
-  id          uuid primary key default gen_random_uuid(),
-  patient_id  uuid not null references patients (id) on delete cascade,
-  doctor_id   uuid not null references doctors (id),            -- who wrote it
-  title       text not null check (length(trim(title)) between 1 and 120),
-  summary     text check (summary is null or length(summary) <= 2000),
-  status      text not null default 'draft' check (status in ('draft', 'active', 'on_hold', 'completed', 'cancelled')),
-  start_date  date,
-  review_date date,
-  created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now(),
-  updated_by  uuid references profiles (id) on delete set null,
-  closed_at   timestamptz,
-  close_note  text check (close_note is null or length(close_note) <= 500),
-  check ((status in ('completed', 'cancelled')) = (closed_at is not null))
-);
-create unique index care_plans_one_active on care_plans (patient_id) where status = 'active';
-create index care_plans_patient_idx on care_plans (patient_id, created_at desc);
+create trigger prescription_before before insert or update on prescriptions for each row execute function prescription_before();
+create trigger prescription_changed after insert or update on prescriptions for each row execute function prescription_changed();
 
-create table care_plan_items (
-  id            uuid primary key default gen_random_uuid(),
-  plan_id       uuid not null references care_plans (id) on delete cascade,
-  patient_id    uuid not null references patients (id) on delete cascade,
-  kind          text not null check (kind in ('goal', 'intervention')),
-  text          text not null check (length(trim(text)) between 1 and 500),
-  vital_id      text references vital_defs (id),     -- the vital a goal is measured by, when it is
-  target_date   date,
-  status        text not null default 'open' check (status in ('open', 'achieved', 'dropped')),
-  progress_note text check (progress_note is null or length(progress_note) <= 1000),
-  position      int not null default 0,
-  created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now()
-);
-create index care_plan_items_plan_idx on care_plan_items (plan_id, position);
 
-create table care_plan_events (
-  id         bigint generated always as identity primary key,
-  plan_id    uuid not null references care_plans (id) on delete cascade,
-  patient_id uuid not null references patients (id) on delete cascade,
-  actor_id   uuid references profiles (id) on delete set null,
-  action     text not null,   -- created | edited | active | on_hold | completed | cancelled | item_achieved | item_dropped | item_reopened
-  detail     text,
-  created_at timestamptz not null default now()
-);
-create index care_plan_events_idx on care_plan_events (plan_id, created_at);
+/* ═══ Clinical notes ══════════════════════════════════════════════════ */
+create function clinical_note_before() returns trigger language plpgsql security definer set search_path = public as $$
+declare prior clinical_notes;
+begin
+  new.created_at := now();
+  new.content := trim(new.content);
+  if new.amends is not null then
+    select * into prior from clinical_notes where id = new.amends;
+    if not found or prior.patient_id <> new.patient_id then
+      raise exception 'That note cannot be amended' using errcode = '22023';
+    end if;
+    if exists (select 1 from clinical_notes where amends = new.amends) then
+      raise exception 'That note has already been corrected. Amend the latest version.' using errcode = '22023';
+    end if;
+  end if;
+  if new.appointment_id is not null and not exists (
+    select 1 from appointments a where a.id = new.appointment_id and a.patient_id = new.patient_id) then
+    raise exception 'That visit is not this patient''s' using errcode = '22023';
+  end if;
+  return new;
+end $$;
 
+/** The patient's "note from your doctor" is always the newest shared note that has not been replaced. */
+create function clinical_note_added() returns trigger language plpgsql security definer set search_path = public as $$
+declare latest text;
+begin
+  select n.content into latest from clinical_notes n
+  where n.patient_id = new.patient_id and n.visibility = 'shared'
+    and not exists (select 1 from clinical_notes c where c.amends = n.id)
+  order by n.created_at desc limit 1;
+  perform set_config('mcare.note_action', '1', true);
+  update patients set doctor_note = latest where id = new.patient_id and doctor_note is distinct from latest;
+  perform set_config('mcare.note_action', '', true);
+  if new.visibility = 'shared' then
+    perform notify_user(new.patient_id, 'message',
+      case when new.amends is null then 'New note from your doctor' else 'Your doctor corrected a note' end, left(new.content, 80), 'vitals');
+  end if;
+  perform audit_event(case when new.amends is null then 'Added clinical note' else 'Amended clinical note' end,
+    name_of(new.patient_id) || ' · ' || new.note_type || case when new.visibility = 'internal' then ' · internal' else ' · shared with patient' end,
+    'clinical_note', new.id::text, new.patient_id, null, null, new.author_id);
+  return new;
+end $$;
+
+
+create trigger clinical_note_before before insert on clinical_notes for each row execute function clinical_note_before();
+create trigger clinical_note_added after insert on clinical_notes for each row execute function clinical_note_added();
+create trigger clinical_notes_append_only before update or delete on clinical_notes for each row execute function no_rewrite();
+
+
+/* ═══ Care plans ══════════════════════════════════════════════════════ */
 create function care_plan_before() returns trigger language plpgsql security definer set search_path = public as $$
 declare me uuid := auth.uid();
 begin
@@ -280,7 +183,6 @@ begin
   new.closed_at := case when new.status in ('completed', 'cancelled') then now() end;
   return new;
 end $$;
-create trigger care_plan_before before insert or update on care_plans for each row execute function care_plan_before();
 
 create function care_plan_after() returns trigger language plpgsql security definer set search_path = public as $$
 declare me uuid := auth.uid(); who text := name_of(new.patient_id); doc text := coalesce(name_of(me), 'Your doctor'); act text; title text; body text;
@@ -318,7 +220,6 @@ begin
   end if;
   return new;
 end $$;
-create trigger care_plan_after after insert or update on care_plans for each row execute function care_plan_after();
 
 create function care_plan_item_before() returns trigger language plpgsql security definer set search_path = public as $$
 declare p care_plans; row care_plan_items := case when tg_op = 'DELETE' then old else new end;
@@ -343,7 +244,6 @@ begin
   end if;
   return new;
 end $$;
-create trigger care_plan_item_before before insert or update or delete on care_plan_items for each row execute function care_plan_item_before();
 
 create function care_plan_item_after() returns trigger language plpgsql security definer set search_path = public as $$
 declare p care_plans;
@@ -358,7 +258,6 @@ begin
   end if;
   return new;
 end $$;
-create trigger care_plan_item_after after update on care_plan_items for each row execute function care_plan_item_after();
 
 /**
  * Saves a care plan and its goals and interventions together: all of it, or none.
@@ -420,36 +319,64 @@ begin
   if not found then raise exception 'Care plan not found or you do not have access' using errcode = '42501'; end if;
 end $$;
 
-alter table care_plans       enable row level security;
-alter table care_plan_items  enable row level security;
-alter table care_plan_events enable row level security;
 
--- The treating doctor reads and writes; the patient and the staff who monitor patients read a plan once it has left draft.
-create policy care_plans_read on care_plans for select to authenticated using (
-  treats(patient_id) or (status <> 'draft' and can_see_patient(patient_id)));
-create policy care_plans_add on care_plans for insert to authenticated with check (treats(patient_id) and doctor_id = auth.uid());
-create policy care_plans_change on care_plans for update to authenticated using (treats(patient_id)) with check (treats(patient_id));
-create policy care_plans_drop_draft on care_plans for delete to authenticated using (treats(patient_id) and status = 'draft');
+create trigger care_plan_before before insert or update on care_plans for each row execute function care_plan_before();
+create trigger care_plan_after after insert or update on care_plans for each row execute function care_plan_after();
+create trigger care_plan_item_before before insert or update or delete on care_plan_items for each row execute function care_plan_item_before();
+create trigger care_plan_item_after after update on care_plan_items for each row execute function care_plan_item_after();
 
-create policy care_plan_items_read on care_plan_items for select to authenticated using (
-  treats(patient_id) or (can_see_patient(patient_id) and exists (select 1 from care_plans p where p.id = plan_id and p.status <> 'draft')));
-create policy care_plan_items_write on care_plan_items for all to authenticated using (treats(patient_id)) with check (treats(patient_id));
 
-create policy care_plan_events_read on care_plan_events for select to authenticated using (
-  treats(patient_id) or (can_see_patient(patient_id) and exists (select 1 from care_plans p where p.id = plan_id and p.status <> 'draft')));
-
-create policy care_plans_active_only on care_plans as restrictive for all to authenticated using (account_active()) with check (account_active());
-create policy care_plan_items_active_only on care_plan_items as restrictive for all to authenticated using (account_active()) with check (account_active());
-create policy care_plan_events_active_only on care_plan_events as restrictive for all to authenticated using (account_active()) with check (account_active());
-
-revoke execute on function save_care_plan(jsonb) from public, anon;
-revoke execute on function set_care_plan_status(uuid, text, text) from public, anon;
-grant execute on function save_care_plan(jsonb), set_care_plan_status(uuid, text, text) to authenticated;
-
-/* ─── Scheduled jobs (hosted Supabase with pg_cron) ────────────────── */
-do $$
+/* ═══ Meal plans ══════════════════════════════════════════════════════ */
+create function meal_plan_before() returns trigger language plpgsql as $$
+declare m jsonb; mid text; seen text[] := '{}';
 begin
-  if exists (select 1 from pg_extension where extname = 'pg_cron') then
-    perform cron.schedule('mcare-complete-prescriptions', '10 0 * * *', 'select public.complete_ended_prescriptions()');
+  if tg_op = 'UPDATE' and new.patient_id <> old.patient_id then
+    raise exception 'A meal plan cannot be moved to another patient' using errcode = '42501';
   end if;
+  new.updated_at := now();
+  new.set_by := coalesce(auth.uid(), new.set_by);   -- the doctor who saved it, never what the browser sent
+  new.dietary_note := nullif(trim(coalesce(new.dietary_note, '')), '');
+  if jsonb_typeof(new.meals) <> 'array' then raise exception 'Meals must be a list' using errcode = '22023'; end if;
+  if jsonb_array_length(new.meals) > 8 then raise exception 'A plan can hold up to 8 meals' using errcode = '22023'; end if;
+  for m in select * from jsonb_array_elements(new.meals) loop
+    mid := trim(coalesce(m ->> 'id', ''));
+    if mid = '' or length(mid) > 40 or mid = any (seen) then
+      raise exception 'Each meal needs its own id' using errcode = '22023';
+    end if;
+    if length(trim(coalesce(m ->> 'name', ''))) not between 1 and 60 then
+      raise exception 'Give each meal a name' using errcode = '22023';
+    end if;
+    if length(coalesce(m ->> 'foods', '')) > 300 then
+      raise exception 'Keep what to eat under 300 characters' using errcode = '22023';
+    end if;
+    if jsonb_typeof(m -> 'at') is distinct from 'number' or (m ->> 'at')::numeric not between 0 and 1439 then
+      raise exception 'Give each meal a time' using errcode = '22023';
+    end if;
+    if jsonb_typeof(m -> 'kcal') is distinct from 'number' or (m ->> 'kcal')::numeric not between 0 and 3000 then
+      raise exception 'Energy for a meal must be between 0 and 3000 kcal' using errcode = '22023';
+    end if;
+    seen := seen || mid;
+  end loop;
+  return new;
 end $$;
+
+/** The patient is told when their plan changes; the change is audited. */
+create function meal_plan_changed() returns trigger language plpgsql security definer set search_path = public as $$
+declare pt uuid := coalesce(new.patient_id, old.patient_id); doc text := coalesce(name_of(auth.uid()), 'Your doctor');
+begin
+  if auth.uid() is null then return coalesce(new, old); end if;
+  if tg_op = 'DELETE' then
+    perform notify_user(pt, 'message', 'Your meal plan was removed', doc || ' put you back on the standard meal plan', 'meals');
+    insert into audit_log (actor_id, action, detail) values (auth.uid(), 'Removed meal plan', name_of(pt));
+    return old;
+  end if;
+  perform notify_user(pt, 'message', 'Your meal plan was updated',
+    doc || ' set your meals' || coalesce(' · ' || new.target_kcal || ' kcal a day', '') || ' · ' || new.water_goal || ' glasses of water', 'meals');
+  insert into audit_log (actor_id, action, detail)
+  values (auth.uid(), 'Set meal plan', name_of(pt) || ' · ' || jsonb_array_length(new.meals) || ' meals' || coalesce(' · ' || new.target_kcal || ' kcal', ''));
+  return new;
+end $$;
+
+
+create trigger meal_plan_before before insert or update on meal_plans for each row execute function meal_plan_before();
+create trigger meal_plan_changed after insert or update or delete on meal_plans for each row execute function meal_plan_changed();

@@ -260,14 +260,14 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
     const wordsDone = 160 + words.length * 60
     return (
       <div key={`${s.name}-${mode}`} aria-hidden={mode === 'out'}
-        className={`col-start-1 row-start-1 w-full flex flex-col items-center gap-2 @5xl:items-start @5xl:gap-5 ${mode === 'out' ? (dir > 0 ? 'auth-leave-next' : 'auth-leave-prev') : ''}`}>
-        <p className={`${on('auth-item-in')} flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.16em] text-teal-700`}>
+        className={`col-start-1 row-start-1 w-full flex flex-col items-center gap-4 @5xl:items-start @5xl:gap-5 ${mode === 'out' ? (dir > 0 ? 'auth-leave-next' : 'auth-leave-prev') : ''}`}>
+        <p className={`${on('auth-item-in')} flex items-center gap-1.5 text-xs font-bold uppercase tracking-[0.16em] text-teal-700`}>
           <span className={`flex ${on(`auth-icon-${s.icon}`)}`}><AuthIcon name={s.icon} className="w-4 h-4" /></span>
           {s.name}
         </p>
 
         {/* Two sizes, because font sizes can't switch on one element here. */}
-        {(['@5xl:hidden text-xl', 'hidden @5xl:block text-4xl'] as const).map(size => (
+        {(['@5xl:hidden text-2xl', 'hidden @5xl:block text-4xl'] as const).map(size => (
           <h1 key={size} className={`${size} max-w-xl font-display font-black text-gray-900 leading-tight`}>
             {words.map(({ w, accent }, i) => (
               <span key={i} className="inline-block overflow-hidden align-bottom pb-1">
@@ -279,13 +279,13 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
           </h1>
         ))}
 
-        <div className="w-full flex items-center justify-center gap-4 text-left @5xl:justify-start @5xl:gap-7">
+        <div className="w-full flex items-center justify-center gap-5 text-left @5xl:justify-start @5xl:gap-7">
           {/* The preview sits straight on the page: no tile or card behind it. */}
           <div aria-hidden className={`relative w-28 h-[4.5rem] shrink-0 flex items-center justify-center @5xl:w-36 @5xl:h-36 ${on('auth-scene-in')}`}>
             <div className={`relative w-full h-full flex items-center justify-center ${on('auth-float')}`}><s.Scene /></div>
           </div>
           {/* Mobile and tablet: one sentence, so the actions below stay the focus. Web has room for the list. */}
-          {([['flex @5xl:hidden text-[13px]', false], ['hidden @5xl:flex text-[15px] gap-2', true]] as const).map(([size, withPoints]) => (
+          {([['flex @5xl:hidden text-sm leading-relaxed', false], ['hidden @5xl:flex text-[15px] gap-2', true]] as const).map(([size, withPoints]) => (
             <div key={size} className={`${size} min-w-0 max-w-[13rem] flex-col @5xl:max-w-sm`}>
               <p style={after(wordsDone)} className={`${on('auth-item-in')} text-gray-600 leading-snug`}>{s.body}</p>
               {withPoints && (

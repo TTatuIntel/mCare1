@@ -1,7 +1,7 @@
 /**
  * mCare sender (Supabase Edge Function, hosted projects).
  *
- * Takes what is waiting in `notification_deliveries` (migrations 0019, 0021),
+ * Takes what is waiting in `notification_deliveries` (supabase/migrations/0008_messages_delivery.sql),
  * sends each one through the provider configured for its channel, and reports
  * to the database how it went. The queue does the bookkeeping: a failure goes
  * back to be retried, and is marked failed after five attempts.

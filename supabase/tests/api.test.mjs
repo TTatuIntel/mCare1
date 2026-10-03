@@ -12,7 +12,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { startBackend } from '../dev/server.mjs'
 
-const backend = await startBackend({ port: 0, dataDir: 'memory', quiet: true, jobs: false })
+const backend = await startBackend({ port: 0, dataDir: 'memory', quiet: true, jobs: false, exposeTestAuth: true })
 const client = (key = backend.anonKey) => createClient(backend.url, key, { auth: { persistSession: false, autoRefreshToken: false } })
 
 let pass = 0, fail = 0
@@ -33,13 +33,20 @@ const me = await pat.from('profiles').select('*').eq('id', patId).single()
 check('the database made the profile, as a patient whatever the browser asked for', me.data?.role === 'patient' && me.data?.full_name === 'Test Patient One', me.error?.message ?? me.data?.role)
 check('a new patient tracks blood pressure and heart rate', (await pat.from('tracked_vitals').select('vital_id')).data?.length === 2)
 check('the same email cannot register twice', (await client().auth.signUp({ email: 'test.patient@mcare.test', password: PW })).error?.message === 'User already registered')
-check('a short password is refused', !!(await client().auth.signUp({ email: 'short@mcare.test', password: 'Ab1' })).error)
+check('a 5-character password with uppercase and a number is accepted', !!(await client().auth.signUp({ email: 'short@mcare.test', password: 'A1b23' })).data.session)
+check('a shorter password is refused', !!(await client().auth.signUp({ email: 'too-short@mcare.test', password: 'Ab1' })).error)
+check('a password without uppercase is refused', !!(await client().auth.signUp({ email: 'no-upper@mcare.test', password: '1b23x' })).error)
+check('a password without a number is refused', !!(await client().auth.signUp({ email: 'no-number@mcare.test', password: 'Abcde' })).error)
 const bad = await client().auth.signInWithPassword({ email: 'test.patient@mcare.test', password: 'wrong-password' })
 check('wrong password: one message, no hint which part was wrong', bad.error?.code === 'invalid_credentials')
 check('unknown email gets the same answer', (await client().auth.signInWithPassword({ email: 'nobody@mcare.test', password: PW })).error?.code === 'invalid_credentials')
 
 const p2 = await pat2.auth.signUp({ email: 'test.patient2@mcare.test', password: PW, options: { data: { full_name: 'Test Patient Two' } } })
 const pat2Id = p2.data.user.id
+const passwordUpdate = await admin.auth.admin.updateUserById(pat2Id, { password: 'A1b23' })
+check('service role can set an exactly 5-character password', !passwordUpdate.error
+  && !!(await client().auth.signInWithPassword({ email: 'test.patient2@mcare.test', password: 'A1b23' })).data.session, passwordUpdate.error?.message)
+check('service role cannot set a password below the minimum', !!(await admin.auth.admin.updateUserById(pat2Id, { password: 'Ab1' })).error)
 const mkDoctor = async (c, email, name) => {
   const r = await c.auth.signUp({ email, password: PW, options: { data: { full_name: name, role: 'doctor' } } })
   await admin.from('doctors').update({ approval_status: 'approved', specialty: 'Cardiology', hospital: 'mCare Test Clinic', license_no: 'TEST-1' }).eq('id', r.data.user.id)
@@ -434,6 +441,13 @@ check('the audit trail is searched in the database, for whoever may read it only
 console.log('\nPassword and sign-out')
 await client().auth.resetPasswordForEmail('test.patient2@mcare.test')
 const code = backend.outbox.find(m => m.to === 'test.patient2@mcare.test' && m.kind === 'recovery')?.code
+const localCodeUrl = new URL('/__dev/auth-codes', backend.url)
+localCodeUrl.search = new URLSearchParams({ email: 'test.patient2@mcare.test', kind: 'recovery' }).toString()
+const localCode = await fetch(localCodeUrl).then(r => r.json())
+check('local testing can retrieve the requested email code', localCode.code === code)
+localCodeUrl.searchParams.set('email', 'nobody@mcare.test')
+const otherCode = await fetch(localCodeUrl).then(r => r.json())
+check('local code preview does not expose codes for a different email', otherCode.code === null)
 const rec = client()
 check('a wrong reset code is refused', !!(await client().auth.verifyOtp({ email: 'test.patient2@mcare.test', token: '000000', type: 'recovery' })).error)
 const verified = await rec.auth.verifyOtp({ email: 'test.patient2@mcare.test', token: code, type: 'recovery' })
@@ -454,6 +468,19 @@ check('deactivating an account locks it out', await (async () => {
   return (await c.from('readings').select('id')).data?.length === 0 && !!(await c.rpc('raise_sos', { message: 'x' })).error
     && (await staff.from('profiles').select('status').eq('id', patId).single()).data?.status === 'deactivated'
 })())
+
+console.log('\nSeeded accounts')
+Object.assign(process.env, {
+  SUPABASE_URL: backend.url,
+  SUPABASE_SERVICE_ROLE_KEY: backend.serviceKey,
+  SUPABASE_ANON_KEY: backend.anonKey,
+  MCARE_SEED_PASSWORD: 'A1b23',
+})
+await import('../dev/seed.mjs')
+const seededAdmin = client()
+check('reseeding resets an existing account to the exact 5-character password',
+  !!(await seededAdmin.auth.signInWithPassword({ email: 'test.admin@mcare.test', password: 'A1b23' })).data.session
+  && !!(await client().auth.signInWithPassword({ email: 'test.admin@mcare.test', password: PW })).error)
 
 console.log(`\n${pass} passed, ${fail} failed`)
 await backend.close()

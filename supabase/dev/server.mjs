@@ -35,10 +35,11 @@ const MIGRATIONS = join(HERE, '..', 'migrations')
 const ACCESS_TTL = 3600                 // seconds an access token lasts; the browser refreshes it
 const MAX_BODY = 25 * 1024 * 1024
 const MAX_FILE = 20 * 1024 * 1024
-const MIN_PASSWORD = 6                  // Supabase Auth's default; the app asks for more
+const MIN_PASSWORD = 5                  // mCare policy: short but still requires uppercase + number
 const CODE_TTL_MIN = { signup: 60, recovery: 10 }
 const MAX_CODE_ATTEMPTS = 5
 const MAX_SIGN_IN_FAILURES = 10         // per email, per 5 minutes
+const validPassword = pw => typeof pw === 'string' && pw.length >= MIN_PASSWORD && /[A-Z]/.test(pw) && /\d/.test(pw)
 
 /* ─── Small helpers ─────────────────────────────────────────────────── */
 const b64url = v => Buffer.from(v).toString('base64url')
@@ -185,7 +186,7 @@ export function readLocalKeys(dataDir = process.env.MCARE_DATA_DIR ?? join(HERE,
 
 /* ─── The backend ───────────────────────────────────────────────────── */
 /**
- * @param {{ port?: number, host?: string, dataDir?: string, quiet?: boolean, confirmEmail?: boolean, jobs?: boolean }} [options]
+ * @param {{ port?: number, host?: string, dataDir?: string, quiet?: boolean, confirmEmail?: boolean, jobs?: boolean, exposeTestAuth?: boolean }} [options]
  *   dataDir 'memory' keeps nothing on disk (used by the tests).
  */
 export async function startBackend(options = {}) {
@@ -194,6 +195,7 @@ export async function startBackend(options = {}) {
   const dataDir = options.dataDir ?? process.env.MCARE_DATA_DIR ?? join(HERE, '..', '.data')
   const memory = dataDir === 'memory'
   const confirmEmail = options.confirmEmail ?? process.env.MCARE_CONFIRM_EMAIL === '1'
+  const exposeTestAuth = options.exposeTestAuth ?? (process.env.NODE_ENV !== 'production')
   const say = options.quiet ? () => {} : (...a) => console.log(...a)
 
   /* keys: made once per data directory, never committed */
@@ -223,7 +225,14 @@ export async function startBackend(options = {}) {
   /** Applies the migrations this database has not had yet, in order. Returns how many. */
   async function migrate() {
     let count = 0
-    for (const file of fs.readdirSync(MIGRATIONS).filter(f => f.endsWith('.sql')).sort()) {
+    const files = fs.readdirSync(MIGRATIONS).filter(f => f.endsWith('.sql')).sort()
+    // Built from migrations that no longer exist (the history was consolidated): the new files cannot run over it.
+    const unknown = [...applied].filter(v => !files.includes(v))
+    if (unknown.length) {
+      throw new Error(`The local database in ${join(dataDir, 'pg')} was built from an older migration history (${unknown.slice(0, 3).join(', ')}${unknown.length > 3 ? ', …' : ''}).\n`
+        + `  Start a new one: stop the backend, run "npm run backend:reset", then "npm run backend" and "npm run backend:seed".`)
+    }
+    for (const file of files) {
       if (applied.has(file)) continue
       try {
         await db.exec(`begin;\n${fs.readFileSync(join(MIGRATIONS, file), 'utf8')}\n;insert into supabase_migrations.schema_migrations (version) values ('${file}'); commit;`)
@@ -319,7 +328,7 @@ export async function startBackend(options = {}) {
   async function createUser({ email, password, data, confirmed }) {
     const address = String(email ?? '').trim().toLowerCase()
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) throw authError(400, 'validation_failed', 'Unable to validate email address: invalid format')
-    if (typeof password !== 'string' || password.length < MIN_PASSWORD) throw authError(422, 'weak_password', `Password should be at least ${MIN_PASSWORD} characters.`)
+    if (!validPassword(password)) throw authError(422, 'weak_password', `Password must be at least ${MIN_PASSWORD} characters and include an uppercase letter and a number.`)
     if (await userByEmail(address)) throw authError(422, 'user_already_exists', 'User already registered')
     try {
       // The mCare profile is created by the database (handle_new_user), in the same statement.
@@ -375,7 +384,7 @@ export async function startBackend(options = {}) {
     if (route === 'PUT /user') {
       const user = await me()
       if (body.password !== undefined) {
-        if (typeof body.password !== 'string' || body.password.length < MIN_PASSWORD) throw authError(422, 'weak_password', `Password should be at least ${MIN_PASSWORD} characters.`)
+        if (!validPassword(body.password)) throw authError(422, 'weak_password', `Password must be at least ${MIN_PASSWORD} characters and include an uppercase letter and a number.`)
         if (passwordMatches(body.password, user.encrypted_password)) throw authError(422, 'same_password', 'New password should be different from the old password.')
         await q(`update auth.users set encrypted_password = $2, updated_at = now() where id = $1`, [user.id, hashPassword(body.password)])
         // A new password ends every other device's session.
@@ -423,6 +432,13 @@ export async function startBackend(options = {}) {
       if (claims.role !== 'service_role') throw authError(403, 'not_admin', 'User not allowed')
       if (route === 'POST /admin/users') {
         const user = await createUser({ email: body.email, password: body.password, data: body.user_metadata, confirmed: body.email_confirm !== false })
+        return send(res, 200, userJson(user))
+      }
+      const updateUser = route.match(/^PUT \/admin\/users\/([^/]+)$/)
+      if (updateUser) {
+        if (!validPassword(body.password)) throw authError(422, 'weak_password', `Password must be at least ${MIN_PASSWORD} characters and include an uppercase letter and a number.`)
+        const user = (await q(`update auth.users set encrypted_password = $2, updated_at = now() where id = $1 returning *`, [updateUser[1], hashPassword(body.password)])).rows[0]
+        if (!user) throw authError(404, 'user_not_found', 'User not found')
         return send(res, 200, userJson(user))
       }
       if (route === 'GET /admin/users') {
@@ -657,6 +673,14 @@ export async function startBackend(options = {}) {
       if (req.method === 'OPTIONS') return send(res, 204)
       const url = new URL(req.url, 'http://local')
       if (url.pathname === '/health') return send(res, 200, { ok: true, engine: 'PGlite (Postgres)', migrations: fs.readdirSync(MIGRATIONS).filter(f => f.endsWith('.sql')).length })
+      if (url.pathname === '/__dev/auth-codes' && req.method === 'GET') {
+        if (!exposeTestAuth) return send(res, 404, { message: 'Not found' })
+        const email = (url.searchParams.get('email') ?? '').trim().toLowerCase()
+        const kind = url.searchParams.get('kind')
+        if (!email || !['signup', 'recovery'].includes(kind)) return send(res, 400, { message: 'Email and a supported code kind are required' })
+        const message = outbox.find(item => item.to.toLowerCase() === email && item.kind === kind)
+        return send(res, 200, { code: message?.code ?? null }, { 'Cache-Control': 'no-store' })
+      }
       const area = url.pathname.split('/')[1]
       if (!['auth', 'rest', 'storage'].includes(area)) return send(res, 404, { message: 'Not found' })
       const claims = claimsOf(req)

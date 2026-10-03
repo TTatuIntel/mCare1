@@ -296,7 +296,7 @@ check('patient reads the plan but cannot change it', (await as(ID.pat, `select t
   && (await as(ID.pat, `update meal_plans set target_kcal = 5000 returning patient_id`)).length === 0)
 check('patient logs water', (await as(ID.pat, `insert into hydration_logs (patient_id, day, glasses) values ($1, current_date, 6) returning glasses`, [ID.pat]))[0].glasses === 6)
 
-/* ── Patient module (0004): recorder, corrections, alert steps, care-team actions ── */
+/* ── Patient module: recorder, corrections, alert steps, care-team actions ── */
 console.log('\nPatient module')
 const one = async (sql, params) => (await db.query(sql, params)).rows[0]
 // A fresh pair: Grace (pat2) with Dr. Amara (doc), so earlier sections do not interfere.
@@ -364,7 +364,7 @@ check('how each alert ended is recorded', (await one(`select resolved_how from a
   && (await one(`select resolved_how from alerts where id = $1`, [wa.id])).resolved_how === 'remeasure')
 check('every re-measurement is linked to its alert', (await one(`select count(*)::int n from alert_remeasures where alert_id = $1 and reading_id = $2`, [al.id, recheck.id])).n === 1)
 
-// Vital resolution (0016): re-measurements stay on the one alert; a warning closes on an in-range reading whenever it comes.
+// Vital resolution: re-measurements stay on the one alert; a warning closes on an in-range reading whenever it comes.
 await g('bp', '150/95'); const w3 = (await g('bp', '151/96'))[0]
 const wb = await one(`select id from alerts where reading_id = $1`, [w3.id])
 await db.query(`update alerts set created_at = now() - interval '3 hours' where id = $1`, [wb.id])
@@ -488,7 +488,7 @@ check('a patient can close their own account, and it locks them out', (await one
 check('signed-out visitors cannot call the new functions', (await denied(null, `select accept_terms('1')`)).blocked && (await denied(null, `select doctor_rating_summary($1)`, [ID.doc])).blocked
   && (await denied(null, `select save_health_profile('{}')`)).blocked)
 
-/* ── Care integration (0005): invitations, nutrition, clinician readings, follow-up, vital definitions, document support ── */
+/* ── Care integration: invitations, nutrition, clinician readings, follow-up, vital definitions, document support ── */
 console.log('\nCare integration')
 const NEW = { nurse: '88888888-8888-4888-8888-888888888881', boss: '88888888-8888-4888-8888-888888888882', drnew: '88888888-8888-4888-8888-888888888883',
   gone: '88888888-8888-4888-8888-888888888884', late: '88888888-8888-4888-8888-888888888885' }
@@ -589,7 +589,7 @@ check('a visit is not booked for, or moved to, a day already gone',
   (await denied(DOC, `insert into appointments (patient_id, doctor_id, title, preferred_date, status) values ($1, $2, 'Past', current_date - 1, 'approved')`, [ID.pat, DOC])).blocked
   && (await denied(DOC, `update appointments set status = 'rescheduled', rescheduled_date = current_date - 1 where id = $1`, [fu])).blocked)
 
-// The appointment record (0008): reference, history, clashes, no-show, staff lookup.
+// The appointment record: reference, history, clashes, no-show, staff lookup.
 const rec = await one(`select number from appointments where id = $1`, [fu])
 check('every appointment has a reference the browser cannot change', /^APT-\d{4}-\d{5}$/.test(rec.number)
   && (await as(DOC, `update appointments set number = 'APT-0' where id = $1 returning number`, [fu]))[0].number === rec.number)
@@ -636,7 +636,7 @@ check('only a full admin purges', (await denied(ID.asst, `select purge_expired_d
 check('signed-out visitors cannot call any of it', (await denied(null, `select schedule_follow_up($1, current_date + 1)`, [ID.pat])).blocked
   && (await denied(null, `select revoke_invitation($1)`, [inv])).blocked && (await denied(null, `select staff_restore_document($1)`, [shared])).blocked)
 
-/* ── Integrity (0010): audit, account guards, prescriptions, report requests, targets, invalid readings, repeats ── */
+/* ── Integrity: audit, account guards, prescriptions, report requests, targets, invalid readings, repeats ── */
 console.log('\nIntegrity')
 // James (pat) is treated by doc2 (DOC); Dr. Amara (doc) treats nobody; there are two admins (admin, boss).
 check('the browser cannot write the audit trail', (await denied(ID.pat, `insert into audit_log (actor_id, action, detail) values ($1, 'Forged', 'x')`, [ID.pat])).blocked
@@ -719,7 +719,7 @@ check('a care-team notification says which patient it is about', about?.resource
 check('reading a notification stamps when, and what it is about cannot be changed', (await as(ID.pat, `update notifications set read = true where id = (select id from notifications where not read limit 1) returning read_at`))[0]?.read_at != null
   && (await denied(DOC, `update notifications set resource_id = 'x'`)).blocked)
 
-/* ── Relationships and accounts (0011): assignment history, removing a doctor, past patients ── */
+/* ── Relationships and accounts: assignment history, removing a doctor, past patients ── */
 console.log('\nRelationships')
 // So far James (pat) went from Dr. Amara (doc) to doc2, and so did Grace (pat2).
 const openFor = async pt => (await db.query(`select doctor_id, reason, assigned_by from care_assignments where patient_id = $1 and ended_at is null`, [pt])).rows
@@ -749,7 +749,7 @@ check('a new assignment records who made it and why; the doctor is told which pa
   && (await as(ID.doc, `select resource_id from notifications where title = 'New patient assigned' order by created_at desc limit 1`))[0].resource_id === ID.pat)
 const TREAT = ID.doc   // Dr. Amara treats James again; doc2 no longer does
 
-/* ── Clinical record (0012): note visibility and amendments, prescription details and status, care plans ── */
+/* ── Clinical record: note visibility and amendments, prescription details and status, care plans ── */
 console.log('\nClinical record')
 const noteCount = async () => (await as(ID.pat, `select 1 from notifications where title = 'New note from your doctor'`)).length
 const noteTold = await noteCount()
@@ -831,7 +831,7 @@ check('a completed plan is closed: it and its goals stay as they were', closedPl
 check('the patient reads the whole history of their plan', (await as(ID.pat, `select action from care_plan_events where plan_id = $1 order by id`, [plan1])).map(e => e.action).join()
   === 'created,active,item_achieved,edited,on_hold,active,completed')
 
-/* ── Availability (0013): working hours, days away, and booking checked against them ── */
+/* ── Availability: working hours, days away, and booking checked against them ── */
 console.log('\nAvailability')
 const dow = async n => (await one(`select extract(dow from current_date + ${n})::int d`)).d
 const hours = JSON.stringify([{ weekday: await dow(7), start: '09:00', end: '12:00' }, { weekday: await dow(7), start: '14:00', end: '16:00' }])
@@ -860,7 +860,7 @@ check('the doctor can still place a visit in their own day; a doctor with no tim
   (await as(TREAT, `insert into appointments (patient_id, doctor_id, title, preferred_date, preferred_time, status) values ($1, $2, 'Evening call', current_date + 7, '18:00', 'approved') returning id`, [ID.pat, TREAT])).length === 1
   && (await ask(8, '06:15', ID.pat, DOC)).length === 1 && (await as(ID.pat, `select doctor_availability($1, current_date + 8) a`, [DOC]))[0].a.managed === false)
 
-/* ── Administration (0014): support acts on the one appointment; support requests; the operational report ── */
+/* ── Administration: support acts on the one appointment; support requests; the operational report ── */
 console.log('\nAdministration')
 const move = (who, id, date, time, reason) => denied(who, `select admin_update_appointment($1, 'move', current_date + ${date}, $2, $3)`, [id, time, reason])
 check('only someone who handles support changes an appointment for others, and always with a reason', (await move(ID.asst, inHours, 7, '11:00', 'Patient asked by phone')).blocked
@@ -895,7 +895,7 @@ check('it is for an administrator or someone who reads the audit log, and for a 
   && (await denied(ID.asst, `select admin_report(current_date - 30, current_date)`)).blocked && (await denied(ID.pat, `select admin_report(current_date - 30, current_date)`)).blocked
   && (await denied(ID.admin, `select admin_report(current_date - 800, current_date)`)).blocked)
 
-/* ── Synchronisation (0015): one token that changes when anything a person may see changes ── */
+/* ── Synchronisation: one token that changes when anything a person may see changes ── */
 console.log('\nSynchronisation')
 const changeToken = async who => (await as(who, `select my_change_token() t`))[0].t
 const [docT, patT, adminT, otherT] = [await changeToken(TREAT), await changeToken(ID.pat), await changeToken(ID.admin), await changeToken(ID.evil)]
@@ -914,7 +914,7 @@ check('the counters are read only by those who may see the patient, and written 
   && (await denied(ID.pat, `insert into system_changes (topic) values ('x')`)).blocked)
 check('a signed-out visitor or a closed account gets no token', (await denied(null, `select my_change_token()`)).blocked && (await denied(ID.pat2, `select my_change_token()`)).blocked)
 
-/* ── Messaging (0017): who may write to whom, and where a message notification leads ── */
+/* ── Messaging: who may write to whom, and where a message notification leads ── */
 console.log('\nMessaging')
 // Dr. Amara (TREAT) treats James again; doc2 (DOC) treated him before.
 await as(TREAT, `insert into messages (from_id, to_id, content) values ($1, $2, 'How are the new tablets?')`, [TREAT, ID.pat])
@@ -928,7 +928,7 @@ check('a former doctor and the patient can no longer write to each other', (awai
 check('staff cannot read a conversation, and nobody can write as someone else', (await as(ID.admin, `select 1 from messages`)).length === 0 && (await as(ID.asst, `select 1 from messages`)).length === 0
   && (await denied(ID.pat, `insert into messages (from_id, to_id, content) values ($1, $2, 'Forged')`, [TREAT, ID.pat])).blocked)
 
-/* ── Care team (0018): a consulting doctor reads the record and changes nothing ── */
+/* ── Care team: a consulting doctor reads the record and changes nothing ── */
 console.log('\nCare team')
 check('before being added, another doctor sees nothing of the patient', (await as(DOC, `select 1 from readings where patient_id = $1`, [ID.pat])).length === 0
   && (await as(DOC, `select 1 from profiles where id = $1`, [ID.pat])).length === 0)
@@ -972,7 +972,7 @@ check('a consulting doctor who becomes the treating doctor is no longer listed a
   && (await as(DOC, `select 1 from clinical_notes where patient_id = $1 and visibility = 'internal'`, [ID.pat])).length > 0)
 await as(ID.admin, `select assign_doctor($1, $2, 'Back to the first doctor')`, [ID.pat, TREAT])
 
-/* ── Delivery (0019): every notification is queued as an email; only the sender works the queue ── */
+/* ── Delivery: every notification is queued as an email; only the sender works the queue ── */
 console.log('\nDelivery')
 const queued = async () => (await one(`select count(*)::int n from notification_deliveries where status = 'queued'`)).n
 const before19 = await queued()
@@ -992,7 +992,7 @@ await as(ID.admin, `select set_account_status($1, 'suspended', 'Testing delivery
 check('nothing is queued for an account that has been stopped', await queued() === 0)
 await as(ID.admin, `select set_account_status($1, 'active')`, [ID.evil])
 
-/* ── Audit search (0020): the whole trail, by words, by person, by kind of person, in pages ── */
+/* ── Audit search: the whole trail, by words, by person, by kind of person, in pages ── */
 console.log('\nAudit search')
 const search = (who, q = null, kind = null, before = null, size = 100) => as(who, `select id, action, actor_role from search_audit($1, $2, $3, $4)`, [q, kind, before, size])
 const found = await search(ID.admin, 'consulting')
@@ -1004,7 +1004,7 @@ const page2 = await search(ID.admin, null, null, page1[4].id, 5)
 check('it comes in pages, newest first, without repeats', page1.length === 5 && page2.length === 5 && Number(page2[0].id) < Number(page1[4].id))
 check('only someone who may read the audit log gets anything', (await search(ID.pat)).length === 0 && (await search(TREAT)).length === 0 && (await search(ID.asst)).length === 0)
 
-/* ── Delivery channels (0021): email, SMS for what cannot wait, push per device; each the person's choice ── */
+/* ── Delivery channels: email, SMS for what cannot wait, push per device; each the person's choice ── */
 console.log('\nDelivery channels')
 await db.query(`update notification_deliveries set status = 'sent' where status in ('queued', 'sending')`)
 const waiting = async (channel, user) => (await db.query(`select to_address, subject from notification_deliveries where status = 'queued' and channel = $1 and user_id = $2`, [channel, user])).rows

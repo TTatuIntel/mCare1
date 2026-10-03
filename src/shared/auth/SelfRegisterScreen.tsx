@@ -108,7 +108,7 @@ export function SelfRegisterScreen({ onSignIn, onConfirm }: {
 
       <AuthField label="Password">
         <PasswordInput value={form.password} onChange={v => set('password', v)}
-          placeholder={`${MIN_PASSWORD_LEN}+ characters, Aa and 1`} autoComplete="new-password" />
+          placeholder={`${MIN_PASSWORD_LEN}+ characters, A and 1`} autoComplete="new-password" />
       </AuthField>
       <PasswordMeter value={form.password} />
 

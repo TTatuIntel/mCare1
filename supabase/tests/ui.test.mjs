@@ -24,7 +24,7 @@ import { startBackend } from '../dev/server.mjs'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..', '..')
 const SHOTS = join(HERE, '..', '.data', 'screens')
-const PW = 'Mcare-Test-2026'
+const PW = 'A1b23'
 const SIZES = { phone: { width: 390, height: 844 }, tablet: { width: 834, height: 1112 }, laptop: { width: 1366, height: 768 } }
 
 async function loadPlaywright() {
@@ -112,7 +112,7 @@ try {
     await page.getByPlaceholder('Grace Otieno').fill('Test New Patient')
     await page.getByPlaceholder('you@example.com').fill(email)
     await page.locator('input[type=tel]').first().fill('712345678')
-    await page.getByPlaceholder(/characters, Aa and 1/).fill(PW)
+    await page.getByPlaceholder(/characters, A and 1/).fill(PW)
     await page.getByPlaceholder('Repeat your password').fill(PW)
     await page.getByRole('checkbox').check()
     await page.getByRole('button', { name: 'Sign up' }).click()
@@ -493,7 +493,12 @@ try {
     await a.page.getByText('(title hidden)').first().waitFor({ timeout: 15000 })
     if (/test lab result/i.test(await a.text())) throw new Error('a document title is visible to the admin')
   })
-  const pat2Id = (await row(service.from('profiles').select('id').eq('email', 'test.patient2@mcare.test').single())).id
+  const patientTwo = await service.auth.admin.createUser({
+    email: 'test.patient2@mcare.test', password: PW, email_confirm: true,
+    user_metadata: { full_name: 'Test Patient Two' },
+  })
+  if (patientTwo.error) throw new Error(`create second-patient test fixture: ${patientTwo.error.message}`)
+  const pat2Id = patientTwo.data.user.id
   const doc2Id = (await row(service.from('profiles').select('id').eq('email', 'test.doctor2@mcare.test').single())).id
   await step(a, 'the admin assigns a doctor; the patient, the doctor and the history all show it', async () => {
     await a.nav('Assign')

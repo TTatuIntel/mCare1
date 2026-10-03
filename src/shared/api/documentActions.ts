@@ -3,7 +3,7 @@
  * files in the private `documents` storage bucket.
  *
  * Who may open, sign, release, correct, share or delete is decided by the
- * database (supabase/migrations/0002_documents.sql). A file is readable
+ * database (supabase/migrations/0007_documents.sql). A file is readable
  * exactly when its document row is, because the bucket's rule looks the row
  * up as the person asking.
  */

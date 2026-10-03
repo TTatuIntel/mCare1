@@ -6,7 +6,7 @@
  *
  * Every account is named "Test …" and uses an @mcare.test address, so test
  * records can never be mistaken for real patients. Safe to run again: it
- * skips what already exists.
+ * creates missing accounts and refreshes the existing test accounts.
  *
  * It uses the same supabase-js calls a hosted project accepts. To seed a
  * hosted project instead, set SUPABASE_URL, SUPABASE_ANON_KEY and
@@ -19,7 +19,7 @@ const local = readLocalKeys()
 const url = process.env.SUPABASE_URL ?? `http://127.0.0.1:${process.env.MCARE_BACKEND_PORT || 54321}`
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? local?.serviceKey
 const anonKey = process.env.SUPABASE_ANON_KEY ?? local?.anonKey
-const password = process.env.MCARE_SEED_PASSWORD ?? 'Mcare-Test-2026'
+const password = process.env.MCARE_SEED_PASSWORD ?? 'A1b23'
 
 if (!serviceKey || !anonKey) {
   console.error('No backend keys found. Start the backend first:  npm run backend')
@@ -35,7 +35,6 @@ const ACCOUNTS = [
   { key: 'doctor2',   email: 'test.doctor2@mcare.test',   name: 'Dr. Test Mutua',    role: 'doctor',
     doctor: { specialty: 'Internal Medicine', license_no: 'TEST-0002', hospital: 'mCare Test Clinic' } },
   { key: 'patient',   email: 'test.patient@mcare.test',   name: 'Test Patient One',  role: 'patient', phone: '+254 700 000 101' },
-  { key: 'patient2',  email: 'test.patient2@mcare.test',  name: 'Test Patient Two',  role: 'patient', phone: '+254 700 000 102' },
 ]
 
 const options = { auth: { persistSession: false, autoRefreshToken: false } }
@@ -52,6 +51,8 @@ try {
         email: a.email, password, email_confirm: true,
         user_metadata: { full_name: a.name, phone: a.phone ?? '', ...(a.role === 'doctor' ? { role: 'doctor' } : {}) },
       }), `create ${a.email}`).user
+    } else {
+      must(await admin.auth.admin.updateUserById(user.id, { password }), `reset password for ${a.email}`)
     }
     ids[a.key] = user.id
 
@@ -67,7 +68,7 @@ try {
     }
   }
 
-  // Test Patient One is under Dr. Test Achieng; Test Patient Two has no doctor yet, to try the request flow.
+  // The single seeded patient is under Dr. Test Achieng and has a small clinical starter record.
   const pt = must(await admin.from('patients').select('assigned_doctor_id').eq('id', ids.patient).single(), 'read patient')
   if (!pt.assigned_doctor_id)
     must(await admin.from('patients').update({ assigned_doctor_id: ids.doctor }).eq('id', ids.patient), 'assign doctor')
@@ -85,7 +86,7 @@ try {
 
   console.log('\nTest accounts (password for all: ' + password + ')\n')
   for (const a of ACCOUNTS) console.log(`  ${a.role.padEnd(10)} ${a.email.padEnd(28)} ${a.name}`)
-  console.log('\nTest Patient One is assigned to Dr. Test Achieng. Test Patient Two has no doctor yet.\n')
+  console.log('\nTest Patient One is assigned to Dr. Test Achieng.\n')
 } catch (e) {
   console.error(`Seeding failed. ${e.message}`)
   if (/fetch failed|ECONNREFUSED/.test(String(e.message) + String(e.cause?.message ?? ''))) console.error('Is the backend running?  npm run backend')

@@ -1,5 +1,5 @@
 {
-  "name": "figma-make-app",
+  "name": "mcare",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -12,6 +12,8 @@
     "typecheck": "tsc --noEmit -p .",
     "backend": "node supabase/dev/server.mjs",
     "backend:seed": "node supabase/dev/seed.mjs",
+    "backend:reset": "node -e \"require('fs').rmSync('supabase/.data/pg', { recursive: true, force: true }); console.log('Local database removed. Run npm run backend, then npm run backend:seed.')\"",
+    "db:schema": "node supabase/dev/fingerprint.mjs",
     "test:db": "node supabase/tests/rules.test.mjs",
     "test:api": "node supabase/tests/api.test.mjs",
     "test:ui": "node supabase/tests/ui.test.mjs",

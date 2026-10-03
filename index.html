@@ -1,7 +1,6 @@
 <!doctype html>
-<html lang="<!-- figma:lang -->">
+<html lang="en">
   <head>
-    <!-- figma:head-start -->
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Follow the text size set on the device: the app is sized in rem, so it all scales together. -->
@@ -9,7 +8,12 @@
     <!-- Open the font connections early so the splash's brand font is ready sooner. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <title><!-- figma:title --></title>
+    <title>mCare</title>
+    <meta name="description" content="mCare: remote patient monitoring. Patients log vitals, medicines and meals; doctors follow them, answer alerts and keep the clinical record." />
+    <!-- A private health app: keep it out of search engines (public/robots.txt says the same). -->
+    <meta name="robots" content="noindex, nofollow" />
+    <meta property="og:title" content="mCare" />
+    <meta property="og:description" content="mCare: remote patient monitoring. Patients log vitals, medicines and meals; doctors follow them, answer alerts and keep the clinical record." />
     <!-- The brand fonts (the same address index.css imports, so they are fetched once). Loaded without holding up the first paint. -->
     <link id="brand-fonts" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;0,9..144,700;1,9..144,400&family=DM+Mono:wght@400;500&display=swap" media="print" onload="this.media='all'" />
     <!-- The boot splash is plain HTML and CSS so it is on screen at once, before the app's code has downloaded
@@ -62,10 +66,8 @@
       }
       @keyframes boot-calm-in { from { opacity: 0; } to { opacity: 1; } }
     </style>
-    <!-- figma:head-end -->
   </head>
   <body>
-    <!-- figma:body-start -->
     <div id="root"></div>
     <div id="boot-splash" role="status" aria-live="polite" aria-label="mCare is starting">
       <div class="boot-logo">
@@ -98,6 +100,5 @@
       })()
     </script>
     <script type="module" src="/src/main.tsx"></script>
-    <!-- figma:body-end -->
   </body>
 </html>
