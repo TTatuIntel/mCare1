@@ -8,11 +8,22 @@ Patients log vitals, medicines, meals and water from their phone. Their doctor f
 
 ---
 
+## Status
+
+*As of 3 October 2026. Detail: [docs/STATUS.md](docs/STATUS.md).*
+
+| | |
+| --- | --- |
+| **Works** | All four portals, end to end, against the bundled local backend (real Postgres) and in demo mode. Phone, tablet and laptop layouts. |
+| **Tested** | Typecheck clean · 354 database-rule checks · 153 API checks · 66 browser checks across all portals at three screen widths: all passing. |
+| **Recently finished** | Private messages between a patient and each consulting doctor; clearer sign-up errors; test codes only in dev builds; welcome-screen spacing. |
+| **Not yet done** | Running on a hosted Supabase project · real email, SMS and push providers · reviewed legal text · server-side file scanning · sharing files (not just reports) by link · physical-phone testing · CI. |
+
 ## Features
 
 | Portal | Highlights |
 | --- | --- |
-| **Patient** | Vitals with server-side grading, trends and history · alerts with one-tap **Re-measure** (an in-range reading clears a warning automatically) · SOS · medication schedule · meal plan and water · appointments · messages with the doctor · medical documents with private sharing · notifications by email, SMS and push |
+| **Patient** | Vitals with server-side grading, trends and history · alerts with one-tap **Re-measure** (an in-range reading clears a warning automatically) · SOS · medication schedule · meal plan and water · appointments · private chats with the treating doctor and each consulting doctor · medical documents with private sharing · notifications by email, SMS and push |
 | **Doctor** | Patients ranked by risk · alert workflow: acknowledge, request a re-measurement, comment, record actions and instructions, resolve or book a follow-up · readings, targets and critical ranges · prescriptions · clinical notes · care plans · meal plans · appointments and working hours · signed vitals reports showing every abnormal reading and how it was resolved · consulting doctors |
 | **Admin / Assistant** | Doctor approvals · registration by invitation · account status · doctor assignment and history · alert monitoring · appointment and support desk · document registry and recovery · searchable audit log · operational reports · assistants limited to the permissions they are granted |
 
@@ -53,7 +64,7 @@ npm run dev                            # terminal 2: the app at http://localhost
 npm run backend:seed                   # once: test accounts
 ```
 
-Sign in with `test.patient@mcare.test`, `test.doctor@mcare.test` or `test.admin@mcare.test`, password `A1b23`.
+Sign in with `test.patient@mcare.test`, `test.doctor@mcare.test`, `test.admin@mcare.test` or `test.assistant@mcare.test`, password `A1b23`.
 
 To try it on a phone on the same Wi-Fi, run `npm run phone` and open `http://<laptop IP>:8444`.
 
@@ -80,23 +91,31 @@ src/
   admin/       admin portal
   assistant/   assistant portal (admin screens, gated by permissions)
 supabase/
-  migrations/  the database in 10 files: schema, helpers, one file per domain, security, reference data
+  migrations/  the database: schema, helpers, one file per domain, security, reference data, changes since
   dev/         local backend and seeding
   functions/   deliver: email, SMS and push sender
   tests/       rule, API and browser tests
+docs/          reference: status, data model, database, portals, delivery, testing, running
 public/        logo, push service worker, robots.txt
 ```
 
 ## Deploying
 
-1. Create a Supabase project, enable `pg_cron`, and run `supabase/migrations` in order.
+1. Create a Supabase project, enable `pg_cron`, and run `supabase/migrations` in order. Keep email confirmation on.
 2. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for the build, then `npm run build` and host `dist/` on any static host.
 3. Deploy `supabase/functions/deliver` with the email, SMS and push provider keys, and schedule it.
 
+Step by step: [docs/RUNNING.md](docs/RUNNING.md#hosted-supabase) and [docs/DELIVERY.md](docs/DELIVERY.md).
+
 ## Documentation
 
-Everything else (code rules, data model and ownership, every database rule and automation, each portal in detail, notification delivery, testing and known gaps) is in **[AGENTS.md](AGENTS.md)**.
-
-## Status
-
-Fully working against the bundled local backend and covered by the rule, API and browser test suites. Not yet run against a hosted Supabase project or real email/SMS/push providers; see *Known gaps* in [AGENTS.md](AGENTS.md#10-known-gaps).
+| Document | For |
+| --- | --- |
+| [AGENTS.md](AGENTS.md) | Anyone changing the code (people and coding agents): code rules, a map of every file, where each kind of change goes, step-by-step recipes |
+| [docs/STATUS.md](docs/STATUS.md) | What works, what is in progress, what is pending, known gaps |
+| [docs/DATA_MODEL.md](docs/DATA_MODEL.md) | Who owns each record, who may do what, workflows |
+| [docs/DATABASE.md](docs/DATABASE.md) | Migrations, tables, access rules, what the database does by itself |
+| [docs/PORTALS.md](docs/PORTALS.md) | Each portal's features, screens and the tables behind them |
+| [docs/DELIVERY.md](docs/DELIVERY.md) | Notifications by email, SMS and push |
+| [docs/TESTING.md](docs/TESTING.md) | The test suites and how to add a check |
+| [docs/RUNNING.md](docs/RUNNING.md) | Setup, environment, phones, hosted Supabase |
