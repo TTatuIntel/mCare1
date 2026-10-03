@@ -25,7 +25,7 @@ export function LoginScreen() {
   const adopt = useAdoptAccount()
   const { entering, enterError, retryEnter } = useApp()
   const [testActivation] = useState(() => {
-    if (!localBackend) return undefined
+    if (!import.meta.env.DEV || !localBackend) return undefined
     const params = new URLSearchParams(window.location.search)
     const email = params.get('email') ?? ''
     const code = params.get('code') ?? ''

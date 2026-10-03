@@ -108,7 +108,7 @@ function GetStartedButton({ onClick }: { onClick: () => void }) {
   }
 
   return (
-    <div ref={wrapRef} className="relative mx-auto mt-5 w-fit transition-transform duration-200 ease-out">
+    <div ref={wrapRef} className="relative mx-auto mt-7 w-fit transition-transform duration-200 ease-out">
       <span aria-hidden className="auth-glow absolute inset-x-6 -bottom-1.5 h-8 rounded-full bg-teal-500/60 blur-xl" />
       <span aria-hidden className="auth-cta-ring pointer-events-none absolute inset-0 rounded-full ring-2 ring-teal-500/60" />
       <button type="button" onClick={onClick}
@@ -167,7 +167,7 @@ export function WelcomeScreen({ onGetStarted, onSignIn, onDemo }: {
       <section aria-labelledby="welcome-start" className="flex flex-1 flex-col justify-center text-center">
         {/* A touch larger than the tour above it, so the eye lands on the way in. */}
         <h2 id="welcome-start" className="text-xl font-black text-gray-900 font-display leading-tight">Let’s get you started</h2>
-        <p className="mt-1.5 text-[13px] text-gray-600">New to mCare? Create your account in a minute.</p>
+        <p className="mt-3 text-sm leading-relaxed text-gray-600">New to mCare? Create your account in a minute.</p>
 
         <GetStartedButton onClick={onGetStarted} />
 

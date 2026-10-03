@@ -411,9 +411,24 @@ check('the treating doctor adds a consulting doctor, who then reads the record a
   && (await doc2.from('readings').select('id').eq('patient_id', patId)).data?.length > 0
   && !!(await doc2.from('clinical_notes').insert({ patient_id: patId, author_id: doc2Id, content: 'x' })).error
   && (await doc2.from('clinical_notes').select('id').eq('visibility', 'internal')).data?.length === 0, addMember.error?.message)
+const consultMessage = await pat.from('messages').insert({ from_id: patId, to_id: doc2Id, content: 'A private question for my consultant' }).select().single()
+const consultReply = await doc2.from('messages').insert({ from_id: doc2Id, to_id: patId, content: 'A private reply from my consultant' }).select().single()
+const patientToConsultant = await pat.from('messages').select('id').eq('from_id', patId).eq('to_id', doc2Id)
+const consultantToPatient = await pat.from('messages').select('id').eq('from_id', doc2Id).eq('to_id', patId)
+const consultantConsultThread = await doc2.from('messages').select('id').eq('from_id', patId).eq('to_id', doc2Id)
+const treatingConsultThread = await doc.from('messages').select('id').in('content', ['A private question for my consultant', 'A private reply from my consultant'])
+check('patient and consulting doctor share a private one-to-one thread', !!consultMessage.data?.id && !!consultReply.data?.id
+  && patientToConsultant.data?.length === 1 && consultantToPatient.data?.length === 1
+  && consultantConsultThread.data?.length === 1 && treatingConsultThread.data?.length === 0,
+  JSON.stringify({ patientInsert: consultMessage.error?.message, consultantInsert: consultReply.error?.message,
+    patientSent: patientToConsultant.data?.length, patientReceived: consultantToPatient.data?.length,
+    consultantRows: consultantConsultThread.data?.length, treatingRows: treatingConsultThread.data?.length,
+    readError: patientToConsultant.error?.message ?? consultantToPatient.error?.message ?? consultantConsultThread.error?.message ?? treatingConsultThread.error?.message }))
 check('the patient sees who is on their care team', (await pat.from('care_team_members').select('doctor_id').is('ended_at', null)).data?.[0]?.doctor_id === doc2Id)
 check('the consulting doctor can leave; access ends', !(await doc2.rpc('remove_consulting_doctor', { member: addMember.data })).error
-  && (await doc2.from('readings').select('id').eq('patient_id', patId)).data?.length === 0)
+  && (await doc2.from('readings').select('id').eq('patient_id', patId)).data?.length === 0
+  && !!(await pat.from('messages').insert({ from_id: patId, to_id: doc2Id, content: 'No longer authorized' })).error
+  && (await pat.from('messages').select('id').eq('to_id', doc2Id)).data?.length === 1)
 
 const sentNow = await backend.deliver()
 check('queued notification emails are sent by the sender and marked sent', sentNow > 0 && backend.outbox.some(m => m.kind === 'notification')

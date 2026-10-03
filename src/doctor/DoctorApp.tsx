@@ -25,7 +25,7 @@ const SCREENS = ['dashboard', 'patients', 'appts', 'alerts', 'messages', 'profil
 export type PatientSection = Section
 
 export default function DoctorApp() {
-  const { activeAlerts, appointments, patients, patient, unreadFrom } = useDoctor()
+  const { activeAlerts, appointments, patients, consulting, patient, unreadFrom } = useDoctor()
   const [tab, setTab] = useState('dashboard')
   const [openId, setOpenId] = useState<string | null>(null)
   const [openSection, setOpenSection] = useState<PatientSection | undefined>()
@@ -38,7 +38,8 @@ export default function DoctorApp() {
   const badge: Record<string, number> = {
     alerts: activeAlerts.length,
     appts: appointments.filter(a => a.status === 'requested').length,
-    messages: patients.reduce((n, p) => n + unreadFrom(p.id), 0),
+    messages: [...new Set([...patients.map(p => p.id), ...consulting.map(c => c.patient.id)])]
+      .reduce((n, patientId) => n + unreadFrom(patientId), 0),
   }
   const openChat = (id: string) => { setOpenId(null); setChatWith(id); setTab('messages') }
   const openPatient = (id: string, section?: PatientSection, docId?: string) => { setOpenId(id); setOpenSection(section); setOpenDoc(docId); setTab('patients') }

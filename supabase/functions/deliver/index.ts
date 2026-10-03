@@ -11,7 +11,7 @@
  *
  * NOT YET RUN AGAINST A HOSTED PROJECT OR A REAL PROVIDER. The queue it works is
  * tested; the calls to the providers are written to their published APIs and
- * must be tried once the keys exist. Setup: AGENTS.md, "Notifications and delivery".
+ * must be tried once the keys exist. Setup: docs/DELIVERY.md.
  */
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import webpush from 'npm:web-push@3'

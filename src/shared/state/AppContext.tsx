@@ -1334,11 +1334,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const sendMessage = (fromId: string, toId: string, content: string, ref?: string): Saved => {
     if (!content.trim()) return refused('Write a message first.')
     if (LIVE) return run(() => api.sendMessage(fromId, toId, content, ref))
-    // The same rule the database applies: a patient and the doctor who treats them now.
+    // The same rule the database applies: a patient and a current treating or consulting doctor.
     const a = findUser(fromId), b = findUser(toId)
     const pt = (a?.role === 'patient' ? a : b?.role === 'patient' ? b : undefined) as PatientUser | undefined
     const other = pt?.id === fromId ? toId : fromId
-    if (!pt || pt.assignedDoctorId !== other) return refused('You can only message the doctor who treats you, or a patient under your care.')
+    const doctor = findUser(other)
+    const mayMessage = !!pt && (pt.assignedDoctorId === other || careTeam.some(m => m.patientId === pt.id && m.doctorId === other && !m.endedAt))
+    if (!pt || doctor?.role !== 'doctor' || !mayMessage) return refused('You can only message a doctor currently on your care team, or a patient assigned to or consulted on by you.')
     setMessages(prev => [...prev, { id: uid('msg'), fromId, toId, content: content.trim(), sentAt: stamp(), at: Date.now(), read: false }])
     notify(toId, 'message', `New message from ${findUser(fromId)?.name ?? 'mCare'}`, content.trim().slice(0, 80), 'messages')
     return done()

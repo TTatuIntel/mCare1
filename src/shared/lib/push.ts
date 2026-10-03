@@ -3,7 +3,7 @@
  *
  * Available when the browser supports it, the page is served over https (or
  * localhost), and mCare has a push key (VITE_VAPID_PUBLIC_KEY, the public half
- * of the key pair the sender uses: AGENTS.md, "Notifications and delivery"). The service worker is
+ * of the key pair the sender uses: docs/DELIVERY.md). The service worker is
  * public/sw.js.
  */
 const VAPID = (import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined)?.trim() ?? ''
