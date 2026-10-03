@@ -119,6 +119,7 @@ What the person sees or says, and where it lives. Screen titles are the `Page` /
 | Profile card, edit profile, change password, theme, font size, help, deactivate | `shared/profile/ProfileCard.tsx`, `AccountSheets.tsx` |
 | Empty page message | `EmptyState` in `shared/ui/Page.tsx` |
 | Colours, fonts, animations, text size | `src/index.css`, `shared/layout/deviceScale.ts` |
+| "Static on the phone", reduce motion, Animations setting | `shared/layout/motion.ts`, `index.html` (inline script), `ThemeFontSheet` in `shared/profile/AccountSheets.tsx` |
 | Emails, SMS wording | `shared/email/emailTemplate.ts` |
 | Demo mode, sample people | `shared/state/demoData.ts`, `shared/documents/docSeed.ts` |
 
@@ -157,17 +158,18 @@ Node 22+. First time: `npm install && npm i --no-save @electric-sql/pglite` (PGl
 
 | Command | What it does |
 | --- | --- |
-| `npm run backend` | Local Postgres + Supabase API on :54321; applies new migrations; writes `.env.local` (switches the app to live mode). |
+| `npm run backend` | Local Postgres + Supabase API on :54321; applies new migrations; writes `.env.local` (switches the app to live mode). One backend per data folder; seeds a new database; keeps a copy at each clean stop and recovers from it after a kill. |
 | `npm run dev` | The app on :8443 (hot reload). |
 | `npm run backend:seed` | Test accounts (safe to repeat). |
-| `npm run backend:reset` | Delete the local database; then `backend` and `backend:seed` again. |
+| `npm run backend:stop` | Stop a running backend cleanly from another terminal. |
+| `npm run backend:reset` | Delete the local database and its copies (not while a backend runs); then `backend`. |
 | `npm run typecheck` | **Run after changing `src/`.** |
 | `npm test` | Rule + API suites. **Run after changing a migration.** |
 | `npm run test:ui` | Four portals in headless Chromium at three widths (needs Playwright; minutes). |
 | `npm run phone` | Production build on :8444 for a phone on the same Wi-Fi. |
 | `npm run build` · `preview` · `format` · `db:schema` | Build · serve it · oxfmt · print what the migrations build. |
 
-Test accounts (password `A1b23`): `test.patient@mcare.test`, `test.doctor@mcare.test` (Dr. Test Achieng, treats the patient), `test.doctor2@mcare.test` (Dr. Test Mutua), `test.admin@mcare.test`, `test.assistant@mcare.test`.
+Test accounts (password `M7c24`): `test.patient@mcare.test` (Patient One: two weeks of readings, an open alert, medicines, care plan, visits, messages), `test.patient2@mcare.test`, `test.patient3@mcare.test` (waiting for a doctor), `test.doctor@mcare.test` (Dr. Test Achieng, treats One and Two), `test.doctor2@mcare.test` (Dr. Test Mutua, consults on One), `test.doctor3@mcare.test` (awaiting approval), `test.admin@mcare.test`, `test.assistant@mcare.test`. What each holds: [RUNNING.md → Test accounts](docs/RUNNING.md#test-accounts).
 
 **Modes.** *Live* when `.env.local` sets `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (local backend or hosted); *demo* otherwise (sample data in memory from `src/shared/state/demoData.ts`, nothing saved). Delete `.env.local` to go back to demo. More: [docs/RUNNING.md](docs/RUNNING.md).
 
@@ -188,6 +190,8 @@ Test accounts (password `A1b23`): `test.patient@mcare.test`, `test.doctor@mcare.
 - Brand teal (`teal-700`) is the only colour for action buttons. Blue, purple and amber mark status or role only.
 - Fonts: `font-display` for headings, `font-mono` for numbers. Never inline `fontFamily`.
 - The loading popup (`Loading` / `useLoader`) overlays the page that is already up, and only for real waits; never a standalone loading screen.
+- **Motion** follows one setting, `data-motion` on `<html>` (`layout/motion.ts`: the device's reduce-motion setting unless the person chose Full or Reduced in Theme & Font). Never test `prefers-reduced-motion` yourself: CSS uses `:where(:root[data-motion='reduce']) .x { … }`, markup uses `motion-safe:` / `motion-reduce:` (redefined in `index.css`), scripts call `reducedMotion()`. Under reduce, movement becomes a fade or an in-place glow, not nothing; opacity-only effects (`animate-pulse`) need no guard.
+- **Secure-context APIs** (`navigator.clipboard`, `crypto.randomUUID`, `crypto.subtle`, service worker, push) are missing on a phone opening `http://<laptop IP>`. Use the helpers that fall back (`copyText`, `newRef`) and never let a feature depend on one silently.
 - Reusable UI goes in `src/shared/ui/`, not inside a screen. Import UI from `@/shared`.
 - Tailwind v4 needs no config file: global CSS and theme customisation go in `src/index.css`, `@import` statements first, then `@font-face` and font defaults.
 - Imports: `@/…` for anything in another folder, `./…` within the same folder, never `../`. No other files belong at the top of `src/`.
@@ -231,7 +235,7 @@ Test accounts (password `A1b23`): `test.patient@mcare.test`, `test.doctor@mcare.
 | Sign-in, sign-up, recovery | `src/shared/auth/*`, `src/shared/api/authBackend.ts`, password policy `src/shared/state/auth.ts` |
 | Profile and account settings (all roles) | `src/shared/profile/*` |
 | Nav bar, frame, connection banner | `src/shared/layout/PortalShell.tsx`, `NavBar.tsx`, `PhoneShell.tsx` |
-| Theme, fonts, animations, font scale | `src/index.css` |
+| Theme, fonts, animations, font scale | `src/index.css`; how much things move: `src/shared/layout/motion.ts` |
 | Boot splash | `index.html` (`#boot-splash`), `src/shared/layout/SplashScreen.tsx`, `splashSignal.ts` |
 | Demo sample data | `src/shared/state/demoData.ts`, `src/shared/documents/docSeed.ts` |
 | Test accounts | `supabase/dev/seed.mjs` |
@@ -293,13 +297,13 @@ Every source file, one line each. Sizes are lines (≈). `ui/`, `layout/` and `p
 
 | File | Holds |
 | --- | --- |
-| `index.html` | HTML shell, metadata, the plain-HTML boot splash `#boot-splash`. |
+| `index.html` | HTML shell, metadata, the inline script that sets `data-motion` before paint, the plain-HTML boot splash `#boot-splash`. |
 | `vite.config.ts` | React + Tailwind plugins, `@` → `src/`, proxy of `/auth/v1` `/rest/v1` `/storage/v1` `/__dev` to the local backend, `__APP_VERSION__`. |
 | `package.json` · `tsconfig.json` · `.mise.toml` | Scripts · strict TS with `@/*` paths · Node 22 + pnpm 10. |
 | `public/` | `brand/mcare-logo.png` (also used in emails), `sw.js` (push service worker), `robots.txt`. |
 | `src/main.tsx` | Entry: imports `index.css`, mounts `App`. |
 | `src/App.tsx` | Role router: share link → `SharedDocuments`; signed out → auth; else the portal for the role. |
-| `src/index.css` (411) | Tailwind import, theme tokens, fonts, font-scale rules, `card-flow`, sheet and auth animations. |
+| `src/index.css` (417) | Tailwind import, `motion-safe`/`motion-reduce` variants, theme tokens, fonts, font-scale rules, `card-flow`, sheet and auth animations, reduced-motion rules. |
 | `src/vite-env.d.ts` | Env var types (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_VAPID_PUBLIC_KEY`), `__APP_VERSION__`. |
 
 Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, screenshots), `.env.local`, `.grok-changes/` (another tool's state).
@@ -401,6 +405,7 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `health.ts` | Conditions, allergies, `suggestedVitals`, `healthGaps`. |
 | `push.ts` | This device's push subscription. |
 | `ids.ts` | `newRef()` (form reference for once-only saves). |
+| `clipboard.ts` | `copyText()`: copies on https and on plain-http network addresses. |
 | `photo.ts` | `readSquarePhoto` (avatar crop/downscale). |
 | **ui/** | |
 | `primitives.tsx` | `Avatar`, `Pill`, `Toggle`, `SectionHead`, `InfoRow`, `PageTitle` (old), `AddButton`, `BackHeader`. |
@@ -423,10 +428,11 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `PortalShell.tsx` · `NavBar.tsx` · `PhoneShell.tsx` | Portal frame and connection/save banner · tab bar / rail / sidebar · the container frame. |
 | `SplashScreen.tsx` · `splashSignal.ts` | Takes the boot splash down · splash timing signals. |
 | `deviceScale.ts` · `StatusBar.tsx` | Root font scaling · fake iOS status bar. |
+| `motion.ts` | Motion setting: `data-motion` on `<html>`, `reducedMotion()`, `useMotionPref()`, `startMotion()` (main.tsx). |
 | `MCareLogo.tsx` · `brand.ts` | Animated logo · brand constants (EKG path, colours). |
 | **profile/** | |
 | `ProfileCard.tsx` | The profile card used by every role. |
-| `AccountSheets.tsx` (492) | Edit profile, change password, theme/font, help, deactivate. |
+| `AccountSheets.tsx` (516) | Edit profile, change password, theme/font/animations, help, deactivate. |
 | `NotificationsSheet.tsx` | Email / SMS / push choices. |
 | `SignatureSheet.tsx` | Doctor's signature. |
 | **auth/** | |
@@ -456,9 +462,9 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | File | Holds |
 | --- | --- |
 | `migrations/0001`–`0011` | The database. One line each: [DATABASE.md → Migrations](docs/DATABASE.md#migrations); which file defines which function: [the index](docs/DATABASE.md#function-and-trigger-index). |
-| `dev/server.mjs` (786) | Local backend: PGlite + auth, REST (PostgREST subset, RPC), storage, `/__dev/auth-codes`, local sender and jobs. `startBackend(options)`. |
+| `dev/server.mjs` (945) | Local backend: PGlite + auth, REST (PostgREST subset, RPC), storage, `/__dev/auth-codes`, local sender and jobs. `startBackend(options)`. Owns its data folder (`backend.pid`), keeps `pg-backup`, recovers a damaged `pg`; `--reset`, `--check`. |
 | `dev/bootstrap.sql` | Stubs Supabase's `auth` schema and roles. |
-| `dev/seed.mjs` | Test accounts (local or hosted). |
+| `dev/seed.mjs` | Test accounts and the test world, written through the app's own calls by each role (local or hosted); `MCARE_SEED_BASIC=1` for accounts and a starter record only. |
 | `dev/fingerprint.mjs` | `npm run db:schema`. |
 | `dev/_audit.mjs` | One-off schema audit (triggers, missing `zz_touch_patient`, policies). |
 | `functions/deliver/index.ts` | Hosted sender: providers per channel. |
@@ -501,7 +507,7 @@ Read only the section you need (`Read` with `offset`/`limit`). Line numbers are 
 
 **`src/shared/api/records.ts`**: `Records` (28), date helpers (62), row mappers (88), `loadRecords` (205), `changeToken` (449), `searchAudit` (463).
 
-**`supabase/dev/server.mjs`**: helpers and PostgREST parsing (44), `startBackend` (192; auth ≈ 300–360, REST/RPC ≈ 480, `/__dev` ≈ 676, sender and jobs ≈ 709), CLI start (749).
+**`supabase/dev/server.mjs`**: helpers and PostgREST parsing (45), the database folder: lock, backup, recovery (188), `startBackend` (272; auth ≈ 374, REST/RPC ≈ 550, storage ≈ 673, `/__dev` ≈ 773, sender and jobs ≈ 807), CLI: `--check`, `--reset`, start, signals (850).
 
 ---
 

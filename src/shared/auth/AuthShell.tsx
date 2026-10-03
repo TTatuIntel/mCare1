@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import MCareLogo from '@/shared/layout/MCareLogo'
 import { useSplashDone } from '@/shared/layout/splashSignal'
+import { reducedMotion } from '@/shared/layout/motion'
 import { AuthIcon, AuthRights, BrandCluster, type AuthIconName } from './authKit'
 
 /** How long each feature stays on stage before the next one takes over. */
@@ -33,7 +34,7 @@ function VitalsScene() {
   return (
     <div className="w-full px-3">
       <p style={after(0)} className="auth-item-in flex items-center gap-1 text-[9px] font-semibold text-gray-400">
-        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 motion-safe:animate-pulse" /> Heart rate
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Heart rate
       </p>
       <p style={after(120)} className="auth-item-in font-mono text-2xl font-bold text-gray-900 leading-none mt-1">
         72 <span className="font-sans text-[9px] font-medium text-gray-400">bpm</span>
@@ -185,9 +186,9 @@ function FlyingLogo() {
     const from = lastLogoSpot
     lastLogoSpot = undefined
     const to = outer.getBoundingClientRect()
-    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    const still = reducedMotion()
     // to.width is 0 while this size's layout is hidden (mobile and tablet).
-    if (from && to.width && !reducedMotion && performance.now() - from.at < FLY_FROM_MAX_AGE_MS) {
+    if (from && to.width && !still && performance.now() - from.at < FLY_FROM_MAX_AGE_MS) {
       const dx = from.x - to.left, dy = from.y - to.top
       if (Math.abs(dx) + Math.abs(dy) > 2) {
         outer.animate({ translate: [`${dx}px 0`, '0 0'] }, { duration: FLY_MS, easing: 'cubic-bezier(.65,0,.35,1)' })
@@ -227,7 +228,6 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
   const [dir, setDir] = useState<1 | -1>(1)
   // Hovering with a mouse holds the current slide so it can be read.
   const [held, setHeld] = useState(false)
-  const [reducedMotion] = useState(() => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false)
   const drag = useRef<{ x: number; swiped: boolean } | null>(null)
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   // The tour keeps turning under reduced motion; its slides then fade instead of sliding (see index.css).

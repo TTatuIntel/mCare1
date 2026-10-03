@@ -1,6 +1,7 @@
 /** Form controls shared by the signed-out screens: sign in, create account and verification. */
 import { useEffect, useRef, useState } from 'react'
 import { PHONE_COUNTRIES, passwordStrength, type PhoneCountry } from '@/shared/state/auth'
+import { reducedMotion } from '@/shared/layout/motion'
 
 /* ─── Line icons (24px grid, stroke follows the text colour) ────────── */
 const ICONS = {
@@ -74,7 +75,7 @@ export function BrandCluster({ children, className = '', open = true, openDelayM
 
   useEffect(() => {
     const root = rootRef.current
-    if (!root || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    if (!root || reducedMotion()) return
     let point: { x: number; y: number } | null = null
     let frame = 0
     let settle: ReturnType<typeof setTimeout> | undefined
@@ -426,7 +427,7 @@ export function OtpInput({ value, onChange, invalid = false }: { value: string; 
             : 'border-gray-200 bg-gray-50'
           return (
             <div key={i} className={`h-12 @2xl:h-14 rounded-xl @2xl:rounded-2xl border-2 flex items-center justify-center text-xl @2xl:text-2xl font-bold font-mono transition-all ${look}`}>
-              {value[i] ?? (here && <span className="w-0.5 h-5 @2xl:h-6 rounded-full bg-teal-600 motion-safe:animate-pulse" />)}
+              {value[i] ?? (here && <span className="w-0.5 h-5 @2xl:h-6 rounded-full bg-teal-600 animate-pulse" />)}
             </div>
           )
         })}

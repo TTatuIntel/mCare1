@@ -4,6 +4,7 @@ import MCareLogo from '@/shared/layout/MCareLogo'
 import { AuthDivider, AuthIcon, AuthRights, AuthSwitch, OWNER } from './authKit'
 import { SocialButtons, socialSignInAvailable } from './SocialAuth'
 import { backendConfigured } from '@/shared/api/supabase'
+import { reducedMotion } from '@/shared/layout/motion'
 
 const SUPPORT_EMAIL = 'support@matendocare.com'
 
@@ -103,7 +104,7 @@ function GetStartedButton({ onClick }: { onClick: () => void }) {
     const x = e.clientX - r.left, y = e.clientY - r.top
     wrap.style.setProperty('--mx', `${x}px`)
     wrap.style.setProperty('--my', `${y}px`)
-    if (e.pointerType !== 'mouse' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    if (e.pointerType !== 'mouse' || reducedMotion()) return
     wrap.style.transform = `translate(${((x / r.width - 0.5) * 2 * LEAN_X).toFixed(1)}px, ${((y / r.height - 0.5) * 2 * LEAN_Y).toFixed(1)}px)`
   }
 

@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
 
-import packageJson from './package.json'
+import packageJson from './package.json' with { type: 'json' }
 
 /**
  * The local mCare backend (`npm run backend`, supabase/dev/server.mjs) listens on this machine only.
@@ -34,7 +34,7 @@ export default defineConfig(({ mode }) => {
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, './src'),
+        '@': path.resolve(import.meta.dirname, './src'),
       },
     },
     server: {

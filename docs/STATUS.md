@@ -19,7 +19,15 @@ Never verified: a hosted Supabase project, any real email / SMS / push provider,
 
 ## In progress (uncommitted)
 
-Nothing at the moment. Check `git status` too: work may have started since this was written.
+Check `git status` too: work may have started since this was written.
+
+| Change | Files |
+| --- | --- |
+| **Same experience on a phone over the network.** Root causes found by comparing `localhost` (desktop) with `http://<laptop IP>:8443` (emulated phone): (1) phones often ask apps to reduce motion (iOS Reduce Motion, Android "Remove animations", battery savers), which cut the welcome page from 20 running animations to 3; (2) plain http on a network address is not a secure context, so `navigator.clipboard`, push, the service worker, `crypto.subtle` and `randomUUID` do not exist there. Fixes: one motion setting, `data-motion` on `<html>`, that every CSS rule, Tailwind `motion-safe:`/`motion-reduce:` and script follows; **Profile → Theme & Font → Animations** (Like device / Full / Reduced, per device); reduced mode now fades and glows in place instead of going still (17 animations instead of 3); copying a share link works over http; the push setting explains why push needs https; the boot splash's malformed reduced-motion CSS fixed. Networking itself was already right (`VITE_SUPABASE_URL=/` + the dev-server proxy; no hard-coded `localhost` in the app). | `src/shared/layout/motion.ts` (new), `src/main.tsx`, `index.html`, `src/index.css`, `src/shared/auth/{AuthShell,SocialAuth,authKit,WelcomeScreen}.tsx`, `src/shared/profile/AccountSheets.tsx`, `src/shared/lib/clipboard.ts` (new), `src/shared/documents/ShareSheet.tsx`, `src/shared/profile/NotificationsSheet.tsx`, `ui.test.mjs` |
+| **Local backend no longer corrupts its database.** Cause: PGlite cannot always reopen a folder after its process was killed, and three things killed it or wrote under it: a second `npm run backend` opened the same folder before failing on the busy port; `backend:reset` deleted the folder under a running backend; closing the terminal ended it without a clean stop. Now: the backend claims its folder (`backend.pid`) and checks the port before opening anything; stops cleanly on Ctrl+C, Ctrl+Break and the terminal closing; keeps `pg-backup` at each clean stop; after a kill, checks the folder in a child process and either carries on, or sets it aside and restores the copy (or starts new); seeds a new database itself; `backend:reset` refuses while a backend runs. `npm run backend:stop` stops one cleanly from another terminal (service key only). `vite.config.ts` no longer warns about `__dirname` / the JSON import. Starting two backends at the same moment can no longer open the database twice (the lock file is created atomically; the loser stops before opening it), a start that fails after opening the database closes it first, and every stop prints why and when; an unexpected error is printed and the database still closed cleanly (verified: three simultaneous double starts, a stale lock taken over). Errors are sentences, not stack traces. Verified on a scratch folder: second backend refused, reset refused while running, killed backend recovered with data, a really corrupt folder restored from the copy. | `supabase/dev/server.mjs`, `package.json` (`backend:reset`, `backend:stop`), `vite.config.ts`, `docs/RUNNING.md`, `AGENTS.md` |
+| **Seed builds a test world.** `npm run backend:seed` (and a new database) now makes 8 accounts and, once, a world to test every portal: Patient One with two weeks of readings, one real open alert, medicines, targets, meal and care plans, a consulting doctor, visits, messages and a report request; a stable Patient Two; Patient Three waiting for a doctor; a doctor awaiting approval; a support ticket. Written through the app's own calls by each role; on the local backend readings are moved into past days through a new service-key-only `/__dev/backdate-readings`. Browser tests keep the small starter record (`MCARE_SEED_BASIC=1`). Verified: built twice on a scratch database (second run changes nothing; exactly one alert); `npm test` 354/0 + 153/0; `test:ui` 68/0 (its motion check now waits for the browser's change event instead of reading at once, which failed intermittently). | `supabase/dev/seed.mjs`, `supabase/dev/server.mjs`, `supabase/tests/ui.test.mjs`, `docs/RUNNING.md`, `AGENTS.md` |
+| **Errors found while testing the live app.** (1) The boot splash's font wait (`document.fonts.load`) had no rejection handler, so a device that cannot reach Google Fonts reported two unhandled `NetworkError`s; now ignored, the 0.8 s timer still shows the logo. (2) Every staff sign-in called `document_registry`, which the database refuses to assistants without Document Support: a 403 and a console error on each load for the test assistant; now asked only by admins and assistants with that permission. Checked with a Playwright smoke run of all four portals against the live app in Chromium (laptop) and WebKit (phone width, over the network address): no page errors. `test:ui` 68/0. | `index.html`, `src/shared/api/records.ts` |
+| **Notification bell: unread filter and "Mark all read"** (in the working tree before the change above). | `src/shared/ui/NotificationBell.tsx`, `ui.test.mjs`, `supabase/dev/seed.mjs`, `api.test.mjs` |
 
 ## Recently finished
 
@@ -103,7 +111,8 @@ On branch `consulting-messages-and-docs`, tested (see above). Merge into `main` 
 | Live updates: change token polling (15 s) | Done |
 | Live updates: Realtime on hosted Supabase | Unverified |
 | Responsive layout: phone, tablet, laptop | Done (emulated) |
-| Phone over Wi-Fi (`npm run phone`) | Done by hand; not in the test suite |
+| Phone over Wi-Fi (`npm run phone`) | Done by hand; compared with localhost in an emulated phone (same features, no console errors or failed requests) |
+| Motion: device setting with a per-device override (Theme & Font → Animations) | Done; in `test:ui` |
 
 ## Pending before production
 
@@ -129,7 +138,8 @@ In rough order. None of these is started.
 4. **Staff invitations** are only as safe as email confirmation (off on the local backend unless `MCARE_CONFIRM_EMAIL=1`).
 5. **Clinical scope:** a doctor cannot correct a patient-entered value (mark invalid and record a new one); one treating doctor per patient; availability has no holiday calendar; a filed prescription document is not rewritten when the medicine stops (the stop is in its history); a critical alert is never closed by a number alone.
 6. **Admin scope:** no messaging for staff (support requests instead); no system settings screen beyond vital definitions.
-7. **Account changes spanning several tables** for another person (`updateUser` in `AppContext`) are several requests, not one transaction. Patient screens do not use that path.
+7. **A phone on the laptop's network address is not a secure context** (plain http; only `localhost` and https are). Browsers do not allow push or the service worker there, so push can only be tried on https. Copying, form references (`newRef`) and file fingerprints have fallbacks and work.
+8. **Account changes spanning several tables** for another person (`updateUser` in `AppContext`) are several requests, not one transaction. Patient screens do not use that path.
 
 ## Technical debt
 

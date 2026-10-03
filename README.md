@@ -64,7 +64,7 @@ npm run dev                            # terminal 2: the app at http://localhost
 npm run backend:seed                   # once: test accounts
 ```
 
-Sign in with `test.patient@mcare.test`, `test.doctor@mcare.test`, `test.admin@mcare.test` or `test.assistant@mcare.test`, password `A1b23`.
+Sign in with `test.patient@mcare.test`, `test.doctor@mcare.test`, `test.admin@mcare.test` or `test.assistant@mcare.test`, password `M7c24`.
 
 To try it on a phone on the same Wi-Fi, run `npm run phone` and open `http://<laptop IP>:8444`.
 

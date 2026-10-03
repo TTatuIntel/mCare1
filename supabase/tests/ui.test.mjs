@@ -24,7 +24,7 @@ import { startBackend } from '../dev/server.mjs'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..', '..')
 const SHOTS = join(HERE, '..', '.data', 'screens')
-const PW = 'A1b23'
+const PW = 'M7c24'
 const SIZES = { phone: { width: 390, height: 844 }, tablet: { width: 834, height: 1112 }, laptop: { width: 1366, height: 768 } }
 
 async function loadPlaywright() {
@@ -39,7 +39,7 @@ const backend = await startBackend({ port: 0, dataDir: 'memory', quiet: true, jo
 // The test accounts are made by the same script a developer runs. It must not block this process: the backend it talks to lives here.
 const seeded = await new Promise(done => {
   const child = spawn(process.execPath, [join(HERE, '..', 'dev', 'seed.mjs')], {
-    env: { ...process.env, SUPABASE_URL: backend.url, SUPABASE_SERVICE_ROLE_KEY: backend.serviceKey, SUPABASE_ANON_KEY: backend.anonKey, MCARE_SEED_PASSWORD: PW },
+    env: { ...process.env, SUPABASE_URL: backend.url, SUPABASE_SERVICE_ROLE_KEY: backend.serviceKey, SUPABASE_ANON_KEY: backend.anonKey, MCARE_SEED_PASSWORD: PW, MCARE_SEED_BASIC: '1' },
   })
   let output = ''
   child.stdout.on('data', d => { output += d }); child.stderr.on('data', d => { output += d })
@@ -157,6 +157,21 @@ try {
     await s.nav('Meds'); await page.getByText('No active prescriptions').waitFor({ timeout: 10000 })
     await s.nav('Appts'); await page.getByText('No appointments yet').waitFor({ timeout: 10000 })
     await s.nav('Chat'); await page.getByText('No doctor on your care team yet').waitFor({ timeout: 10000 })
+  })
+  await step(s, 'a phone that asks for less motion can choose full animations', async () => {
+    // The app follows the device through a change event, which lands a moment after the switch: wait for it.
+    const motionIs = want => page.waitForFunction(w => document.documentElement.dataset.motion === w, want, { timeout: 3000 }).then(() => true, () => false)
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    if (!(await motionIs('reduce'))) throw new Error('the device setting should reduce motion by default')
+    await s.home(); await page.getByRole('button', { name: 'Profile' }).click()
+    await page.getByText('Theme & Font').click()
+    await page.getByText(/This device asks apps to reduce motion/).waitFor({ timeout: 10000 })
+    await page.getByRole('radio', { name: 'Full' }).click()
+    if (!(await motionIs('full'))) throw new Error('choosing Full should turn every animation back on')
+    await page.getByRole('radio', { name: 'Like device' }).click()
+    if (!(await motionIs('reduce'))) throw new Error('Like device should follow the device again')
+    await page.getByRole('button', { name: 'Done', exact: true }).click()
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
   })
   await step(s, 'sign out and local password recovery display the test OTP', async () => {
     await s.home(); await page.getByRole('button', { name: 'Profile' }).click()
@@ -307,6 +322,21 @@ try {
   await service.from('patients').update({ assigned_doctor_id: docId }).eq('id', newId)
   const d = await session('laptop')
   await d.signIn('test.doctor@mcare.test')
+  await step(d, 'notifications filter unread items and mark all read', async () => {
+    const bell = d.page.getByRole('button', { name: /Notifications/ })
+    const bellBox = await bell.boundingBox()
+    await bell.click()
+    const sheet = d.page.getByRole('dialog')
+    const panelBox = await sheet.boundingBox()
+    if (!bellBox || !panelBox || panelBox.y < bellBox.y + bellBox.height) throw new Error('notification panel should open below the bell')
+    const filter = sheet.getByRole('tablist', { name: 'Notification filter' })
+    await filter.getByRole('tab', { name: /Unread/ }).click()
+    await sheet.getByRole('button', { name: /unread/ }).first().waitFor({ timeout: 10000 })
+    await sheet.getByRole('button', { name: 'Mark all read' }).click()
+    await filter.getByRole('tab', { name: /Unread/ }).click()
+    await sheet.getByRole('status').getByText('You are all caught up').waitFor({ timeout: 10000 })
+    await sheet.getByRole('button', { name: 'Close', exact: true }).last().click()
+  })
   await step(d, 'the doctor opens the patient and sees what the patient logged', async () => {
     await d.nav('Patients')
     await d.page.getByRole('button', { name: /Test Patient One/ }).first().click()

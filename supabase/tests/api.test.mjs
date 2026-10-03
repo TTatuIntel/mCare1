@@ -489,12 +489,12 @@ Object.assign(process.env, {
   SUPABASE_URL: backend.url,
   SUPABASE_SERVICE_ROLE_KEY: backend.serviceKey,
   SUPABASE_ANON_KEY: backend.anonKey,
-  MCARE_SEED_PASSWORD: 'A1b23',
+  MCARE_SEED_PASSWORD: 'M7c24',
 })
 await import('../dev/seed.mjs')
 const seededAdmin = client()
 check('reseeding resets an existing account to the exact 5-character password',
-  !!(await seededAdmin.auth.signInWithPassword({ email: 'test.admin@mcare.test', password: 'A1b23' })).data.session
+  !!(await seededAdmin.auth.signInWithPassword({ email: 'test.admin@mcare.test', password: 'M7c24' })).data.session
   && !!(await client().auth.signInWithPassword({ email: 'test.admin@mcare.test', password: PW })).error)
 
 console.log(`\n${pass} passed, ${fail} failed`)

@@ -14,6 +14,9 @@ const PUSH_NOTE: Record<PushState, string> = {
   off: 'This device does not receive mCare notifications.',
   on: 'This device receives mCare notifications.',
 }
+/** Opened by the laptop's network address over plain http (testing on a phone): browsers allow push only on https. */
+const INSECURE_NOTE = 'Push needs mCare on a secure https address. This device opened it over plain http (a network address for testing), where browsers do not allow push. Email and text messages still work.'
+const pushNote = (state: PushState) => (state === 'unsupported' && typeof window !== 'undefined' && !window.isSecureContext ? INSECURE_NOTE : PUSH_NOTE[state])
 
 export function NotificationsSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { currentUser, updateUser, setDevicePush, live } = useApp()
@@ -57,7 +60,7 @@ export function NotificationsSheet({ open, onClose }: { open: boolean; onClose: 
         <div className="flex items-center gap-3">
           <div className="flex-1 min-w-0">
             <p className="text-xs font-bold text-gray-900">This device</p>
-            <p className="text-[11px] text-gray-500 leading-snug mt-0.5">{!live ? 'Push notifications work once mCare is connected to its server.' : push ? PUSH_NOTE[push] : 'Checking…'}</p>
+            <p className="text-[11px] text-gray-500 leading-snug mt-0.5">{!live ? 'Push notifications work once mCare is connected to its server.' : push ? pushNote(push) : 'Checking…'}</p>
           </div>
           {live && (push === 'on' || push === 'off') && (
             <button onClick={toggleDevice} disabled={device.busy || !prefs.push}

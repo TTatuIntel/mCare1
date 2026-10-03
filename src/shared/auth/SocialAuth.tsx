@@ -3,6 +3,7 @@ import { useApp } from '@/shared/state/AppContext'
 import { SOCIAL_PROVIDERS, isEmail, type ProviderStyle } from '@/shared/state/auth'
 import { BottomSheet } from '@/shared/ui/BottomSheet'
 import { backendConfigured } from '@/shared/api/supabase'
+import { reducedMotion } from '@/shared/layout/motion'
 import { providerAvailable, rememberConsent, startProviderSignIn } from '@/shared/api/authBackend'
 import { appBaseUrl } from '@/shared/email/emailTemplate'
 import { AuthButton, AuthField, authInputCls } from './authKit'
@@ -69,7 +70,7 @@ export function SocialButtons() {
   const dock = (x: number | null) => {
     cancelAnimationFrame(frame.current)
     frame.current = requestAnimationFrame(() => {
-      const still = x === null || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+      const still = x === null || reducedMotion()
       buttons.current.forEach(el => {
         if (!el) return
         if (still) { el.style.transform = ''; el.style.zIndex = ''; return }
@@ -100,7 +101,7 @@ export function SocialButtons() {
           <button key={p.id} ref={el => { buttons.current[i] = el }} type="button" aria-label={`Continue with ${p.label}`}
             onClick={() => { if (backendConfigured) leave(p); else { setProvider(p); setError('') } }}
             aria-busy={leaving?.id === p.id || undefined} style={{ animationDelay: `${i * 60}ms` }}
-            className={`${leaving?.id === p.id ? 'motion-safe:animate-pulse' : leaving ? 'opacity-50' : ''} social-btn auth-tile-in group relative h-11 rounded-2xl border flex items-center justify-center shadow-sm transition-all duration-200 ease-out hover:shadow-lg focus-visible:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 active:scale-[.92] ${p.bg} ${p.border} ${p.text} ${p.glow}`}>
+            className={`${leaving?.id === p.id ? 'animate-pulse' : leaving ? 'opacity-50' : ''} social-btn auth-tile-in group relative h-11 rounded-2xl border flex items-center justify-center shadow-sm transition-all duration-200 ease-out hover:shadow-lg focus-visible:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 active:scale-[.92] ${p.bg} ${p.border} ${p.text} ${p.glow}`}>
             {/* Clipped to the button, so the sheen never spills past its corners. */}
             <span aria-hidden className="absolute inset-0 overflow-hidden rounded-[inherit]">
               <span className="social-sheen absolute inset-y-0 left-0 w-1/2 bg-gradient-to-r from-transparent via-white/40 to-transparent" />

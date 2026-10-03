@@ -25,6 +25,7 @@ import http from 'node:http'
 import os from 'node:os'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import { spawn } from 'node:child_process'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -184,10 +185,113 @@ export function readLocalKeys(dataDir = process.env.MCARE_DATA_DIR ?? join(HERE,
   }
 }
 
+/* ─── The database folder: one backend at a time, and a way back after a crash ─ */
+// PGlite cannot always reopen a folder after its process was killed (terminal closed, two backends on
+// one folder, the folder deleted underneath it). So the backend owns its folder while it runs, keeps a
+// copy each time it stops cleanly, and on start puts a damaged folder aside and brings that copy back.
+const folders = dataDir => ({
+  pg: join(dataDir, 'pg'), backup: join(dataDir, 'pg-backup'), lock: join(dataDir, 'backend.pid'),
+})
+
+/** The process id of a backend that is running on this data folder now, or null. */
+export function runningBackend(dataDir) {
+  let pid
+  try { pid = Number(fs.readFileSync(folders(dataDir).lock, 'utf8')) } catch { return null }
+  if (!pid || pid === process.pid) return null
+  try { process.kill(pid, 0); return pid } catch (e) { return e.code === 'EPERM' ? pid : null }
+}
+
+/**
+ * Takes the data folder for this process, or fails with what to do. The lock file is created exclusively, so of
+ * two backends started at the same moment exactly one gets the folder, and the other stops before opening it.
+ */
+function claimFolder(dataDir) {
+  const { lock } = folders(dataDir)
+  fs.mkdirSync(dataDir, { recursive: true })
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { fs.writeFileSync(lock, String(process.pid), { flag: 'wx' }); return } catch (e) { if (e.code !== 'EEXIST') throw e }
+    let text
+    try { text = fs.readFileSync(lock, 'utf8').trim() } catch { continue }   // released meanwhile: try again
+    const pid = Number(text)
+    let alive = !pid   // empty: another backend is writing it this very moment
+    if (pid) { try { process.kill(pid, 0); alive = true } catch (e) { alive = e.code === 'EPERM' } }
+    if (alive) {
+      throw new Error(`Another mCare backend${pid ? ` (process ${pid})` : ''} is already using ${dataDir}.\n`
+        + `  Use that one, or stop it (Ctrl+C in its terminal, or "npm run backend:stop") and run "npm run backend" again.\n`
+        + `  No backend running at all? Delete ${lock} and start again.`)
+    }
+    try { fs.rmSync(lock) } catch {}   // left by a backend that was killed
+  }
+  throw new Error(`Could not take ${dataDir}: another backend keeps starting there. Use that one.`)
+}
+
+/** Fails, with what to do, when the port is taken: checked before the database is touched. */
+async function portFree(port, host) {
+  if (!port) return
+  await new Promise((done, fail) => {
+    const probe = http.createServer()
+    probe.once('error', e => fail(e.code === 'EADDRINUSE'
+      ? new Error(`Port ${port} is already in use: another mCare backend is probably running in another terminal.\n`
+        + `  Use that one, or stop it there with Ctrl+C and run "npm run backend" again.`)
+      : e))
+    probe.listen(port, host, () => probe.close(done))
+  })
+}
+
+/** Opens the folder in a separate process (a failed open keeps its files locked in this one). */
+function opensCleanly(dir) {
+  return new Promise(done => {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--check', dir], { stdio: 'ignore', timeout: 120_000 })
+    child.on('exit', code => done(code === 0))
+    child.on('error', () => done(false))
+  })
+}
+
+const stamp = () => new Date().toISOString().slice(0, 16).replace(/:/g, '-')
+
+/** Moves a damaged folder aside (keeping the two newest) and returns where it went. */
+function setAside(dataDir, dir) {
+  const aside = join(dataDir, `pg-unreadable-${stamp()}`)
+  fs.rmSync(aside, { recursive: true, force: true })
+  fs.renameSync(dir, aside)
+  const old = fs.readdirSync(dataDir).filter(f => f.startsWith('pg-unreadable-')).sort().slice(0, -2)
+  for (const f of old) fs.rmSync(join(dataDir, f), { recursive: true, force: true })
+  return aside
+}
+
+/** Copies a cleanly closed database folder to pg-backup. The old copy is replaced only once the new one is complete. */
+function keepCopy(dataDir) {
+  const { pg, backup } = folders(dataDir)
+  if (!fs.existsSync(join(pg, 'PG_VERSION')) || fs.existsSync(join(pg, 'postmaster.pid'))) return false
+  const tmp = `${backup}.tmp`
+  fs.rmSync(tmp, { recursive: true, force: true })
+  fs.cpSync(pg, tmp, { recursive: true })
+  fs.rmSync(backup, { recursive: true, force: true })
+  fs.renameSync(tmp, backup)
+  return true
+}
+
+/**
+ * Makes the pg folder safe to open. Returns how: 'existing', 'new', 'recovered' (the last run was killed
+ * but the database came back), or 'restored' (it could not be opened, so the copy kept at the last
+ * clean stop replaced it).
+ */
+async function prepareFolder(dataDir) {
+  const { pg, backup } = folders(dataDir)
+  if (fs.existsSync(pg) && !fs.existsSync(join(pg, 'PG_VERSION'))) fs.rmSync(pg, { recursive: true, force: true })  // half-created
+  if (!fs.existsSync(pg)) return { how: 'new' }
+  if (!fs.existsSync(join(pg, 'postmaster.pid'))) return { how: 'existing' }   // closed cleanly last time
+  if (await opensCleanly(pg)) return { how: 'recovered' }
+  const aside = setAside(dataDir, pg)
+  if (!fs.existsSync(join(backup, 'PG_VERSION'))) return { how: 'new', aside }
+  fs.cpSync(backup, pg, { recursive: true })
+  return { how: 'restored', aside, savedAt: fs.statSync(backup).mtime }
+}
+
 /* ─── The backend ───────────────────────────────────────────────────── */
 /**
- * @param {{ port?: number, host?: string, dataDir?: string, quiet?: boolean, confirmEmail?: boolean, jobs?: boolean, exposeTestAuth?: boolean }} [options]
- *   dataDir 'memory' keeps nothing on disk (used by the tests).
+ * @param {{ port?: number, host?: string, dataDir?: string, quiet?: boolean, confirmEmail?: boolean, jobs?: boolean, exposeTestAuth?: boolean, onStop?: () => void }} [options]
+ *   dataDir 'memory' keeps nothing on disk (used by the tests). onStop: called when `npm run backend:stop` asks.
  */
 export async function startBackend(options = {}) {
   const port = options.port ?? Number(process.env.MCARE_BACKEND_PORT || 54321)
@@ -198,11 +302,22 @@ export async function startBackend(options = {}) {
   const exposeTestAuth = options.exposeTestAuth ?? (process.env.NODE_ENV !== 'production')
   const say = options.quiet ? () => {} : (...a) => console.log(...a)
 
+  /* the folder: claimed before anything opens it, so a second backend can never write into it */
+  let opened = { how: memory ? 'new' : 'existing' }
+  const lockFile = folders(dataDir).lock
+  const release = () => { try { if (fs.readFileSync(lockFile, 'utf8') === String(process.pid)) fs.rmSync(lockFile) } catch {} }
+  if (!memory) {
+    claimFolder(dataDir)
+    try {
+      await portFree(port, host)
+      opened = await prepareFolder(dataDir)
+    } catch (e) { release(); throw e }
+  }
+
   /* keys: made once per data directory, never committed */
   let keys
   if (memory) keys = { jwtSecret: crypto.randomBytes(32).toString('hex') }
   else {
-    fs.mkdirSync(dataDir, { recursive: true })
     const file = join(dataDir, 'keys.json')
     keys = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { jwtSecret: crypto.randomBytes(32).toString('hex') }
     if (!fs.existsSync(file)) fs.writeFileSync(file, JSON.stringify(keys, null, 2))
@@ -213,12 +328,16 @@ export async function startBackend(options = {}) {
 
   /* database */
   const db = memory ? new PGlite() : new PGlite(join(dataDir, 'pg'))
-  // The engine aborts if the folder was left half-written (the backend was killed, not stopped with Ctrl+C).
+  // prepareFolder has checked a folder left by a killed run; this is for one that fails anyway. It now
+  // carries postmaster.pid, so the next start checks it in a separate process and recovers.
   try { await db.waitReady } catch {
-    throw new Error(`The local database in ${join(dataDir, 'pg')} cannot be opened: it was not shut down cleanly.\n`
-      + `  Rename or delete that folder, then run "npm run backend" and "npm run backend:seed" to start with a new one.`)
+    release()
+    throw new Error(`The local database in ${join(dataDir, 'pg')} could not be opened.\n`
+      + `  Run "npm run backend" again: it will set the damaged folder aside and bring back the copy kept when the backend last stopped.`)
   }
-  await db.exec(`set timezone = 'UTC'`)
+  /** A start that fails once the database is open closes it first: an engine left open is what damages the folder. */
+  const abandon = async e => { await db.close().catch(() => {}); release(); throw e }
+  try { await db.exec(`set timezone = 'UTC'`) } catch (e) { await abandon(e) }
   const fresh = (await db.query(`select 1 from pg_namespace where nspname = 'supabase_migrations'`)).rows.length === 0
   if (fresh) await db.exec(fs.readFileSync(join(HERE, 'bootstrap.sql'), 'utf8'))
   const applied = new Set((await db.query(`select version from supabase_migrations.schema_migrations`)).rows.map(r => r.version))
@@ -245,7 +364,7 @@ export async function startBackend(options = {}) {
     }
     return count
   }
-  await migrate()
+  await migrate().catch(abandon)
 
   // One query at a time: PGlite is a single connection, and a request's role must never leak into another's.
   let chain = Promise.resolve()
@@ -681,6 +800,34 @@ export async function startBackend(options = {}) {
         const message = outbox.find(item => item.to.toLowerCase() === email && item.kind === kind)
         return send(res, 200, { code: message?.code ?? null }, { 'Cache-Control': 'no-store' })
       }
+      // npm run backend:seed: spreads seeded readings over the past days, which the API never allows (every reading
+      // is stamped with the server's clock). Local backend, service key, test patients (@mcare.test) only.
+      if (url.pathname === '/__dev/backdate-readings' && req.method === 'POST') {
+        if (!exposeTestAuth) return send(res, 404, { message: 'Not found' })
+        if (claimsOf(req).role !== 'service_role') return send(res, 403, { message: 'Only the seed script can do this' })
+        let moves
+        try { moves = JSON.parse((await readBody(req)).toString('utf8')) } catch { moves = null }
+        if (!Array.isArray(moves) || moves.some(m => typeof m?.id !== 'string' || Number.isNaN(Date.parse(m?.at)))) {
+          return send(res, 400, { message: 'Send a list of { id, at }' })
+        }
+        const moved = await exclusive(() => db.transaction(async tx => {
+          await tx.query(`set local session_replication_role = replica`)   // the reading guards refuse any move
+          let n = 0
+          for (const m of moves) {
+            n += (await tx.query(`update public.readings r set taken_at = $2 from public.profiles p
+              where r.id = $1 and p.id = r.patient_id and p.email like '%@mcare.test'`, [m.id, new Date(m.at).toISOString()])).affectedRows ?? 0
+          }
+          return n
+        }))
+        return send(res, 200, { moved })
+      }
+      // npm run backend:stop: a clean stop for a backend started where Ctrl+C cannot reach it. Service key only.
+      if (url.pathname === '/__dev/stop' && req.method === 'POST') {
+        if (!options.onStop) return send(res, 404, { message: 'Not found' })
+        if (claimsOf(req).role !== 'service_role') return send(res, 403, { message: 'Only this machine can stop the backend' })
+        send(res, 202, { stopping: true })
+        return setImmediate(options.onStop)
+      }
       const area = url.pathname.split('/')[1]
       if (!['auth', 'rest', 'storage'].includes(area)) return send(res, 404, { message: 'Not found' })
       const claims = claimsOf(req)
@@ -702,7 +849,8 @@ export async function startBackend(options = {}) {
       send(res, 500, { code: 'XX000', message: 'The local backend hit an unexpected error', details: String(e?.message ?? e) })
     }
   })
-  await new Promise((done, fail) => { server.once('error', fail); server.listen(port, host, done) })
+  await new Promise((done, fail) => { server.once('error', fail); server.listen(port, host, done) }).catch(e => abandon(e.code === 'EADDRINUSE'
+    ? new Error(`Port ${port} is already in use: another mCare backend is probably running in another terminal.`) : e))
   const actualPort = server.address().port
 
   /* scheduled jobs: what pg_cron runs on a hosted project */
@@ -733,15 +881,19 @@ export async function startBackend(options = {}) {
   timers.forEach(t => t.unref())
 
   return {
-    url: `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${actualPort}`, port: actualPort, anonKey, serviceKey, outbox, db, dataDir,
+    url: `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${actualPort}`, port: actualPort, anonKey, serviceKey, outbox, db, dataDir, opened,
     /** Runs SQL as the database owner. For tests and scripts only. */
     sql: (text, params) => q(text, params),
     /** Sends what is waiting in the email queue now (the job does this every 10 s). Resolves with how many. */
     deliver: deliverQueued,
+    /** Stops cleanly and, on disk, keeps a copy of the database to come back to after a crash. */
     close: async () => {
       timers.forEach(clearInterval)
-      await new Promise(done => server.close(done))
+      await new Promise(done => { server.close(() => done()); server.closeAllConnections() })
       await exclusive(() => db.close())
+      if (memory) return
+      try { keepCopy(dataDir) } catch (e) { console.error(`  could not keep a copy of the database: ${e.message}`) }
+      release()
     },
   }
 }
@@ -768,19 +920,105 @@ function writeEnv(anonKey) {
   return 'updated'
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+/** --check <folder>: exits 0 when the database there opens and closes cleanly. Used by prepareFolder. */
+async function checkFolder(dir) {
+  try { const db = new PGlite(dir); await db.waitReady; await db.close(); process.exit(0) } catch { process.exit(1) }
+}
+
+/** --reset: deletes the local database and its copies, never under a running backend. */
+function reset() {
+  const dataDir = process.env.MCARE_DATA_DIR ?? join(HERE, '..', '.data')
+  const other = runningBackend(dataDir)
+  if (other) {
+    console.error(`\n  The backend (process ${other}) is still running on this database. Stop it with Ctrl+C in its terminal, then run "npm run backend:reset" again.\n`)
+    process.exit(1)
+  }
+  if (fs.existsSync(dataDir)) {
+    for (const f of fs.readdirSync(dataDir)) if (/^pg($|-backup|-unreadable-)/.test(f)) fs.rmSync(join(dataDir, f), { recursive: true, force: true })
+  }
+  console.log('Local database removed. Run "npm run backend": it creates a new one with the test accounts.')
+}
+
+/** --stop: asks the running backend to stop cleanly (for one started in a background or closed terminal). */
+async function stopRunning() {
+  const dataDir = process.env.MCARE_DATA_DIR ?? join(HERE, '..', '.data')
+  const pid = runningBackend(dataDir)
+  if (!pid) { console.log('No mCare backend is running.'); return }
+  const key = readLocalKeys(dataDir)?.serviceKey
+  const port = process.env.MCARE_BACKEND_PORT || 54321
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/__dev/stop`, { method: 'POST', headers: { apikey: key, Authorization: `Bearer ${key}` } })
+    if (!res.ok) throw new Error(`it answered ${res.status}`)
+  } catch (e) {
+    console.error(`Could not ask the backend (process ${pid}) to stop: ${e.cause?.message ?? e.message}. Stop it with Ctrl+C in its terminal.`)
+    process.exit(1)
+  }
+  for (let i = 0; i < 120 && runningBackend(dataDir); i++) await new Promise(r => setTimeout(r, 250))
+  if (runningBackend(dataDir)) { console.error('The backend is still stopping; check its terminal.'); process.exit(1) }
+  console.log('Backend stopped cleanly.')
+}
+
+function describeOpening({ how, aside, savedAt }) {
+  if (how === 'recovered') console.log('  note       the backend was not stopped cleanly last time; the database recovered')
+  if (aside) {
+    console.log(`  note       the database was not stopped cleanly and could not be opened. It was set aside in\n`
+      + `             ${aside}`)
+    console.log(how === 'restored'
+      ? `             and the copy kept when the backend last stopped (${savedAt.toLocaleString()}) was brought back.`
+      : '             There was no earlier copy, so a new database was created.')
+  }
+}
+
+/** Creates the test accounts in a new database, as "npm run backend:seed" does. */
+function seed() {
+  return new Promise(done => {
+    console.log('  New database: creating the test accounts…')
+    const child = spawn(process.execPath, [join(HERE, 'seed.mjs')], { stdio: 'inherit' })
+    child.on('exit', done)
+    child.on('error', done)
+  })
+}
+
+const cli = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+if (cli && process.argv[2] === '--check') await checkFolder(process.argv[3])
+else if (cli && process.argv[2] === '--reset') reset()
+else if (cli && process.argv[2] === '--stop') await stopRunning()
+else if (cli) {
   console.log('\nmCare local backend')
-  const backend = await startBackend()
+  let backend
+  try { backend = await startBackend({ onStop: () => stop('asked by "npm run backend:stop" from another terminal') }) } catch (e) {
+    console.error(`\n  ${e.message}\n`)
+    process.exit(1)
+  }
   const env = writeEnv(backend.anonKey)
   const appPort = process.env.PORT || 8443
   console.log(`  database   ${backend.dataDir === 'memory' ? 'in memory' : join(backend.dataDir, 'pg')}`)
+  describeOpening(backend.opened)
   console.log(`  listening  ${backend.url}  (reached by the app through the dev server on port ${appPort})`)
   console.log(env === 'other' ? '  .env.local names another backend: left unchanged, so the app is NOT using this one'
     : `  .env.local ${env === 'ok' ? 'already points here' : `${env}: the app now runs in live mode`}`)
   console.log(`\n  Open the app   this laptop   http://localhost:${appPort}`)
   for (const ip of lanAddresses()) console.log(`                 phone / LAN   http://${ip}:${appPort}`)
-  console.log('\n  First time?    npm run backend:seed   creates the labelled test accounts')
-  console.log('  Ctrl+C stops the backend. The data stays in supabase/.data.\n')
-  const stop = async () => { await backend.close().catch(() => {}); process.exit(0) }
-  process.on('SIGINT', stop); process.on('SIGTERM', stop)
+  console.log('\n  Ctrl+C stops the backend (closing this terminal does too). The data stays in supabase/.data,')
+  console.log('  and a copy is kept each time it stops, to come back to if it is ever killed.\n')
+  // Every stop says why and when, so a backend that "just stopped" can be explained from its terminal.
+  let stopping = false
+  const stop = async (why, code = 0) => {
+    if (stopping) return
+    stopping = true
+    console.log(`\n  ${new Date().toLocaleTimeString()}  Stopping the backend: ${why}…`)
+    await backend.close().catch(e => console.error(`  ${e.message}`))
+    console.log('  Stopped cleanly. Start it again with: npm run backend')
+    process.exit(code)
+  }
+  const SIGNALS = { SIGINT: 'Ctrl+C', SIGBREAK: 'Ctrl+Break', SIGHUP: 'this terminal is closing', SIGTERM: 'asked to stop by the system (SIGTERM)' }
+  for (const [signal, why] of Object.entries(SIGNALS)) process.on(signal, () => stop(why))
+  // A bug must not leave the database open (that is what damages the folder): report it in full, then stop cleanly.
+  const crashed = (kind, e) => {
+    console.error(`\n  ${new Date().toLocaleTimeString()}  The backend hit an ${kind}. Please report this:\n`, e)
+    stop(`after the ${kind} above`, 1)
+  }
+  process.on('uncaughtException', e => crashed('unexpected error', e))
+  process.on('unhandledRejection', e => crashed('unhandled failure', e))
+  if (backend.opened.how === 'new') await seed()
 }

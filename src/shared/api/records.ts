@@ -214,6 +214,8 @@ export async function loadRecords(me: AppUser): Promise<Records> {
   const since = daysAgo(HISTORY_DAYS).toISOString()
   const logsSince = dayKey(daysAgo(LOG_DAYS))
   const staff = me.role === 'admin' || me.role === 'assistant'
+  // document_registry() serves admins and assistants with Document Support; asking without it is refused (403).
+  const registry = staff && (!(me as AdminUser).isAssistant || (me as AdminUser).permissions.includes('document_support'))
 
   const [
     profiles, patients, doctors, staffRows, allergies, conditions, contacts, doctorRequests,
@@ -247,8 +249,8 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     rows('documents', q => q.order('document_date', { ascending: false })),
     rows('document_events', q => q.order('created_at', { ascending: false }).limit(500)),
     rows('share_links', q => q.order('created_at', { ascending: false })),
-    // Staff find documents through the registry (metadata only). Without the permission it is refused, which means "none".
-    staff ? supabase.rpc('document_registry').then(({ data }) => (data ?? []) as Row[], () => [] as Row[]) : Promise.resolve([] as Row[]),
+    // Staff find documents through the registry (metadata only); a refusal still means "none".
+    registry ? supabase.rpc('document_registry').then(({ data }) => (data ?? []) as Row[], () => [] as Row[]) : Promise.resolve([] as Row[]),
     staff ? rows('support_grants', q => q.eq('admin_id', me.id).gt('expires_at', new Date().toISOString())) : Promise.resolve([] as Row[]),
     staff ? rows('account_invitations', q => q.is('accepted_at', null).is('revoked_at', null).order('created_at', { ascending: false })) : Promise.resolve([] as Row[]),
   ])
