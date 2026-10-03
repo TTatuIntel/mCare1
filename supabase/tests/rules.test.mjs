@@ -937,6 +937,12 @@ check('only the treating doctor or a coordinator adds a consulting doctor', (awa
   && (await denied(ID.asst, `select add_consulting_doctor($1, $2)`, [ID.pat, DOC])).blocked
   && /already treats/.test((await denied(TREAT, `select add_consulting_doctor($1, $2)`, [ID.pat, TREAT])).why ?? ''))
 const member = (await as(TREAT, `select add_consulting_doctor($1, $2, 'Cardiology opinion') id`, [ID.pat, DOC]))[0].id
+const patientConsultMessage = (await as(ID.pat, `insert into messages (from_id, to_id, content) values ($1, $2, 'Question for my consultant') returning id`, [ID.pat, DOC]))[0]
+const consultantReply = (await as(DOC, `insert into messages (from_id, to_id, content) values ($1, $2, 'Reply from my consultant') returning id`, [DOC, ID.pat]))[0]
+check('patient and current consulting doctor can exchange messages in a separate private thread', !!patientConsultMessage && !!consultantReply
+  && (await as(ID.pat, `select id from messages where (from_id = $1 and to_id = $2) or (from_id = $2 and to_id = $1)`, [ID.pat, DOC])).length === 2
+  && (await as(TREAT, `select id from messages where (from_id = $1 and to_id = $2) or (from_id = $2 and to_id = $1)`, [ID.pat, DOC])).length === 0
+  && (await as(DOC, `select id from messages where (from_id = $1 and to_id = $2) or (from_id = $2 and to_id = $1)`, [ID.pat, TREAT])).length === 0)
 check('the consulting doctor and the patient are told, and it is audited', (await as(DOC, `select resource_id from notifications where title = 'Added to a care team'`))[0]?.resource_id === ID.pat
   && (await as(ID.pat, `select 1 from notifications where title = 'Care team updated' and body like '%consulting doctor'`)).length === 1
   && (await one(`select count(*)::int n from audit_log where action = 'Added consulting doctor' and patient_id = $1`, [ID.pat])).n === 1
@@ -949,12 +955,12 @@ check('a consulting doctor reads the record: readings, alerts, medicines, shared
 check('…but not internal notes, documents or messages', (await as(DOC, `select 1 from clinical_notes where patient_id = $1 and visibility = 'internal'`, [ID.pat])).length === 0
   && (await as(DOC, `select 1 from documents where patient_id = $1`, [ID.pat])).length === 0
   && (await as(DOC, `select 1 from messages where from_id = $1 and to_id = $2`, [ID.pat, TREAT])).length === 0)
-check('…and changes nothing', (await denied(DOC, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency) values ($1, $2, 'X', '1', 'Once daily')`, [ID.pat, DOC])).blocked
-  && (await denied(DOC, `insert into clinical_notes (patient_id, author_id, content) values ($1, $2, 'x')`, [ID.pat, DOC])).blocked
-  && (await denied(DOC, `insert into readings (patient_id, vital_id, value) values ($1, 'hr', '70')`, [ID.pat])).blocked
+check('consulting doctor cannot prescribe or write clinical notes', (await denied(DOC, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency) values ($1, $2, 'X', '1', 'Once daily')`, [ID.pat, DOC])).blocked
+  && (await denied(DOC, `insert into clinical_notes (patient_id, author_id, content) values ($1, $2, 'x')`, [ID.pat, DOC])).blocked)
+check('consulting doctor cannot write readings or change targets and alerts', (await denied(DOC, `insert into readings (patient_id, vital_id, value) values ($1, 'hr', '70')`, [ID.pat])).blocked
   && (await as(DOC, `update thresholds set target_max = 999 where patient_id = $1 returning 1`, [ID.pat])).length === 0
-  && (await as(DOC, `update alerts set status = 'acknowledged' where patient_id = $1 and status = 'open' returning 1`, [ID.pat])).length === 0
-  && (await denied(DOC, `insert into messages (from_id, to_id, content) values ($1, $2, 'Hello')`, [DOC, ID.pat])).blocked)
+  && (await as(DOC, `update alerts set status = 'acknowledged' where patient_id = $1 and status = 'open' returning 1`, [ID.pat])).length === 0)
+check('consulting doctor cannot message an unrelated patient', (await denied(DOC, `insert into messages (from_id, to_id, content) values ($1, $2, 'Hello')`, [DOC, ID.evil])).blocked)
 check('the patient and the treating doctor can see who is on the care team; a stranger cannot', (await as(ID.pat, `select 1 from care_team_members`)).length === 1
   && (await as(TREAT, `select 1 from care_team_members where patient_id = $1`, [ID.pat])).length === 1 && (await as(ID.evil, `select 1 from care_team_members`)).length === 0
   && (await denied(TREAT, `insert into care_team_members (patient_id, doctor_id) values ($1, $2)`, [ID.evil, TREAT])).blocked)
@@ -966,6 +972,11 @@ await as(DOC, `select remove_consulting_doctor($1)`, [member])
 check('once it ends (here, by the consulting doctor), access ends at once and the history is kept', (await as(DOC, `select 1 from readings where patient_id = $1`, [ID.pat])).length === 0
   && (await one(`select ended_by, ended_at is not null ended from care_team_members where id = $1`, [member])).ended_by === DOC
   && (await as(ID.pat, `select 1 from notifications where body like '%no longer has access to your record'`)).length === 1)
+const patientSendAfterConsult = await denied(ID.pat, `insert into messages (from_id, to_id, content) values ($1, $2, 'After the care team ended')`, [ID.pat, DOC])
+const doctorSendAfterConsult = await denied(DOC, `insert into messages (from_id, to_id, content) values ($1, $2, 'After the care team ended')`, [DOC, ID.pat])
+const keptConsultMessages = await as(ID.pat, `select id from messages where (from_id = $1 and to_id = $2) or (from_id = $2 and to_id = $1)`, [ID.pat, DOC])
+check('ended consulting pair cannot send new messages but retains its private history', patientSendAfterConsult.blocked && doctorSendAfterConsult.blocked && keptConsultMessages.length === 2,
+  { patientSend: patientSendAfterConsult, doctorSend: doctorSendAfterConsult, kept: keptConsultMessages.length })
 await as(ID.admin, `select add_consulting_doctor($1, $2, 'Covering')`, [ID.pat, DOC])
 await as(ID.admin, `select assign_doctor($1, $2, 'Taking over')`, [ID.pat, DOC])
 check('a consulting doctor who becomes the treating doctor is no longer listed as consulting', (await one(`select count(*)::int n from care_team_members where patient_id = $1 and ended_at is null`, [ID.pat])).n === 0

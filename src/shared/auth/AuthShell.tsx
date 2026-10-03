@@ -261,13 +261,13 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
     return (
       <div key={`${s.name}-${mode}`} aria-hidden={mode === 'out'}
         className={`col-start-1 row-start-1 w-full flex flex-col items-center gap-4 @5xl:items-start @5xl:gap-5 ${mode === 'out' ? (dir > 0 ? 'auth-leave-next' : 'auth-leave-prev') : ''}`}>
-        <p className={`${on('auth-item-in')} flex items-center gap-1.5 text-xs font-bold uppercase tracking-[0.16em] text-teal-700`}>
-          <span className={`flex ${on(`auth-icon-${s.icon}`)}`}><AuthIcon name={s.icon} className="w-4 h-4" /></span>
+        <p className={`${on('auth-item-in')} flex items-center gap-2 text-sm font-bold uppercase tracking-[0.16em] text-teal-700`}>
+          <span className={`flex ${on(`auth-icon-${s.icon}`)}`}><AuthIcon name={s.icon} className="w-5 h-5" /></span>
           {s.name}
         </p>
 
         {/* Two sizes, because font sizes can't switch on one element here. */}
-        {(['@5xl:hidden text-2xl', 'hidden @5xl:block text-4xl'] as const).map(size => (
+        {(['@5xl:hidden text-xl', 'hidden @5xl:block text-4xl'] as const).map(size => (
           <h1 key={size} className={`${size} max-w-xl font-display font-black text-gray-900 leading-tight`}>
             {words.map(({ w, accent }, i) => (
               <span key={i} className="inline-block overflow-hidden align-bottom pb-1">
@@ -279,9 +279,9 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
           </h1>
         ))}
 
-        <div className="w-full flex items-center justify-center gap-5 text-left @5xl:justify-start @5xl:gap-7">
-          {/* The preview sits straight on the page: no tile or card behind it. */}
-          <div aria-hidden className={`relative w-28 h-[4.5rem] shrink-0 flex items-center justify-center @5xl:w-36 @5xl:h-36 ${on('auth-scene-in')}`}>
+        <div className="mt-2 w-full flex items-center justify-center gap-5 text-left @5xl:mt-0 @5xl:justify-start @5xl:gap-7">
+          {/* A soft preview surface adds definition on mobile and tablet. */}
+          <div aria-hidden className={`relative w-28 h-22 shrink-0 flex items-center justify-center rounded-2xl bg-teal-50/70 shadow-sm ring-1 ring-teal-100 @5xl:bg-transparent @5xl:shadow-none @5xl:ring-0 @5xl:w-36 @5xl:h-36 ${on('auth-scene-in')}`}>
             <div className={`relative w-full h-full flex items-center justify-center ${on('auth-float')}`}><s.Scene /></div>
           </div>
           {/* Mobile and tablet: one sentence, so the actions below stay the focus. Web has room for the list. */}
@@ -312,7 +312,7 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
   return (
     <section aria-label="What you can do with mCare" onFocus={onUse}
       onPointerEnter={e => { if (e.pointerType === 'mouse') onUse() }}
-      className={`${className} flex-col justify-center items-center text-center gap-8 @5xl:items-start @5xl:text-left @5xl:gap-8`}>
+      className={`${className} flex-col justify-center items-center text-center gap-10 @5xl:items-start @5xl:text-left @5xl:gap-8`}>
       {/* Mobile and tablet: the logo stays put with the icons around it. Web: it
           rests here (its place is kept) until the user turns to the welcome card. */}
       <div className={r0.cls} style={r0.style}>

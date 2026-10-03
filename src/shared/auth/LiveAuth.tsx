@@ -228,7 +228,7 @@ function LocalTestAuthDetails({ email, kind }: { email: string; kind: 'signup' |
   const [code, setCode] = useState('')
 
   useEffect(() => {
-    if (!localBackend) return
+    if (!import.meta.env.DEV || !localBackend) return
     let current = true
     const load = async () => {
       const next = await getLocalTestAuthCode(email, kind)
@@ -239,7 +239,7 @@ function LocalTestAuthDetails({ email, kind }: { email: string; kind: 'signup' |
     return () => { current = false; window.clearInterval(timer) }
   }, [email, kind])
 
-  if (!localBackend) return null
+  if (!import.meta.env.DEV || !localBackend) return null
 
   let activationHref = ''
   if (kind === 'signup' && code) {

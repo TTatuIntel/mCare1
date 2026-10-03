@@ -236,7 +236,7 @@ export async function verifyEmailCode(email: string, code: string, purpose: 'sig
 
 /** Reads a one-time code from the local test backend only; hosted projects never expose email codes to the browser. */
 export async function getLocalTestAuthCode(email: string, kind: 'signup' | 'recovery'): Promise<string | null> {
-  if (!localBackend || typeof window === 'undefined') return null
+  if (!import.meta.env.DEV || !localBackend || typeof window === 'undefined') return null
   try {
     const query = new URLSearchParams({ email: email.trim(), kind })
     const response = await fetch(`${window.location.origin}/__dev/auth-codes?${query}`)

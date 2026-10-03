@@ -35,7 +35,7 @@ async function loadPlaywright() {
 const { chromium } = await loadPlaywright()
 
 /* ── the stack: backend → test accounts → app ── */
-const backend = await startBackend({ port: 0, dataDir: 'memory', quiet: true, jobs: false })
+const backend = await startBackend({ port: 0, dataDir: 'memory', quiet: true, jobs: false, confirmEmail: true, exposeTestAuth: true })
 // The test accounts are made by the same script a developer runs. It must not block this process: the backend it talks to lives here.
 const seeded = await new Promise(done => {
   const child = spawn(process.execPath, [join(HERE, '..', 'dev', 'seed.mjs')], {
@@ -109,6 +109,10 @@ try {
     await page.goto(APP)
     await page.getByLabel('mCare is starting').waitFor({ state: 'hidden', timeout: 20000 }).catch(() => {})
     await page.getByRole('button', { name: 'Get Started' }).click()
+    const signUpButton = page.getByRole('button', { name: 'Sign up' })
+    if (!(await signUpButton.isEnabled())) throw new Error('the sign-up action should remain available to explain required fields')
+    await signUpButton.click()
+    await page.getByRole('alert').getByText(/provide your full name/).waitFor({ timeout: 5000 })
     await page.getByPlaceholder('Grace Otieno').fill('Test New Patient')
     await page.getByPlaceholder('you@example.com').fill(email)
     await page.locator('input[type=tel]').first().fill('712345678')
@@ -116,6 +120,9 @@ try {
     await page.getByPlaceholder('Repeat your password').fill(PW)
     await page.getByRole('checkbox').check()
     await page.getByRole('button', { name: 'Sign up' }).click()
+    await page.getByRole('heading', { name: 'Check your email' }).waitFor({ timeout: 15000 })
+    await page.getByText(/One-time code: \d{6}/).waitFor({ timeout: 10000 })
+    await page.getByRole('link', { name: 'Open test activation link' }).click()
     await page.getByRole('heading', { name: 'About you' }).waitFor({ timeout: 25000 })
   })
   const newId = (await row(service.from('profiles').select('id, role').eq('email', email).maybeSingle()))?.id
@@ -149,12 +156,18 @@ try {
   await step(s, 'empty screens say what to do instead of inventing data', async () => {
     await s.nav('Meds'); await page.getByText('No active prescriptions').waitFor({ timeout: 10000 })
     await s.nav('Appts'); await page.getByText('No appointments yet').waitFor({ timeout: 10000 })
-    await s.nav('Chat'); await page.getByText('No doctor assigned yet').waitFor({ timeout: 10000 })
+    await s.nav('Chat'); await page.getByText('No doctor on your care team yet').waitFor({ timeout: 10000 })
   })
-  await step(s, 'signing out returns to the sign-in page without an error', async () => {
+  await step(s, 'sign out and local password recovery display the test OTP', async () => {
     await s.home(); await page.getByRole('button', { name: 'Profile' }).click()
     await page.getByRole('button', { name: 'Sign Out', exact: true }).click()
     await page.getByRole('button', { name: 'Sign in', exact: true }).first().waitFor({ timeout: 15000 })
+    await page.getByRole('button', { name: 'Sign in', exact: true }).first().click()
+    await page.getByRole('button', { name: 'Forgot password?' }).click()
+    await page.getByLabel('Email Address').fill(email)
+    await page.getByRole('button', { name: 'Send reset email' }).click()
+    await page.getByRole('heading', { name: 'Check your email' }).waitFor({ timeout: 10000 })
+    await page.getByText(/One-time code: \d{6}/).waitFor({ timeout: 10000 })
   })
   check('no script errors', s.errors.length === 0, s.errors.join(' | '))
   await s.context.close()
@@ -447,6 +460,21 @@ try {
     await p2.page.getByText('Also on your care team').waitFor({ timeout: 15000 })
     await p2.page.getByText('Dr. Test Mutua').first().waitFor({ timeout: 5000 })
   })
+  await step(p2, 'the patient has a separate private chat with each current doctor', async () => {
+    await p2.page.getByRole('button', { name: /Chat$/ }).click()
+    const conversations = p2.page.getByRole('group', { name: 'Conversations' })
+    await conversations.getByRole('button', { name: /Dr\. Test Achieng/ }).waitFor({ timeout: 10000 })
+    await conversations.getByRole('button', { name: /Dr\. Test Mutua/ }).click()
+    await p2.page.getByLabel('Message').fill('TEST patient message to consultant')
+    await p2.page.getByRole('button', { name: 'Send', exact: true }).click()
+    await p2.page.getByRole('log').getByText('TEST patient message to consultant').waitFor({ timeout: 15000 })
+    const consultantId = (await row(service.from('profiles').select('id').eq('email', 'test.doctor2@mcare.test').single())).id
+    const message = await row(service.from('messages').select('from_id, to_id').eq('content', 'TEST patient message to consultant').single())
+    if (message?.from_id !== patId || message.to_id !== consultantId) throw new Error(JSON.stringify(message))
+    const treatingDoctor = api(backend.anonKey)
+    await treatingDoctor.auth.signInWithPassword({ email: 'test.doctor@mcare.test', password: PW })
+    if ((await row(treatingDoctor.from('messages').select('id').eq('content', 'TEST patient message to consultant'))).length) throw new Error('the treating doctor can read the consultant thread')
+  })
   await step(p2, 'the patient is offered only the doctor\'s open times, and books one', async () => {
     await p2.nav('Appts')
     await p2.page.getByRole('button', { name: 'Request an appointment', exact: true }).first().click()
@@ -603,7 +631,7 @@ try {
       ['vitals', async () => { await r.nav('Vitals'); await r.page.getByRole('heading', { name: 'Vitals' }).waitFor() }],
       ['vital-detail', async () => { await r.page.locator('[data-vital="bp"]').getByRole('button').first().click(); await r.page.getByText('Latest reading').waitFor() }],
       ['meds', async () => { await r.nav('Meds'); await r.page.getByRole('heading', { name: 'Medications' }).waitFor() }],
-      ['chat', async () => { await r.nav('Chat'); await r.page.getByLabel('Message').waitFor() }],
+      ['chat', async () => { await r.nav('Chat'); await r.page.getByRole('heading', { name: 'Messages' }).waitFor() }],
       ['appointments', async () => { await r.nav('Appts'); await r.page.getByRole('heading', { name: 'Appointments' }).waitFor() }],
       ['alerts', async () => { await r.home(); await r.page.getByRole('button', { name: /Alerts/ }).first().click(); await r.page.getByRole('heading', { name: 'My Alerts' }).waitFor() }],
       ['care-team', async () => { await r.home(); await r.page.getByRole('button', { name: /Care Team$/ }).click(); await r.page.getByRole('heading', { name: 'Care Team' }).waitFor() }],
@@ -612,15 +640,18 @@ try {
       ['profile', async () => { await r.home(); await r.page.getByRole('button', { name: 'Profile', exact: true }).click(); await r.page.getByRole('heading', { name: 'Profile' }).waitFor() }],
     ]
     const problems = []
+    let activeScreen = 'sign in'
     try {
       await r.signIn('test.patient@mcare.test')
+      activeScreen = 'patient home'
       await r.page.getByText('Health Score').waitFor({ timeout: 25000 })
       for (const [name, go] of screens) {
+        activeScreen = name
         await go(); await r.page.waitForTimeout(350); await r.shot(name)
         const out = await sticksOut()
         if (out.length) problems.push(`${name}: ${out.join(', ')}`)
       }
-    } catch (e) { problems.push(String(e.message).split('\n')[0]) }
+    } catch (e) { problems.push(`${activeScreen}: ${String(e.message).split('\n')[0]}`) }
     check(`${size} (${SIZES[size].width}px): all ${screens.length} screens fit, no script errors`, problems.length === 0 && r.errors.length === 0, [...problems, ...r.errors].join(' | '))
     await r.context.close()
 
