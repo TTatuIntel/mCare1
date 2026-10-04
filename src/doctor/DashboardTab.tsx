@@ -17,11 +17,13 @@ const BAND_EDGE: Record<string, string> = { red: 'border-red-500', amber: 'borde
    a fixed number. */
 export function DashboardTab({ goTo, openPatient, openAppt }: {
   goTo: (t: string, about?: AppNotification['resource']) => void
-  openPatient: (id: string, section?: 'docs') => void
+  openPatient: (id: string, section?: 'docs' | 'vitals') => void
   openAppt: (id: string) => void
 }) {
   const { documentsFor } = useApp()
-  const { doctor, appointments, activeAlerts, nameOf, now } = useDoctor()
+  const { doctor, appointments, activeAlerts, nameOf, now, patients, unreviewedOf } = useDoctor()
+  // Readings nobody has reviewed yet, by patient (abnormal ones also raised alerts above).
+  const toReview = patients.map(p => ({ p, n: unreviewedOf(p.id).length })).filter(x => x.n > 0).sort((a, b) => b.n - a.n)
   const unsigned = documentsFor().filter(e => isOfficial(e.doc) && e.doc.status !== 'released' && (!e.doc.upload || e.doc.upload.state === 'ready'))
   const board = useBoard()
   const confirmed = appointments.filter(a => a.status === 'approved').length
@@ -67,6 +69,16 @@ export function DashboardTab({ goTo, openPatient, openAppt }: {
             <AlertCard key={a.id} a={a} patientName={nameOf(a.patientId)} onResolve={setResolve} compact />
           ))}
         </div>
+      )}
+
+      {toReview.length > 0 && (
+        <NoticeCard tone="teal" pulse={false} title={`🔎 Readings to review · ${toReview.length} patient${toReview.length > 1 ? 's' : ''}`}>
+          {toReview.slice(0, 3).map(({ p, n }) => (
+            <NoticeRow key={p.id} onClick={() => openPatient(p.id, 'vitals')} title={p.name}
+              sub={`${n} new reading${n > 1 ? 's' : ''} since your last review`}
+              right={<span className="text-[10px] font-bold text-teal-700">Review →</span>} />
+          ))}
+        </NoticeCard>
       )}
 
       {unsigned.length > 0 && (

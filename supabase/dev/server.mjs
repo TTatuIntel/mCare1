@@ -7,7 +7,8 @@
  * It runs the migrations in ../migrations on a real Postgres engine (PGlite,
  * kept on disk in ../.data) and serves it the way a Supabase project does:
  *
- *   /auth/v1     sign-up, sign-in, sessions, password reset      (Supabase Auth)
+ *   /auth/v1     sign-up, sign-in, sessions, password reset,     (Supabase Auth)
+ *                two-step sign-in (TOTP factors)
  *   /rest/v1     tables and functions, as the signed-in person   (PostgREST)
  *   /storage/v1  document files                                  (Supabase Storage)
  *
@@ -40,12 +41,47 @@ const MIN_PASSWORD = 5                  // mCare policy: short but still require
 const CODE_TTL_MIN = { signup: 60, recovery: 10 }
 const MAX_CODE_ATTEMPTS = 5
 const MAX_SIGN_IN_FAILURES = 10         // per email, per 5 minutes
+const MAX_MFA_FAILURES = 5              // per factor, per 5 minutes
+const CHALLENGE_TTL_SEC = 300
 const validPassword = pw => typeof pw === 'string' && pw.length >= MIN_PASSWORD && /[A-Z]/.test(pw) && /\d/.test(pw)
 
 /* ─── Small helpers ─────────────────────────────────────────────────── */
 const b64url = v => Buffer.from(v).toString('base64url')
 const sha256 = v => crypto.createHash('sha256').update(v).digest('hex')
 const iso = v => (v instanceof Date ? v.toISOString() : v ?? null)
+
+/* ─── Two-step sign-in codes (TOTP, RFC 6238: 30-second steps, 6 digits, SHA-1) ── */
+const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+function toBase32(buf) {
+  let bits = 0, value = 0, out = ''
+  for (const byte of buf) {
+    value = (value << 8) | byte; bits += 8
+    while (bits >= 5) { out += B32[(value >>> (bits - 5)) & 31]; bits -= 5 }
+  }
+  if (bits > 0) out += B32[(value << (5 - bits)) & 31]
+  return out
+}
+function fromBase32(text) {
+  let bits = 0, value = 0
+  const out = []
+  for (const ch of String(text).replace(/=+$/, '').toUpperCase()) {
+    const i = B32.indexOf(ch)
+    if (i < 0) continue
+    value = (value << 5) | i; bits += 5
+    if (bits >= 8) { out.push((value >>> (bits - 8)) & 255); bits -= 8 }
+  }
+  return Buffer.from(out)
+}
+/** The 6-digit code an authenticator app shows for this secret at this moment (or `step` 30-second steps from now). */
+export function totpCode(secret, at = Date.now(), step = 0) {
+  const counter = Buffer.alloc(8)
+  counter.writeBigUInt64BE(BigInt(Math.floor(at / 30_000) + step))
+  const h = crypto.createHmac('sha1', fromBase32(secret)).update(counter).digest()
+  const o = h[h.length - 1] & 15
+  return String((h.readUInt32BE(o) & 0x7fffffff) % 1_000_000).padStart(6, '0')
+}
+/** A code from the step before, now or after, so a phone clock a few seconds out still works. */
+const totpMatches = (secret, code) => [-1, 0, 1].some(d => totpCode(secret, Date.now(), d) === String(code ?? '').trim())
 
 class HttpError extends Error {
   constructor(status, body) { super(body.message ?? body.msg ?? 'Error'); this.status = status; this.body = body }
@@ -288,6 +324,19 @@ async function prepareFolder(dataDir) {
   return { how: 'restored', aside, savedAt: fs.statSync(backup).mtime }
 }
 
+/** Idempotent: the parts of Supabase Auth's schema added to bootstrap.sql since a local database may have been created. */
+const AUTH_UPGRADES = `
+  alter table auth.sessions add column if not exists aal text not null default 'aal1';
+  create table if not exists auth.mfa_factors (
+    id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users (id) on delete cascade,
+    friendly_name text, factor_type text not null default 'totp',
+    status text not null default 'unverified' check (status in ('unverified', 'verified')),
+    secret text not null, created_at timestamptz not null default now(), updated_at timestamptz not null default now());
+  create table if not exists auth.mfa_challenges (
+    id uuid primary key default gen_random_uuid(), factor_id uuid not null references auth.mfa_factors (id) on delete cascade,
+    created_at timestamptz not null default now(), verified_at timestamptz);
+`
+
 /* ─── The backend ───────────────────────────────────────────────────── */
 /**
  * @param {{ port?: number, host?: string, dataDir?: string, quiet?: boolean, confirmEmail?: boolean, jobs?: boolean, exposeTestAuth?: boolean, onStop?: () => void }} [options]
@@ -340,6 +389,8 @@ export async function startBackend(options = {}) {
   try { await db.exec(`set timezone = 'UTC'`) } catch (e) { await abandon(e) }
   const fresh = (await db.query(`select 1 from pg_namespace where nspname = 'supabase_migrations'`)).rows.length === 0
   if (fresh) await db.exec(fs.readFileSync(join(HERE, 'bootstrap.sql'), 'utf8'))
+  // What bootstrap.sql gained after a database was first created (two-step sign-in), for databases made before it.
+  try { await db.exec(AUTH_UPGRADES) } catch (e) { await abandon(e) }
   const applied = new Set((await db.query(`select version from supabase_migrations.schema_migrations`)).rows.map(r => r.version))
   /** Applies the migrations this database has not had yet, in order. Returns how many. */
   async function migrate() {
@@ -378,12 +429,21 @@ export async function startBackend(options = {}) {
   const MISSING = new Set(['42P01', '42883', '42703', 'PGRST202'])
   const catchUp = () => exclusive(migrate).catch(e => { console.error(`  ${e.message}`); return 0 })
 
-  /** Runs `work` as the caller. Their role and id are set for this transaction only, so the row rules decide what they reach. */
-  const asCaller = (claims, work) => exclusive(() => db.transaction(async tx => {
+  /**
+   * Runs `work` as the caller. Their role and id are set for this transaction only, so the row rules decide what they reach.
+   * As PostgREST does, the token's claims and the request's headers are readable by the database (the audit trail stamps
+   * the session, the device and the address from them).
+   */
+  const asCaller = (claims, work, req) => exclusive(() => db.transaction(async tx => {
     const signedIn = claims.role === 'authenticated'
+    const headers = req ? {
+      'user-agent': String(req.headers['user-agent'] ?? '').slice(0, 300),
+      'x-forwarded-for': String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? '').replace(/^::ffff:/, ''),
+    } : {}
     await tx.query(
-      `select set_config('request.jwt.claim.sub', $1, true), set_config('request.jwt.claim.role', $2, true), set_config('request.jwt.claims', $3, true)`,
-      [signedIn ? claims.sub : '', claims.role, JSON.stringify(claims)])
+      `select set_config('request.jwt.claim.sub', $1, true), set_config('request.jwt.claim.role', $2, true), set_config('request.jwt.claims', $3, true),
+              set_config('request.headers', $4, true)`,
+      [signedIn ? claims.sub : '', claims.role, JSON.stringify(claims), JSON.stringify(headers)])
     if (claims.role !== 'service_role') await tx.query(`set local role ${signedIn ? 'authenticated' : 'anon'}`)
     return work(tx)
   }))
@@ -392,10 +452,13 @@ export async function startBackend(options = {}) {
   /** Codes and links "emailed" by this backend. There is no mail server locally: they are printed here instead. */
   const outbox = []
   const signInFailures = new Map()
+  const mfaFailures = new Map()
 
   /* ─── Auth ────────────────────────────────────────────────────────── */
-  const userJson = u => ({
+  const userJson = (u, factors = []) => ({
     id: u.id, aud: 'authenticated', role: 'authenticated', email: u.email, phone: '',
+    factors: factors.map(f => ({ id: f.id, friendly_name: f.friendly_name ?? undefined, factor_type: f.factor_type, status: f.status,
+      created_at: iso(f.created_at), updated_at: iso(f.updated_at) })),
     email_confirmed_at: iso(u.email_confirmed_at), confirmed_at: iso(u.email_confirmed_at), last_sign_in_at: iso(u.last_sign_in_at),
     app_metadata: u.raw_app_meta_data, user_metadata: u.raw_user_meta_data,
     identities: [{
@@ -405,15 +468,22 @@ export async function startBackend(options = {}) {
     created_at: iso(u.created_at), updated_at: iso(u.updated_at), is_anonymous: false,
   })
 
+  const factorsOf = async userId => (await q(`select * from auth.mfa_factors where user_id = $1 order by created_at`, [userId])).rows
+  /** The user as Supabase Auth answers with it, including their second factors (never the secrets). */
+  const userOut = async u => userJson(u, await factorsOf(u.id))
+
   async function tokensFor(user, sessionId) {
     const refresh = crypto.randomBytes(24).toString('base64url')
     await q(`insert into auth.refresh_tokens (token, session_id) values ($1, $2)`, [sha256(refresh), sessionId])
     const now = Math.floor(Date.now() / 1000)
+    // The session's assurance level: aal2 once its second step was passed; refreshing keeps it.
+    const aal = (await q(`select aal from auth.sessions where id = $1`, [sessionId])).rows[0]?.aal ?? 'aal1'
     const access = signJwt({
       iss: 'mcare-local', aud: 'authenticated', role: 'authenticated', sub: user.id, email: user.email, session_id: sessionId,
       iat: now, exp: now + ACCESS_TTL, app_metadata: user.raw_app_meta_data, user_metadata: user.raw_user_meta_data,
+      aal, amr: aal === 'aal2' ? [{ method: 'totp', timestamp: now }, { method: 'password', timestamp: now }] : [{ method: 'password', timestamp: now }],
     }, secret)
-    return { access_token: access, token_type: 'bearer', expires_in: ACCESS_TTL, expires_at: now + ACCESS_TTL, refresh_token: refresh, user: userJson(user) }
+    return { access_token: access, token_type: 'bearer', expires_in: ACCESS_TTL, expires_at: now + ACCESS_TTL, refresh_token: refresh, user: await userOut(user) }
   }
   async function newSession(user) {
     const id = (await q(`insert into auth.sessions (user_id) values ($1) returning id`, [user.id])).rows[0].id
@@ -498,7 +568,7 @@ export async function startBackend(options = {}) {
       throw authError(400, 'unsupported_grant_type', 'Only email and password sign-in is available on the local backend')
     }
 
-    if (route === 'GET /user') return send(res, 200, userJson(await me()))
+    if (route === 'GET /user') return send(res, 200, await userOut(await me()))
 
     if (route === 'PUT /user') {
       const user = await me()
@@ -512,7 +582,60 @@ export async function startBackend(options = {}) {
       }
       if (body.data && typeof body.data === 'object')
         await q(`update auth.users set raw_user_meta_data = raw_user_meta_data || $2::jsonb, updated_at = now() where id = $1`, [user.id, JSON.stringify(body.data)])
-      return send(res, 200, userJson(await userById(user.id)))
+      return send(res, 200, await userOut(await userById(user.id)))
+    }
+
+    /* two-step sign-in: what supabase.auth.mfa.enroll / challenge / verify / unenroll call */
+    const sessionAal = async () => (await q(`select aal from auth.sessions where id = $1`, [claims.session_id])).rows[0]?.aal ?? 'aal1'
+    if (route === 'POST /factors') {
+      const user = await me()
+      if ((body.factor_type ?? 'totp') !== 'totp') throw authError(422, 'mfa_factor_type_not_supported', 'Only authenticator apps (TOTP) are available on the local backend')
+      const factors = await factorsOf(user.id)
+      // Adding a second factor to an account that already has one needs a session that passed the first.
+      if (factors.some(f => f.status === 'verified') && await sessionAal() !== 'aal2') throw authError(403, 'insufficient_aal', 'AAL2 required to enroll a new factor')
+      const name = String(body.friendly_name ?? '').trim().slice(0, 60) || null
+      if (name && factors.some(f => f.status === 'verified' && f.friendly_name === name)) throw authError(422, 'mfa_factor_name_conflict', `A factor with the friendly name "${name}" for this user already exists`)
+      // An unfinished setup is replaced, not stacked.
+      await q(`delete from auth.mfa_factors where user_id = $1 and status = 'unverified'`, [user.id])
+      const key = toBase32(crypto.randomBytes(20))
+      const id = (await q(`insert into auth.mfa_factors (user_id, friendly_name, factor_type, secret) values ($1, $2, 'totp', $3) returning id`, [user.id, name, key])).rows[0].id
+      const issuer = String(body.issuer ?? 'mCare').replace(/[:?&#]/g, '').slice(0, 40) || 'mCare'
+      const uri = `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(user.email)}?secret=${key}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`
+      // A hosted project also returns a QR code (SVG). The local backend has no QR encoder: the app shows the key and the link.
+      return send(res, 200, { id, type: 'totp', friendly_name: name ?? undefined, totp: { qr_code: '', secret: key, uri } })
+    }
+    const factorRoute = route.match(/^(POST|DELETE) \/factors\/([0-9a-f-]{36})(\/challenge|\/verify)?$/)
+    if (factorRoute) {
+      const user = await me()
+      const factor = (await q(`select * from auth.mfa_factors where id = $1 and user_id = $2`, [factorRoute[2], user.id])).rows[0]
+      if (!factor) throw authError(404, 'mfa_factor_not_found', 'Factor not found')
+      if (factorRoute[1] === 'DELETE' && !factorRoute[3]) {
+        if (factor.status === 'verified' && await sessionAal() !== 'aal2') throw authError(403, 'insufficient_aal', 'AAL2 required to unenroll verified factor')
+        await q(`delete from auth.mfa_factors where id = $1`, [factor.id])
+        return send(res, 200, { id: factor.id })
+      }
+      if (factorRoute[3] === '/challenge') {
+        const c = (await q(`insert into auth.mfa_challenges (factor_id) values ($1) returning id, created_at`, [factor.id])).rows[0]
+        return send(res, 200, { id: c.id, type: 'totp', expires_at: Math.floor(new Date(c.created_at).getTime() / 1000) + CHALLENGE_TTL_SEC })
+      }
+      if (factorRoute[3] === '/verify') {
+        const recent = (mfaFailures.get(factor.id) ?? []).filter(t => Date.now() - t < 5 * 60_000)
+        if (recent.length >= MAX_MFA_FAILURES) throw authError(429, 'over_request_rate_limit', 'Too many attempts. Wait a few minutes and try again.')
+        const challengeId = /^[0-9a-f-]{36}$/.test(String(body.challenge_id ?? '')) ? String(body.challenge_id) : null
+        const challenge = challengeId && (await q(`select * from auth.mfa_challenges where id = $1 and factor_id = $2`, [challengeId, factor.id])).rows[0]
+        if (!challenge || challenge.verified_at || Date.now() - new Date(challenge.created_at).getTime() > CHALLENGE_TTL_SEC * 1000) {
+          throw authError(422, 'mfa_challenge_expired', 'MFA challenge has expired, verify against another challenge or create a new challenge.')
+        }
+        if (!totpMatches(factor.secret, body.code)) {
+          mfaFailures.set(factor.id, [...recent, Date.now()])
+          throw authError(422, 'mfa_verification_failed', 'Invalid TOTP code entered')
+        }
+        mfaFailures.delete(factor.id)
+        await q(`update auth.mfa_challenges set verified_at = now() where id = $1`, [challenge.id])
+        await q(`update auth.mfa_factors set status = 'verified', updated_at = now() where id = $1`, [factor.id])
+        await q(`update auth.sessions set aal = 'aal2' where id = $1`, [claims.session_id])
+        return send(res, 200, await tokensFor(user, claims.session_id))
+      }
     }
 
     if (route === 'POST /logout') {
@@ -562,7 +685,7 @@ export async function startBackend(options = {}) {
       }
       if (route === 'GET /admin/users') {
         const rows = (await q(`select * from auth.users order by created_at`)).rows
-        return send(res, 200, { users: rows.map(userJson), aud: 'authenticated' })
+        return send(res, 200, { users: rows.map(u => userJson(u)), aud: 'authenticated' })
       }
     }
 
@@ -583,6 +706,7 @@ export async function startBackend(options = {}) {
 
   async function rest(req, res, url, claims, body) {
     const signedIn = claims.role === 'authenticated'
+    const asThem = work => asCaller(claims, work, req)
     const prefer = String(req.headers.prefer ?? '')
     const wantObject = String(req.headers.accept ?? '').includes('vnd.pgrst.object')
     const reply = (status, json, extra) => {
@@ -599,7 +723,7 @@ export async function startBackend(options = {}) {
       const fn = url.pathname.match(/^\/rest\/v1\/rpc\/([a-z_][a-z0-9_]*)$/)
       if (fn) {
         if (req.method !== 'POST') throw restError(405, 'PGRST101', 'Call functions with POST')
-        return await asCaller(claims, async tx => {
+        return await asThem(async tx => {
           const f = (await tx.query(
             `select p.proretset, t.typtype, t.typname, p.pronargs, p.proargnames,
                     array(select format_type(u, null) from unnest(p.proargtypes::oid[]) u) as argtypes
@@ -635,7 +759,7 @@ export async function startBackend(options = {}) {
       const cols = columnsOf(url.searchParams.get('select'))
       const returning = prefer.includes('return=representation')
 
-      return await asCaller(claims, async tx => {
+      return await asThem(async tx => {
         if (req.method === 'GET' || req.method === 'HEAD') {
           const params = []
           const where = whereOf(url.searchParams, params)
@@ -718,10 +842,10 @@ export async function startBackend(options = {}) {
       if (!raw.length) throw storageError(400, 'InvalidRequest', 'The file is empty')
       if (raw.length > MAX_FILE) throw storageError(413, 'Payload too large', 'The file is too large (max 20 MB)')
       const owner = key.split('/')[0]
-      // The same rule the hosted bucket uses: your own folder, or the folder of a patient you treat.
-      const allowed = service || owner === claims.sub || (await asCaller(claims, async tx => {
-        try { return (await tx.query(`select public.treats($1::uuid) as ok`, [owner])).rows[0].ok } catch { return false }
-      }))
+      // The same rule the hosted bucket uses: an active account (with the second step where it applies), and your own folder or the folder of a patient you treat.
+      const allowed = service || (await asCaller(claims, async tx => {
+        try { return (await tx.query(`select public.account_active() and ($1::uuid = auth.uid() or public.treats($1::uuid)) as ok`, [owner])).rows[0].ok } catch { return false }
+      }, req))
       if (!allowed) throw storageError(403, 'Unauthorized', 'new row violates row-level security policy')
       const meta = { contentType: String(req.headers['content-type'] ?? 'application/octet-stream').split(';')[0], size: raw.length }
       if (memory) {
@@ -752,6 +876,23 @@ export async function startBackend(options = {}) {
 
     throw storageError(404, 'not_found', 'Not available on the local backend')
   }
+
+  /* ─── Change notices ──────────────────────────────────────────────────
+     Hosted Supabase pushes changes through Realtime. Here, after every write, one cheap query sums the change
+     counters; when they moved, every open app waiting on /__dev/changes is woken at once and asks for its own
+     change token (which still decides, under its row rules, whether anything it may see changed). */
+  let pulse = 0, pulseSig = ''
+  const waiters = new Set()
+  async function checkPulse() {
+    const sig = (await q(`select concat_ws(':', (select coalesce(sum(version), 0) from public.patient_changes), (select coalesce(sum(version), 0) from public.system_changes),
+      (select count(*) from public.notifications), (select count(*) from public.notifications where read)) as s`)).rows[0]?.s ?? ''
+    if (sig === pulseSig) return
+    pulseSig = sig; pulse++
+    for (const wake of waiters) wake()
+    waiters.clear()
+  }
+  const notePulse = () => { checkPulse().catch(() => {}) }
+  await checkPulse().catch(() => {})
 
   /* ─── HTTP ────────────────────────────────────────────────────────── */
   const CORS = {
@@ -821,6 +962,19 @@ export async function startBackend(options = {}) {
         }))
         return send(res, 200, { moved })
       }
+      // The local stand-in for Realtime (see "Change notices"): answers as soon as anything was saved, or after 25 s.
+      if (url.pathname === '/__dev/changes' && req.method === 'GET') {
+        const who = claimsOf(req)
+        if (who.role === 'anon') return send(res, 401, { message: 'Sign in first' })
+        const since = Number(url.searchParams.get('since') ?? -1)
+        if (since !== pulse) return send(res, 200, { pulse }, { 'Cache-Control': 'no-store' })
+        return await new Promise(done => {
+          const wake = () => { clearTimeout(timer); done(send(res, 200, { pulse }, { 'Cache-Control': 'no-store' })) }
+          const timer = setTimeout(() => { waiters.delete(wake); done(send(res, 200, { pulse }, { 'Cache-Control': 'no-store' })) }, 25_000)
+          waiters.add(wake)
+          req.on('close', () => { clearTimeout(timer); waiters.delete(wake) })
+        })
+      }
       // npm run backend:stop: a clean stop for a backend started where Ctrl+C cannot reach it. Service key only.
       if (url.pathname === '/__dev/stop' && req.method === 'POST') {
         if (!options.onStop) return send(res, 404, { message: 'Not found' })
@@ -836,11 +990,14 @@ export async function startBackend(options = {}) {
       let body
       try { body = raw.length ? JSON.parse(raw.toString('utf8')) : undefined } catch { throw new HttpError(400, { code: 'PGRST102', message: 'The request body is not valid JSON' }) }
       if (area === 'auth') return await auth(req, res, url, claims, body ?? {})
-      try { return await rest(req, res, url, claims, body) }
+      const writes = req.method !== 'GET' && req.method !== 'HEAD'
+      try { const out = await rest(req, res, url, claims, body); if (writes) notePulse(); return out }
       catch (e) {
         if (!(e instanceof HttpError) || !MISSING.has(e.body.code) || !(await catchUp())) throw e
         primaryKeys.clear()
-        return await rest(req, res, url, claims, body)
+        const out = await rest(req, res, url, claims, body)
+        if (writes) notePulse()
+        return out
       }
     } catch (e) {
       if (res.headersSent) return res.end()
@@ -874,9 +1031,9 @@ export async function startBackend(options = {}) {
 
   const timers = options.jobs === false ? [] : [
     setInterval(() => { deliverQueued().catch(e => console.error('delivery job:', e.message)) }, 10_000),
-    setInterval(() => { q(`select public.escalate_stale_alerts()`).catch(e => console.error('escalation job:', e.message)) }, 60_000),
-    setInterval(() => { q(`select public.purge_deleted_documents()`).catch(e => console.error('purge job:', e.message)) }, 6 * 3600_000),
-    setInterval(() => { q(`select public.complete_ended_prescriptions()`).catch(e => console.error('prescription job:', e.message)) }, 3600_000),
+    setInterval(() => { q(`select public.escalate_stale_alerts()`).then(notePulse, e => console.error('escalation job:', e.message)) }, 60_000),
+    setInterval(() => { q(`select public.apply_retention()`).then(notePulse, e => console.error('retention job:', e.message)) }, 6 * 3600_000),
+    setInterval(() => { q(`select public.complete_ended_prescriptions()`).then(notePulse, e => console.error('prescription job:', e.message)) }, 3600_000),
   ]
   timers.forEach(t => t.unref())
 

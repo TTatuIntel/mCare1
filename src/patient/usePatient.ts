@@ -240,5 +240,16 @@ export function usePatient() {
 
     /** Ends the session on this device. */
     signOut: () => app.setCurrentUser(null),
+
+    /** GET tracked_vitals: how often the treating doctor asked to measure each vital, and why. */
+    vitalPlans: patient.vitalPlans ?? {},
+    /** GET vital_reviews: each time the treating doctor reviewed these readings, newest first. */
+    reviews: app.vitalReviews.filter(r => r.patientId === patient.id).sort((a, b) => b.reviewedThrough - a.reviewedThrough),
+    /** GET record_views: who opened this patient's record, newest first. */
+    recordViews: app.recordViews.filter(v => v.patientId === patient.id).sort((a, b) => b.at - a.at),
+    /** RPC export_my_record: everything mCare holds about this patient, as one document. */
+    exportMyRecord: app.exportMyRecord,
+    /** The conditions catalogue (active ones), with the vitals each calls for. */
+    conditionDefs: app.conditionDefs.filter(c => c.active),
   }
 }

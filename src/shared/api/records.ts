@@ -9,11 +9,12 @@
  * Writing lives in ./actions.
  */
 import type {
-  AccountStatus, AdminUser, AppAlert, AppNotification, AppUser, Appointment, ApprovalStatus, AssistantPerm, AuditEntry,
-  CareAssignment, CarePlan, CareTeamMember, PastPatient, TimeOff,
+  AccountStatus, AdminUser, AppAlert, AppNotification, AppSettings, AppUser, Appointment, ApprovalStatus, AssistantPerm, AuditEntry,
+  CareAssignment, CarePlan, CareTeamMember, ConditionDef, PastPatient, RecordView, TimeOff, VitalFrequency, VitalPlan, VitalReview,
   ClinicalNote, DocEvent, DoctorRating, DoctorRequest, DoctorUser, HydrationLog, Invitation, MealDone, MealPlan, MedDose, MedicalDocument,
   PatientMessage, PatientUser, ReportRequest, ShareLink, SupportGrant, SupportTicket, TargetChange, UserRole, VitalDef, VitalReading,
 } from '@/shared/lib/types'
+import { DEFAULT_SETTINGS } from '@/shared/lib/types'
 import { dateLabel, dayKey, stamp } from '@/shared/lib/vitals'
 import { getSupabase } from './supabase'
 
@@ -57,6 +58,14 @@ export interface Records {
   timeOff: TimeOff[]
   /** Consulting doctors on care teams, past and present. */
   careTeam: CareTeamMember[]
+  /** What an administrator decided for the whole service (two-step sign-in, idle sign-out, retention). */
+  settings: AppSettings
+  /** The conditions catalogue, with the vitals each calls for. */
+  conditionDefs: ConditionDef[]
+  /** Each time the treating doctor reviewed a patient's readings. */
+  vitalReviews: VitalReview[]
+  /** Who opened a patient's record: the patient's own list, or all of them for staff who view logs. */
+  recordViews: RecordView[]
 }
 
 /* ─── Dates and times ───────────────────────────────────────────────── */
@@ -117,8 +126,29 @@ export const toReading = (r: Row): VitalReading => ({
 export const toAudit = (r: Row): AuditEntry => ({
   id: String(r.id), actorId: r.actor_id ?? 'system', actorRole: r.actor_role ?? undefined, action: r.action, detail: r.detail ?? '',
   resourceType: r.resource_type ?? undefined, resourceId: r.resource_id ?? undefined, patientId: r.patient_id ?? undefined,
+  onBehalfOf: r.on_behalf_of ?? undefined, sessionId: r.session_id ?? undefined, aal: r.aal ?? undefined,
+  userAgent: r.user_agent ?? undefined, clientIp: r.client_ip ?? undefined,
   at: ms(r.created_at) ?? 0, createdAt: when(r.created_at) ?? '',
 })
+
+/** The settings rows → the app's shape, with the defaults for anything not set. */
+export function toSettings(rows: Row[]): AppSettings {
+  const sec = rows.find(r => r.key === 'security')?.value ?? {}
+  const ret = rows.find(r => r.key === 'retention')?.value ?? {}
+  const days = (v: unknown, fallback: number | null) => (v === undefined ? fallback : v === null ? null : Number(v))
+  return {
+    security: {
+      mfaRequiredRoles: Array.isArray(sec.mfa_required_roles) ? sec.mfa_required_roles as UserRole[] : DEFAULT_SETTINGS.security.mfaRequiredRoles,
+      idleMinutes: { ...DEFAULT_SETTINGS.security.idleMinutes, ...(sec.idle_minutes ?? {}) },
+    },
+    retention: {
+      auditDays: days(ret.audit_days, DEFAULT_SETTINGS.retention.auditDays),
+      deletedDocumentDays: days(ret.deleted_document_days, DEFAULT_SETTINGS.retention.deletedDocumentDays),
+      readNotificationDays: days(ret.read_notification_days, DEFAULT_SETTINGS.retention.readNotificationDays),
+      deliveryDays: days(ret.delivery_days, DEFAULT_SETTINGS.retention.deliveryDays),
+    },
+  }
+}
 /** "09:00:00" → "09:00" */
 const hm = (time: string) => time.slice(0, 5)
 
@@ -153,6 +183,7 @@ const toAppointment = (r: Row, events: Row[]): Appointment => ({
 
 const toMessage = (r: Row): PatientMessage => ({
   id: r.id, fromId: r.from_id, toId: r.to_id, content: r.content, sentAt: when(r.created_at) ?? '', at: ms(r.created_at), read: r.read,
+  readAt: ms(r.read_at),
 })
 
 const toNotification = (r: Row): AppNotification => ({
@@ -256,7 +287,8 @@ export async function loadRecords(me: AppUser): Promise<Records> {
   ])
 
   // The newer parts of the record, and what belongs to one role.
-  const [rxEvents, planRows, planItemRows, planEventRows, assignmentRows, hourRows, timeOffRows, pastRows, remeasureRows, alertCommentRows, teamRows] = await Promise.all([
+  const [rxEvents, planRows, planItemRows, planEventRows, assignmentRows, hourRows, timeOffRows, pastRows, remeasureRows, alertCommentRows, teamRows,
+    settingRows, conditionRows, conditionVitalRows, reviewRows, viewRows, directoryRows, signatureRows] = await Promise.all([
     rows('prescription_events', q => q.order('id')),
     rows('care_plans', q => q.order('created_at', { ascending: false })),
     rows('care_plan_items', q => q.order('position')),
@@ -268,6 +300,14 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     rows('alert_remeasures', q => q.order('created_at')),
     rows('alert_comments', q => q.order('created_at')),
     rows('care_team_members', q => q.order('started_at', { ascending: false })),
+    rows('app_settings'),
+    rows('condition_defs', q => q.order('position')),
+    rows('condition_vitals', q => q.order('position')),
+    rows('vital_reviews', q => q.order('reviewed_through', { ascending: false }).limit(1000)),
+    rows('record_views', q => q.order('created_at', { ascending: false }).limit(300)),
+    // Approved doctors with their public details: how anyone finds a doctor they do not deal with yet.
+    supabase.rpc('doctor_directory').then(({ data }) => (data ?? []) as Row[], () => [] as Row[]),
+    me.role === 'doctor' ? rows('doctor_signatures', q => q.eq('doctor_id', me.id)) : Promise.resolve([] as Row[]),
   ])
   const remeasuresOf = (id: string) => remeasureRows.filter(r => r.alert_id === id)
   const alertCommentsOf = (id: string) => alertCommentRows.filter(r => r.alert_id === id)
@@ -279,6 +319,14 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     return (id: string) => map.get(id) ?? []
   }
   const one = (list: Row[]) => { const map = new Map(list.map(r => [r.id as string, r])); return (id: string) => map.get(id) }
+  /** The doctor's monitoring plan on a patient's tracked vitals, for those that have one. */
+  const planOf = (trackedRows: Row[]): Record<string, VitalPlan> | undefined => {
+    const set = trackedRows.filter(t => t.frequency || t.reason)
+    return set.length ? Object.fromEntries(set.map(t => [t.vital_id, {
+      frequency: (t.frequency ?? undefined) as VitalFrequency | undefined, reason: t.reason ?? undefined, conditionCode: t.condition_code ?? undefined,
+      assignedBy: t.assigned_by ?? undefined, assignedAt: ms(t.assigned_at),
+    }])) : undefined
+  }
   const patientOf = one(patients), doctorOf = one(doctors), staffOf = one(staffRows)
   const allergiesOf = by(allergies, 'patient_id'), conditionsOf = by(conditions, 'patient_id'), contactsOf = by(contacts, 'patient_id')
   const requestsOf = by(doctorRequests, 'patient_id'), trackedOf = by(tracked, 'patient_id'), thresholdsOf = by(thresholds, 'patient_id')
@@ -302,7 +350,8 @@ export async function loadRecords(me: AppUser): Promise<Records> {
         ...base, role: 'doctor', specialty: d?.specialty ?? '', licenseNo: d?.license_no ?? '', hospital: d?.hospital ?? '',
         approvalStatus: (d?.approval_status ?? 'pending') as ApprovalStatus, approvalNote: d?.approval_note ?? undefined,
         approvedBy: d?.approved_by ?? undefined, approvedAt: d?.approved_at ? dateLabel(new Date(d.approved_at)) : undefined,
-        signature: d?.signature ?? undefined,
+        // A doctor's signature is theirs alone to read; the database stamps it onto what they sign.
+        signature: p.id === me.id ? signatureRows[0]?.image ?? undefined : undefined,
         assignedPatientIds: patients.filter(pt => pt.assigned_doctor_id === p.id).map(pt => pt.id as string),
         hours: hourRows.filter(h => h.doctor_id === p.id).map(h => ({ weekday: h.weekday as number, start: hm(h.start_time), end: hm(h.end_time) }))
           .sort((a, b) => a.weekday - b.weekday || a.start.localeCompare(b.start)),
@@ -340,6 +389,7 @@ export async function loadRecords(me: AppUser): Promise<Records> {
         to: { min: Number(c.to_min), max: Number(c.to_max) },
       })),
       unitPrefs: pt?.unit_prefs ?? {},
+      vitalPlans: planOf(trackedOf(p.id)),
       prescriptions: prescriptionsOf(p.id).map(r => ({
         id: r.id, medication: r.medication, dosage: r.dosage, frequency: r.frequency, purpose: r.purpose ?? '',
         prescribedAt: dateLabel(new Date(r.prescribed_at)), doctorId: r.doctor_id, active: r.active,
@@ -370,6 +420,18 @@ export async function loadRecords(me: AppUser): Promise<Records> {
   })
   // The signed-in account is always present, even if its profile row could not be read.
   if (!users.some(u => u.id === me.id)) users.push(me)
+  // Doctors this person does not deal with come from the directory: name, photo and professional details, no contact details.
+  for (const d of directoryRows) {
+    if (users.some(u => u.id === d.id)) continue
+    const doctor: DoctorUser = {
+      id: d.id, role: 'doctor', name: d.full_name, email: '', phone: '', status: 'active', createdAt: '', avatar: d.avatar ?? undefined,
+      verificationCode: '', password: '', specialty: d.specialty ?? '', licenseNo: d.license_no ?? '', hospital: d.hospital ?? '',
+      approvalStatus: 'approved', assignedPatientIds: [], slotMinutes: d.slot_minutes ?? 30,
+      hours: hourRows.filter(h => h.doctor_id === d.id).map(h => ({ weekday: h.weekday as number, start: hm(h.start_time), end: hm(h.end_time) }))
+        .sort((a, b) => a.weekday - b.weekday || a.start.localeCompare(b.start)),
+    }
+    users.push(doctor)
+  }
 
   const appointmentEvents = await rows('appointment_events', q => q.order('created_at'))
 
@@ -414,6 +476,19 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     })),
     pastPatients: pastRows.map(r => ({ patientId: r.patient_id, name: r.full_name, startedAt: ms(r.started_at) ?? 0, endedAt: ms(r.ended_at) ?? 0, endReason: r.end_reason ?? undefined })),
     timeOff: timeOffRows.map(r => ({ id: r.id, doctorId: r.doctor_id, from: r.from_date, to: r.to_date, reason: r.reason ?? undefined })),
+    settings: toSettings(settingRows),
+    conditionDefs: conditionRows.map(c => ({
+      code: c.code, name: c.name, icon: c.icon ?? '🩺', icd10: c.icd10 ?? undefined, active: c.active,
+      vitals: conditionVitalRows.filter(v => v.condition_code === c.code).map(v => v.vital_id as string),
+    })),
+    vitalReviews: reviewRows.map(r => ({
+      id: r.id, patientId: r.patient_id, reviewerId: r.reviewer_id, reviewedThrough: ms(r.reviewed_through) ?? 0, note: r.note ?? undefined,
+      readings: r.readings ?? 0, createdAt: when(r.created_at) ?? '',
+    })),
+    recordViews: viewRows.map(r => ({
+      id: String(r.id), patientId: r.patient_id, viewerId: r.viewer_id ?? undefined, viewerRole: r.viewer_role ?? undefined, context: r.context,
+      at: ms(r.created_at) ?? 0, createdAt: when(r.created_at) ?? '',
+    })),
     careTeam: teamRows.map(r => ({
       id: r.id, patientId: r.patient_id, doctorId: r.doctor_id, reason: r.reason ?? undefined, addedBy: r.added_by ?? undefined,
       startedAt: ms(r.started_at) ?? 0, endedAt: ms(r.ended_at),

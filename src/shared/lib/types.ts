@@ -330,6 +330,13 @@ export interface AuditEntry {
   resourceType?: string
   resourceId?: string
   patientId?: string
+  /** A staff member acting for someone: the person it was done for. */
+  onBehalfOf?: string
+  /** Where it came from: the sign-in session, whether it had passed the second step, the device and the address. */
+  sessionId?: string
+  aal?: 'aal1' | 'aal2'
+  userAgent?: string
+  clientIp?: string
   at: number
   createdAt: string
 }
@@ -555,6 +562,86 @@ export interface PatientUser extends BaseUser {
    * 'skipped' lets the patient into the portal, where Home reminds them to finish it.
    */
   profileSetup?: 'pending' | 'skipped' | 'done'
+  /** The treating doctor's monitoring plan, per tracked vital: how often, why, who asked. Absent: the usual schedule. */
+  vitalPlans?: Record<string, VitalPlan>
+}
+
+/* ─── Monitoring plan ───────────────────────────────────────────────── */
+export type VitalFrequency = 'as_needed' | 'weekly' | 'daily' | 'twice_daily' | 'three_times_daily'
+export const VITAL_FREQUENCIES: VitalFrequency[] = ['three_times_daily', 'twice_daily', 'daily', 'weekly', 'as_needed']
+export const FREQUENCY_LABELS: Record<VitalFrequency, string> = {
+  as_needed: 'When needed', weekly: 'Once a week', daily: 'Once a day', twice_daily: 'Twice a day', three_times_daily: 'Three times a day',
+}
+/** Hours between readings a frequency asks for; `as_needed` sets no rhythm. */
+export const FREQUENCY_HOURS: Record<VitalFrequency, number | null> = {
+  as_needed: null, weekly: 168, daily: 24, twice_daily: 12, three_times_daily: 8,
+}
+export interface VitalPlan {
+  frequency?: VitalFrequency
+  reason?: string
+  /** The catalogue condition it is for. */
+  conditionCode?: string
+  assignedBy?: string
+  assignedAt?: number
+}
+
+/** The treating doctor looked at a patient's readings up to a moment. Never edited. */
+export interface VitalReview {
+  id: string
+  patientId: string
+  reviewerId: string
+  /** Epoch ms: every reading up to here was reviewed. */
+  reviewedThrough: number
+  note?: string
+  /** How many readings it covered since the review before. */
+  readings: number
+  createdAt: string
+}
+
+/** Someone other than the patient opened part of their record. */
+export type RecordViewContext = 'record' | 'vitals' | 'consult' | 'assignment' | 'alerts' | 'documents'
+export const RECORD_VIEW_LABELS: Record<RecordViewContext, string> = {
+  record: 'Your record', vitals: 'Your readings', consult: 'Your record (consulting)', assignment: 'Your care team',
+  alerts: 'Your alerts', documents: 'Your documents',
+}
+export interface RecordView {
+  id: string
+  patientId: string
+  viewerId?: string
+  viewerRole?: UserRole
+  context: RecordViewContext
+  at: number
+  createdAt: string
+}
+
+/** A long-term condition the catalogue knows, and the vitals worth tracking for it. */
+export interface ConditionDef {
+  code: string
+  name: string
+  icon: string
+  icd10?: string
+  active: boolean
+  vitals: string[]
+}
+
+/* ─── Settings an administrator decides ─────────────────────────────── */
+export interface SecuritySettings {
+  /** Roles that must pass two-step sign-in. Empty: it is each person's choice. */
+  mfaRequiredRoles: UserRole[]
+  /** Minutes without use before a session signs out; 0 = never. */
+  idleMinutes: Record<UserRole, number>
+}
+export interface RetentionSettings {
+  /** Days to keep each; null = kept for ever. Clinical records are never removed by a job. */
+  auditDays: number | null
+  deletedDocumentDays: number | null
+  readNotificationDays: number | null
+  deliveryDays: number | null
+}
+export interface AppSettings { security: SecuritySettings; retention: RetentionSettings }
+export const DEFAULT_SETTINGS: AppSettings = {
+  security: { mfaRequiredRoles: [], idleMinutes: { admin: 15, assistant: 15, doctor: 15, patient: 0 } },
+  retention: { auditDays: null, deletedDocumentDays: 30, readNotificationDays: null, deliveryDays: null },
 }
 
 export interface PatientDocPrefs {
@@ -728,6 +815,8 @@ export interface PatientMessage {
   /** Epoch ms it was sent. */
   at?: number
   read: boolean
+  /** When the recipient read it (stamped by the database). */
+  readAt?: number
 }
 
 /** One meal of a patient's plan. `at` is minutes after midnight. */

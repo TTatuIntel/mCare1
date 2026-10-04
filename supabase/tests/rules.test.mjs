@@ -18,7 +18,11 @@ const db = new PGlite()
 await db.exec(`
   create role authenticated nologin; create role anon nologin;
   create schema auth;
-  create table auth.users (id uuid primary key, email text, raw_user_meta_data jsonb default '{}', email_confirmed_at timestamptz);
+  -- A sign-up the sign-in service has confirmed, unless a test says otherwise.
+  create table auth.users (id uuid primary key, email text, raw_user_meta_data jsonb default '{}', email_confirmed_at timestamptz default now());
+  -- Supabase Auth's second factors (two-step sign-in).
+  create table auth.mfa_factors (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users (id) on delete cascade,
+    friendly_name text, factor_type text not null default 'totp', status text not null default 'unverified', created_at timestamptz default now());
   create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
   grant usage on schema auth to authenticated, anon;
   -- Supabase's defaults: new tables and functions in public are granted to app users as they are created.
@@ -1055,6 +1059,229 @@ check('the delivery report counts by channel and shows what went wrong, without 
   && dr.failures.some(f => f.error === 'Provider refused the number') && !JSON.stringify(dr).includes('+254712345678'))
 check('it is for an administrator or someone who reads the audit log', (await denied(TREAT, `select delivery_report(current_date - 30, current_date)`)).blocked
   && (await denied(ID.pat, `select delivery_report(current_date - 30, current_date)`)).blocked && (await denied(ID.asst, `select delivery_report(current_date - 30, current_date)`)).blocked)
+
+/* ── Security upgrades (0012–0016): record kept, audit context, MFA, lifecycle, privacy, plans, reviews, access log, retention ── */
+console.log('\nSecurity upgrades')
+/** Run SQL as a signed-in user whose token carries these claims and whose request carries these headers. */
+async function asWith(user, claims, headers, sql, params = []) {
+  await db.exec(`set role authenticated`)
+  await db.query(`select set_config('request.jwt.claim.sub', $1, false), set_config('request.jwt.claims', $2, false), set_config('request.headers', $3, false)`,
+    [user, JSON.stringify({ sub: user, role: 'authenticated', ...claims }), JSON.stringify(headers)])
+  try { return (await db.query(sql, params)).rows }
+  finally { await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false), set_config('request.jwt.claims', '', false), set_config('request.headers', '', false);`) }
+}
+const deniedWith = async (user, claims, sql, params) => { try { const r = await asWith(user, claims, {}, sql, params); return { blocked: false, rows: r.length } } catch (e) { return { blocked: true, why: e.message } } }
+const AAL2 = { aal: 'aal2' }
+const SEC = { empty: '99999999-9999-4999-8999-999999999991', fresh: '99999999-9999-4999-8999-999999999992', quick: '99999999-9999-4999-8999-999999999993' }
+
+// A clinical record cannot be hard-deleted, by any route.
+check('deleting the sign-in account of a patient with a record is refused', await (async () => {
+  try { await db.query(`delete from auth.users where id = $1`, [ID.pat]); return false } catch (e) { return /clinical record/.test(e.message) }
+})() && (await one(`select count(*)::int n from readings where patient_id = $1`, [ID.pat])).n > 0)
+await signUp(SEC.empty, 'empty@example.com', {}, true)
+await db.query(`delete from auth.users where id = $1`, [SEC.empty])
+check('an account with no clinical record can still be removed', (await one(`select count(*)::int n from profiles where id = $1`, [SEC.empty])).n === 0)
+
+// The account lifecycle: unverified until the email is confirmed.
+await signUp(SEC.fresh, 'fresh@example.com', { full_name: 'Fresh Patient' })
+check('a sign-up waiting for email confirmation is unverified', (await roleOf(SEC.fresh)).status === 'unverified')
+await db.query(`update auth.users set email_confirmed_at = now() where id = $1`, [SEC.fresh])
+check('confirming the email makes it active', (await roleOf(SEC.fresh)).status === 'active')
+await signUp(SEC.quick, 'quick@example.com', { name: 'Given By Provider' }, true)
+check('a name from a sign-in provider is used when no full name is sent', (await one(`select full_name from profiles where id = $1`, [SEC.quick])).full_name === 'Given By Provider')
+
+// Audit entries carry the session, the device and the address.
+await asWith(ID.pat, { session_id: '12345678-1234-4234-8234-123456789012', aal: 'aal1' }, { 'user-agent': 'TestPhone/1.0', 'x-forwarded-for': '203.0.113.7, 10.0.0.1' },
+  `update profiles set phone = '+254 700 111 222' where id = $1`, [ID.pat])
+const own = await one(`select actor_id, session_id, aal, client_ip, user_agent, before_state, after_state from audit_log where action = 'Updated own details' order by id desc limit 1`)
+check("a patient's change to their own details is audited with before and after", own?.actor_id === ID.pat && own.before_state.phone !== own.after_state.phone && own.after_state.phone === '+254 700 111 222')
+check('…and says which session, device and address it came from', own.session_id === '12345678-1234-4234-8234-123456789012' && own.aal === 'aal1'
+  && own.client_ip === '203.0.113.7' && own.user_agent === 'TestPhone/1.0')
+
+// The sign-in email has one source.
+check('nobody changes the profile email directly, not even an admin', (await denied(ID.pat, `update profiles set email = 'x@example.com' where id = $1`, [ID.pat])).blocked
+  && (await denied(ID.admin, `update profiles set email = 'x@example.com' where id = $1`, [ID.pat])).blocked)
+await db.query(`update auth.users set email = 'james.new@example.com' where id = $1`, [ID.pat])
+check('when the sign-in service changes the email, the profile follows and it is audited', (await one(`select email from profiles where id = $1`, [ID.pat])).email === 'james.new@example.com'
+  && (await one(`select count(*)::int n from audit_log where action = 'Changed sign-in email' and resource_id = $1`, [ID.pat])).n === 1)
+await db.query(`update auth.users set email = 'james@example.com' where id = $1`, [ID.pat])
+
+// Doctor credentials.
+check('an approved doctor cannot change the licence number that was checked', /licence number was checked/.test((await denied(TREAT, `update doctors set license_no = 'FAKE-1' where id = $1`, [TREAT])).why ?? ''))
+await as(TREAT, `update doctors set specialty = 'Internal medicine' where id = $1`, [TREAT])
+await as(ID.admin, `update doctors set license_no = 'KMPDC-12345' where id = $1`, [TREAT])
+check('specialty stays theirs to edit, an approver may correct the licence, and both are audited', (await one(`select specialty, license_no from doctors where id = $1`, [TREAT])).license_no === 'KMPDC-12345'
+  && (await one(`select count(*)::int n from audit_log where action = 'Changed doctor details' and resource_id = $1`, [TREAT])).n === 2)
+
+// Health profile changes are audited.
+const allergyEntries = async () => (await one(`select count(*)::int n from audit_log where action = 'Changed allergies' and patient_id = $1`, [ID.pat])).n
+const allergyBefore = await allergyEntries()
+await as(ID.pat, `select save_health_profile($1)`, [JSON.stringify({ sex: 'male', allergies: [{ substance: 'Penicillin', severity: 'severe' }], conditions: ['high blood pressure', 'A rare condition'] })])
+const health = await one(`select before_state, after_state from audit_log where action = 'Updated health profile' order by id desc limit 1`)
+check('saving the health profile writes one audit entry with what changed', !!health && JSON.stringify(health.after_state.allergies).includes('Penicillin')
+  && await allergyEntries() === allergyBefore)
+check('a condition the catalogue knows is linked to it; a rare one keeps its name', (await one(`select condition_code from conditions where patient_id = $1 and name = 'high blood pressure'`, [ID.pat])).condition_code === 'hypertension'
+  && (await one(`select condition_code from conditions where patient_id = $1 and name = 'A rare condition'`, [ID.pat])).condition_code === null)
+await as(ID.pat, `insert into allergies (patient_id, substance, severity) values ($1, 'Latex', 'mild')`, [ID.pat])
+check('a direct change to one allergy is audited too', await allergyEntries() === allergyBefore + 1)
+check('the conditions catalogue is read by everyone and changed only by an admin', (await as(ID.pat, `select 1 from condition_defs`)).length >= 16
+  && (await denied(ID.pat, `insert into condition_defs (code, name) values ('fake', 'Fake')`)).blocked
+  && (await as(TREAT, `update condition_defs set active = false where code = 'asthma' returning 1`)).length === 0
+  && (await as(ID.admin, `insert into condition_defs (code, name, icon) values ('gout', 'Gout', '🦶') returning code`)).length === 1
+  && (await one(`select count(*)::int n from audit_log where action = 'Added condition' and detail = 'Gout'`)).n === 1)
+
+// Settings.
+check('everyone signed in reads the settings; only an admin changes them, through the function', (await as(ID.pat, `select 1 from app_settings`)).length === 2
+  && (await denied(ID.pat, `select save_settings('security', '{"mfa_required_roles":[]}')`)).blocked
+  && (await denied(ID.asst, `select save_settings('retention', '{}')`)).blocked
+  && (await as(ID.admin, `update app_settings set value = '{}' where key = 'security' returning 1`)).length === 0
+  && (await one(`select value->'idle_minutes'->>'admin' m from app_settings where key = 'security'`)).m === '15')
+check('settings are checked: idle minutes, unknown roles, retention periods', /between 5 and 720/.test((await denied(ID.admin, `select save_settings('security', '{"idle_minutes":{"doctor":3}}')`)).why ?? '')
+  && (await denied(ID.admin, `select save_settings('security', '{"mfa_required_roles":["ghost"]}')`)).blocked
+  && /between 180 and/.test((await denied(ID.admin, `select save_settings('retention', '{"audit_days":10}')`)).why ?? ''))
+check('an admin cannot require two-step sign-in for admins from a session that does not use it', /your own account first/.test((await denied(ID.admin, `select save_settings('security', '{"mfa_required_roles":["admin"]}')`)).why ?? ''))
+await as(ID.admin, `select save_settings('security', '{"idle_minutes":{"doctor":30}}')`)
+check('a change is saved and audited with before and after', (await one(`select value->'idle_minutes'->>'doctor' m from app_settings where key = 'security'`)).m === '30'
+  && (await one(`select before_state->'idle_minutes'->>'doctor' b, after_state->'idle_minutes'->>'doctor' a from audit_log where action = 'Changed settings' order by id desc limit 1`)).a === '30')
+
+// Two-step sign-in, enforced by the database.
+const factor = (await db.query(`insert into auth.mfa_factors (user_id, status) values ($1, 'verified') returning id`, [ID.pat])).rows[0].id
+check('with a verified factor, a password-only session reads nothing and can do nothing', (await asWith(ID.pat, { aal: 'aal1' }, {}, `select 1 from readings`)).length === 0
+  && (await asWith(ID.pat, { aal: 'aal1' }, {}, `select my_role() r`))[0].r === null
+  && (await deniedWith(ID.pat, { aal: 'aal1' }, `select raise_sos('x')`)).blocked)
+check('…the same account after the second step sees its record', (await asWith(ID.pat, AAL2, {}, `select 1 from readings`)).length > 0)
+check('…and the app can still learn what is owed', (await asWith(ID.pat, { aal: 'aal1' }, {}, `select my_security() s`))[0].s.has_factor === true)
+check('only an admin resets someone\'s two-step sign-in, with a reason, never their own', (await denied(ID.asst, `select reset_two_step($1, 'Lost phone')`, [ID.pat])).blocked
+  && (await denied(TREAT, `select reset_two_step($1, 'Lost phone')`, [ID.pat])).blocked && (await denied(ID.admin, `select reset_two_step($1, 'x')`, [ID.pat])).blocked
+  && (await denied(ID.admin, `select reset_two_step($1, 'Lost phone')`, [ID.admin])).blocked)
+await as(ID.admin, `select reset_two_step($1, 'Patient lost their phone')`, [ID.pat])
+check('a reset removes the factor, is audited for the person, and tells them', (await one(`select count(*)::int n from auth.mfa_factors where user_id = $1`, [ID.pat])).n === 0
+  && (await one(`select on_behalf_of from audit_log where action = 'Reset two-step sign-in' order by id desc limit 1`)).on_behalf_of === ID.pat
+  && (await as(ID.pat, `select 1 from notifications where title = 'Two-step sign-in was reset'`)).length === 1
+  && (await as(ID.pat, `select 1 from readings`)).length > 0)
+await as(ID.admin, `select save_settings('security', '{"mfa_required_roles":["doctor"]}')`)
+check('when an admin requires it for doctors, a doctor without the second step reaches no patient', (await asWith(TREAT, { aal: 'aal1' }, {}, `select 1 from readings where patient_id = $1`, [ID.pat])).length === 0
+  && (await deniedWith(TREAT, { aal: 'aal1' }, `insert into readings (patient_id, vital_id, value) values ($1, 'hr', '72')`, [ID.pat])).blocked
+  && (await asWith(TREAT, { aal: 'aal1' }, {}, `select my_security() s`))[0].s.mfa_required === true)
+check('…and with it, works as before; patients are not affected', (await asWith(TREAT, AAL2, {}, `select 1 from readings where patient_id = $1`, [ID.pat])).length > 0
+  && (await as(ID.pat, `select 1 from readings`)).length > 0)
+await as(ID.admin, `select save_settings('security', '{"mfa_required_roles":[]}')`)
+
+// Support acting for someone.
+check("only an admin or an assistant who handles support corrects someone else's details", (await denied(ID.asst, `select admin_update_profile($1, '{"phone":"1"}', 'Typo in phone')`, [ID.pat])).blocked
+  && (await denied(TREAT, `select admin_update_profile($1, '{"phone":"1"}', 'Typo in phone')`, [ID.pat])).blocked)
+check('a reason is required, and nobody uses it on their own account', (await denied(ID.admin, `select admin_update_profile($1, '{"phone":"1"}', 'x')`, [ID.pat])).blocked
+  && (await denied(ID.admin, `select admin_update_profile($1, '{"phone":"1"}', 'Own change')`, [ID.admin])).blocked)
+await as(ID.admin, `select admin_update_profile($1, '{"phone":"+254 700 333 444"}', 'Patient called to correct the number')`, [ID.pat])
+const actedFor = await db.query(`select action, actor_id, on_behalf_of, detail from audit_log where resource_id = $1 and action in ('Support updated details', 'Updated details') order by id desc`, [ID.pat])
+check('the change is one audit entry naming the staff member and the person it was for, with the reason', actedFor.rows.length === 1
+  && actedFor.rows[0].actor_id === ID.admin && actedFor.rows[0].on_behalf_of === ID.pat && /correct the number/.test(actedFor.rows[0].detail)
+  && (await as(ID.pat, `select 1 from notifications where title = 'Your details were updated'`)).length === 1)
+
+// Doctor signatures are private; the directory carries public details only.
+check('an older app writing the signature on the doctor row has it moved to the private table', (await one(`select count(*)::int n from doctors where signature is not null`)).n === 0
+  && (await one(`select count(*)::int n from doctor_signatures where doctor_id = $1`, [DOC])).n === 1)
+check('a doctor reads and changes only their own signature', (await as(DOC, `select 1 from doctor_signatures`)).length === 1
+  && (await as(TREAT, `select 1 from doctor_signatures where doctor_id = $1`, [DOC])).length === 0
+  && (await as(ID.pat, `select 1 from doctor_signatures`)).length === 0 && (await as(ID.admin, `select 1 from doctor_signatures`)).length === 0
+  && (await denied(TREAT, `insert into doctor_signatures (doctor_id, image) values ($1, 'data:image/png;base64,BBBB')`, [DOC])).blocked)
+await as(TREAT, `insert into doctor_signatures (doctor_id, image) values ($1, 'data:image/png;base64,TREAT')`, [TREAT])
+const draft = (await as(TREAT, `insert into documents (patient_id, title, category, origin, body) values ($1, 'Vitals Report', 'vitals_report', 'system_generated', '{"type":"vitals"}') returning id`, [ID.pat]))[0].id
+await as(TREAT, `select sign_document($1)`, [draft])
+check("signing still stamps the signer's signature onto the document", (await one(`select signature_image from documents where id = $1`, [draft])).signature_image === 'data:image/png;base64,TREAT')
+const directory = await as(ID.evil, `select * from doctor_directory()`)
+check('the doctor directory lists approved doctors with public details only', directory.length >= 2 && directory.every(d => !('email' in d) && !('phone' in d) && !('dob' in d)) && directory.some(d => d.id === TREAT))
+check('a patient sees the full profile only of doctors they deal with', (await as(ID.evil, `select 1 from profiles where role = 'doctor'`)).length === 0
+  && (await as(ID.pat, `select id from profiles where role = 'doctor' order by id`)).map(r => r.id).join() === [ID.doc, ID.doc2].sort().join())
+check('approved doctors still see their colleagues', (await as(TREAT, `select 1 from profiles where id = $1`, [DOC])).length === 1)
+
+// Monitoring plan.
+check('only the treating doctor sets how often a vital is measured', (await denied(DOC, `select set_vital_plan($1, 'gluc', 'twice_daily')`, [ID.pat])).blocked
+  && (await denied(ID.pat, `select set_vital_plan($1, 'gluc', 'twice_daily')`, [ID.pat])).blocked
+  && (await denied(TREAT, `select set_vital_plan($1, 'gluc', 'hourly')`, [ID.pat])).blocked)
+await as(TREAT, `select set_vital_plan($1, 'gluc', 'twice_daily', 'Watch the sugars', 'diabetes_t2')`, [ID.pat])
+const planRow = await one(`select frequency, reason, condition_code, assigned_by from tracked_vitals where patient_id = $1 and vital_id = 'gluc'`, [ID.pat])
+check('the plan is saved with who asked and why, the patient is told, and it is audited once', planRow.frequency === 'twice_daily' && planRow.assigned_by === TREAT && planRow.condition_code === 'diabetes_t2'
+  && (await as(ID.pat, `select 1 from notifications where title = 'Measuring Blood Glucose' and body like '%twice a day%'`)).length === 1
+  && (await one(`select count(*)::int n from audit_log where action = 'Set monitoring plan' and patient_id = $1`, [ID.pat])).n === 1
+  && (await one(`select count(*)::int n from audit_log where action in ('Started tracking a vital', 'Changed a tracked vital') and patient_id = $1 and created_at > now() - interval '1 minute'`, [ID.pat])).n === 0)
+check('the patient sees their plan', (await as(ID.pat, `select frequency from tracked_vitals where vital_id = 'gluc'`))[0].frequency === 'twice_daily')
+
+// Reviews of readings.
+check('only the treating doctor marks readings reviewed', (await denied(DOC, `select review_vitals($1)`, [ID.pat])).blocked && (await denied(ID.pat, `select review_vitals($1)`, [ID.pat])).blocked)
+const reviewRef = '0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f'
+const rv = (await as(TREAT, `select review_vitals($1, 'All within range this week', $2) id`, [ID.pat, reviewRef]))[0].id
+check('a review records how many readings it covered and is read by the patient', (await one(`select readings from vital_reviews where id = $1`, [rv])).readings > 0
+  && (await as(ID.pat, `select note from vital_reviews`))[0].note === 'All within range this week'
+  && (await as(ID.pat, `select 1 from notifications where title = 'Your doctor reviewed your readings'`)).length === 1)
+check('the same form sent twice is one review; a review is never edited', (await as(TREAT, `select review_vitals($1, 'again', $2) id`, [ID.pat, reviewRef]))[0].id === rv
+  && (await as(TREAT, `update vital_reviews set note = 'changed' where id = $1 returning 1`, [rv])).length === 0
+  && await (async () => { try { await db.query(`update vital_reviews set note = 'changed' where id = $1`, [rv]); return false } catch { return true } })()
+  && (await one(`select count(*)::int n from vital_reviews where patient_id = $1`, [ID.pat])).n === 1)
+check('the care team as one list: the patient sees their treating doctor; a stranger sees nothing', (await as(ID.pat, `select member_role from patient_care_team`)).some(r => r.member_role === 'treating')
+  && (await as(ID.evil, `select 1 from patient_care_team where patient_id = $1`, [ID.pat])).length === 0)
+
+// Messages: the time a message was read.
+const rm = (await as(TREAT, `insert into messages (from_id, to_id, content) values ($1, $2, 'Please log your sugar tonight') returning id`, [TREAT, ID.pat]))[0].id
+await as(ID.pat, `update messages set read = true where id = $1`, [rm])
+const readAt = (await one(`select read_at from messages where id = $1`, [rm])).read_at
+await as(ID.pat, `update messages set read_at = '2000-01-01' where id = $1`, [rm])
+check('reading a message stamps when, and the time cannot be forged', !!readAt && (await one(`select read_at from messages where id = $1`, [rm])).read_at.getTime() === readAt.getTime())
+
+// Write limits.
+const tick = async () => { try { await as(SEC.fresh, `insert into support_tickets (user_id, subject) values ($1, 'Help')`, [SEC.fresh]); return true } catch { return false } }
+const allowed = []; for (let i = 0; i < 6; i++) allowed.push(await tick())
+check('a person can open only so many support requests in ten minutes', allowed.slice(0, 5).every(Boolean) && allowed[5] === false)
+
+// Who opened a record.
+await as(TREAT, `select log_record_view($1, 'record')`, [ID.pat])
+await as(TREAT, `select log_record_view($1, 'record')`, [ID.pat])
+check('opening a record is logged once per half hour, and the patient reads who it was', (await as(ID.pat, `select viewer_id, viewer_role from record_views`)).filter(r => r.viewer_id === TREAT && r.viewer_role === 'doctor').length === 1)
+check('someone who may not see the record cannot log a view of it, and nobody edits the log', (await denied(ID.evil, `select log_record_view($1)`, [ID.pat])).blocked
+  && (await denied(DOC, `select log_record_view($1)`, [ID.pat])).blocked && (await as(ID.pat, `update record_views set context = 'alerts' returning 1`)).length === 0)
+check('the access log is read by the patient and by staff who view logs only', (await as(TREAT, `select 1 from record_views`)).length === 0
+  && (await as(ID.asst, `select 1 from record_views`)).length === 0 && (await as(ID.admin, `select 1 from record_views`)).length > 0)
+await as(ID.admin, `select log_patient_view($1)`, [ID.pat])
+check("an admin opening a patient's vitals appears in the patient's access log too", (await as(ID.pat, `select 1 from record_views where viewer_id = $1 and context = 'vitals'`, [ID.admin])).length === 1)
+
+// The patient's own copy.
+const copy = (await as(ID.pat, `select export_my_record() r`))[0].r
+check('a patient downloads their whole record, without internal notes', copy.profile.email === 'james@example.com' && copy.readings.length > 0 && copy.prescriptions.length > 0
+  && copy.monitoring.some(m => m.frequency === 'twice_daily') && !JSON.stringify(copy).includes('Consider anxiety as a contributor')
+  && (await one(`select count(*)::int n from audit_log where action = 'Downloaded own record' and patient_id = $1`, [ID.pat])).n === 1)
+check('nobody else can download it', (await denied(TREAT, `select export_my_record()`)).blocked && (await denied(ID.admin, `select export_my_record()`)).blocked && (await denied(null, `select export_my_record()`)).blocked)
+
+// Retention, as the admin sets it.
+check('the audit trail cannot be edited or deleted, even by the database owner outside the retention job', await (async () => {
+  try { await db.query(`delete from audit_log where id = (select min(id) from audit_log)`); return false } catch (e) { return /cannot be changed/.test(e.message) }
+})())
+await db.exec(`set session_replication_role = replica`)
+await db.query(`update audit_log set created_at = now() - interval '400 days' where id = (select min(id) from audit_log)`)
+await db.query(`update notifications set read = true, created_at = now() - interval '40 days' where id = (select id from notifications where user_id = $1 order by created_at limit 1)`, [ID.pat])
+await db.exec(`set session_replication_role = origin`)
+const oldest = (await one(`select min(id) id from audit_log`)).id
+await as(ID.admin, `select save_settings('retention', '{"audit_days":365,"read_notification_days":30,"deleted_document_days":30}')`)
+check('only an admin applies retention now', (await denied(ID.pat, `select run_retention_now()`)).blocked && (await denied(ID.asst, `select run_retention_now()`)).blocked)
+const applied = (await as(ID.admin, `select run_retention_now() r`))[0].r
+check('retention removes what has expired and says what it removed', applied.audit === 1 && applied.notifications >= 1
+  && (await one(`select count(*)::int n from audit_log where id = $1`, [oldest])).n === 0
+  && (await one(`select count(*)::int n from audit_log where action = 'Applied retention'`)).n === 1, applied)
+
+// The restrictive rule, once per query, on every table.
+const restrictive = await db.query(`select c.relname t, p.qual from pg_class c join pg_namespace n on n.oid = c.relnamespace
+  left join pg_policies p on p.tablename = c.relname and p.policyname = c.relname || '_active_only' and p.permissive = 'RESTRICTIVE'
+  where n.nspname = 'public' and c.relkind = 'r' and c.relrowsecurity`)
+check('every table with row rules has the restrictive active-account rule, worked out once per query', restrictive.rows.length > 50
+  && restrictive.rows.every(r => /SELECT account_active\(\)/i.test(r.qual ?? '')), restrictive.rows.filter(r => !/SELECT account_active/i.test(r.qual ?? '')).map(r => r.t).join(', '))
+const untouched = (await db.query(`select c.relname from pg_class c join pg_attribute a on a.attrelid = c.oid and a.attname = 'patient_id'
+  where c.relnamespace = 'public'::regnamespace and c.relkind = 'r'
+    and not exists (select 1 from pg_trigger t where t.tgrelid = c.oid and t.tgname = 'zz_touch_patient') order by 1`)).rows.map(r => r.relname)
+// Deliberately without it: logs written in the same step as a row that has it, the counter itself, the access log.
+const quiet = ['audit_log', 'care_plan_events', 'document_events', 'patient_changes', 'prescription_events', 'record_views', 'share_links', 'threshold_changes']
+check("every table that belongs to a patient tells open screens it changed (zz_touch_patient)", untouched.join() === quiet.join(), untouched.filter(t => !quiet.includes(t)).join(', '))
+check('signed-out visitors reach none of the new tables or functions', (await denied(null, `select 1 from app_settings`)).blocked && (await denied(null, `select 1 from record_views`)).blocked
+  && (await denied(null, `select * from doctor_directory()`)).blocked && (await denied(null, `select my_security()`)).blocked
+  && (await denied(null, `select 1 from vital_reviews`)).blocked)
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

@@ -58,6 +58,7 @@ export default function DashboardTab({ go }: { go: (t: string) => void }) {
         ...(canDocs ? [{ icon: '🗂️', label: 'Documents', onClick: () => go('documents'), badge: docIssues }] : []),
         ...(canLogs ? [{ icon: '🧾', label: 'Audit Log', onClick: () => go('audit') }] : []),
         ...(canLogs ? [{ icon: '📈', label: 'Reports', onClick: () => go('reports') }] : []),
+        ...(!admin.isAssistant ? [{ icon: '⚙️', label: 'Settings', onClick: () => go('settings') }] : []),
         { icon: '👤', label: 'Profile', onClick: () => go('profile') },
       ]} />
 

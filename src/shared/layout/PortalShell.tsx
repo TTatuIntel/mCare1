@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import { NavBar } from './NavBar'
+import { IdleSignOut } from './IdleSignOut'
 
 /** Scroll movement (px) smaller than this is ignored, so the floating button doesn't flicker. */
 const SCROLL_JITTER = 6
@@ -117,6 +118,7 @@ export function PortalShell({ screen, animKey, nav, onSelect, homeId, fill, hide
         {floating && <div data-compact={compact} className="group/fab absolute z-[5] right-4 bottom-24 @2xl:right-8 @2xl:bottom-8">{floating}</div>}
       </div>
       <NavBar items={nav.map(n => ({ ...n, badge: n.badge || undefined }))} active={inNav ? screen : homeId} onSelect={onSelect} onHome={() => onSelect(homeId)} />
+      <IdleSignOut />
     </div>
   )
 }

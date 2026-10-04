@@ -8,7 +8,7 @@ import {
   canSign, canRelease, canCorrect, canDelete, canRestore, canShare, SUPPORT_ACCESS_MIN, DOC_RETENTION_DAYS,
 } from './documents'
 import { ago } from '@/shared/lib/vitals'
-import { DocBadges, DocBodyView, docDate } from './DocKit'
+import { DocBadges, docDate } from './DocKit'
 import { DownloadSheet } from './DownloadSheet'
 import { DocumentReader } from './DocumentReader'
 import { formatOf, FAMILY_META } from './fileFormats'

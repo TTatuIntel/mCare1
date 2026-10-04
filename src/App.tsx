@@ -8,6 +8,7 @@ import { LoginScreen } from '@/shared/auth/LoginScreen'
 import { VerificationScreen } from '@/shared/auth/VerificationScreen'
 import { DoctorStatusScreen } from '@/shared/auth/DoctorStatusScreen'
 import { SuspendedScreen } from '@/shared/auth/SuspendedScreen'
+import { MfaScreen } from '@/shared/auth/MfaScreen'
 
 /** Set when the page was opened from a patient's share link: the visitor sees those documents, not the sign-in page. */
 const SHARE_TOKEN = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('share')
@@ -44,6 +45,7 @@ function usePrefetchPortals() {
 
 const SCREENS = {
   login: LoginScreen,
+  mfa: MfaScreen,
   verify: VerificationScreen,
   suspended: SuspendedScreen,
   doctorStatus: DoctorStatusScreen,
@@ -74,9 +76,10 @@ function screenFor(user: AppUser | null): keyof typeof SCREENS {
 }
 
 function Router() {
-  const { currentUser } = useApp()
+  const { currentUser, mfa } = useApp()
   usePrefetchPortals()
-  const target = screenFor(currentUser)
+  // Signed in, but the second step of two-step sign-in is still owed: nothing opens until it is given.
+  const target = !currentUser && mfa ? 'mfa' : screenFor(currentUser)
   // React renders the next screen in the background; if its code is still
   // loading, `shown` keeps the current screen until it is ready.
   const deferred = useDeferredValue(target)

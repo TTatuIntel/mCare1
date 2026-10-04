@@ -13,7 +13,8 @@
  */
 import type {
   AccountStatus, AdminReport, DeliveryReport, NotifyPrefs, AlertCommentKind, Appointment, ApprovalStatus, AssistantPerm, AvatarSpec, CarePlanDraft, CarePlanItemStatus, CarePlanStatus,
-  DayAvailability, EmergencyContact, FontSizePref, HealthProfile, MealPlan, NoteType, NoteVisibility, Prescription, ThemePref, UserRole, VitalDef, WorkBlock,
+  ConditionDef, DayAvailability, EmergencyContact, FontSizePref, HealthProfile, MealPlan, NoteType, NoteVisibility, Prescription, RecordViewContext,
+  RetentionSettings, SecuritySettings, ThemePref, UserRole, VitalDef, VitalFrequency, WorkBlock,
 } from '@/shared/lib/types'
 import type { VitalLevel } from '@/shared/lib/vitals'
 import { getSupabase } from './supabase'
@@ -408,13 +409,18 @@ export const decideDoctor = async (doctorId: string, decision: Exclude<ApprovalS
 export const resubmitDoctorApplication = async (specialty: string, licenseNo: string, hospital: string) => {
   await ok((await db()).rpc('resubmit_doctor_application', { new_specialty: specialty, new_license_no: licenseNo, new_hospital: hospital }))
 }
-export const setDoctorDetails = async (id: string, d: { specialty?: string; licenseNo?: string; hospital?: string; signature?: string | null }) => {
+export const setDoctorDetails = async (id: string, d: { specialty?: string; licenseNo?: string; hospital?: string }) => {
   const row: Record<string, unknown> = {}
   if (d.specialty !== undefined) row.specialty = d.specialty.trim()
   if (d.licenseNo !== undefined) row.license_no = d.licenseNo.trim()
   if (d.hospital !== undefined) row.hospital = d.hospital.trim()
-  if ('signature' in d) row.signature = d.signature ?? null
   if (Object.keys(row).length) await ok((await db()).from('doctors').update(row).eq('id', id))
+}
+/** A doctor's handwritten signature, kept where only they can read it (null removes it). The database stamps it onto what they sign. */
+export const saveSignature = async (doctorId: string, image: string | null) => {
+  const supabase = await db()
+  if (image) await ok(supabase.from('doctor_signatures').upsert({ doctor_id: doctorId, image }))
+  else await ok(supabase.from('doctor_signatures').delete().eq('doctor_id', doctorId))
 }
 export const chaseAlert = async (alertId: string) => { await ok((await db()).rpc('chase_alert', { alert: alertId })) }
 export const setAssistantPerms = async (id: string, permissions: AssistantPerm[]) => {
@@ -427,3 +433,40 @@ export const saveVitalDef = async (def: VitalDef) => { await ok((await db()).fro
 export const inviteAccount = async (i: { email: string; name: string; role: UserRole; phone?: string }) =>
   ok<string>((await db()).rpc('invite_account', { invite_email: i.email, invite_name: i.name, invite_role: i.role, invite_phone: i.phone ?? '' }))
 export const revokeInvitation = async (id: string) => { await ok((await db()).rpc('revoke_invitation', { invitation: id })) }
+
+/* ─── Settings, monitoring plans, reviews, access log, the patient's copy ─ */
+/** An admin changes one area of the settings. The database checks the values and audits the change. */
+export const saveSecuritySettings = async (v: SecuritySettings) => {
+  await ok((await db()).rpc('save_settings', { area: 'security', new_value: { mfa_required_roles: v.mfaRequiredRoles, idle_minutes: v.idleMinutes } }))
+}
+export const saveRetentionSettings = async (v: RetentionSettings) => {
+  await ok((await db()).rpc('save_settings', { area: 'retention', new_value: {
+    audit_days: v.auditDays, deleted_document_days: v.deletedDocumentDays, read_notification_days: v.readNotificationDays, delivery_days: v.deliveryDays,
+  } }))
+}
+export interface RetentionRun { documents: number; audit: number; notifications: number; deliveries: number }
+/** Applies the retention settings now instead of waiting for the nightly job. Resolves with what it removed. */
+export const runRetentionNow = async () => ok<RetentionRun>((await db()).rpc('run_retention_now'))
+/** Adds or changes a condition in the catalogue, with the vitals it calls for, in one transaction. */
+export const saveConditionDef = async (c: ConditionDef) => {
+  await ok((await db()).rpc('save_condition_def', { def: { code: c.code, name: c.name.trim(), icon: c.icon, icd10: c.icd10 ?? '', active: c.active, vitals: c.vitals } }))
+}
+/** The treating doctor sets how often a patient measures a vital (null: the usual schedule). The patient is told. */
+export const setVitalPlan = async (patientId: string, vitalId: string, frequency: VitalFrequency | null, reason?: string) => {
+  await ok((await db()).rpc('set_vital_plan', { patient: patientId, vital: vitalId, frequency, reason: blank(reason) }))
+}
+/** The treating doctor marks a patient's readings reviewed up to now. `ref` makes a form sent twice one review. */
+export const reviewVitals = async (patientId: string, note?: string, ref?: string) =>
+  ok<string>((await db()).rpc('review_vitals', { patient: patientId, note: blank(note), ref: ref ?? null }))
+/** The caller opened part of a patient's record: the patient sees it in their access log. */
+export const logRecordView = async (patientId: string, context: RecordViewContext) => {
+  await ok((await db()).rpc('log_record_view', { patient: patientId, context }))
+}
+/** Everything mCare holds about the signed-in patient, as one document. */
+export const exportMyRecord = async () => ok<Record<string, unknown>>((await db()).rpc('export_my_record'))
+/** An admin removes the authenticator app of someone who lost their phone, with the reason. Their sessions end; they are told. */
+export const resetTwoStep = async (id: string, reason: string) => { await ok((await db()).rpc('reset_two_step', { person: id, reason: reason.trim() })) }
+/** Support corrects someone's name, phone or date of birth, with the reason. Audited as acting for them; they are told. */
+export const adminUpdateProfile = async (id: string, changes: { name?: string; phone?: string; dob?: string }, reason: string) => {
+  await ok((await db()).rpc('admin_update_profile', { person: id, changes, reason: reason.trim() }))
+}

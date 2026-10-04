@@ -187,14 +187,15 @@ export function AuthHeading({ title, subtitle, icon, center = false }: {
 export function AuthSwitch({ prompt, action, onClick, className = '' }: {
   prompt: string; action: string; onClick: () => void; className?: string
 }) {
+  // The action word is larger than the question (with a larger tap area), so the way across is easy to see and hit.
   return (
     <p className={`text-center text-[13px] text-gray-600 ${className}`}>
       {prompt}{' '}
       <button type="button" onClick={onClick}
-        className="group relative inline-flex items-center pb-0.5 font-bold transition-transform active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 rounded">
+        className="group relative inline-flex items-center pt-1 pb-0.5 text-base font-bold transition-transform active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 rounded">
         <span className="auth-shimmer">{action}</span>
-        <span className="flex w-0 overflow-hidden text-teal-700 opacity-0 transition-all duration-300 group-hover:ml-1 group-hover:w-3.5 group-hover:opacity-100 group-focus-visible:ml-1 group-focus-visible:w-3.5 group-focus-visible:opacity-100">
-          <AuthIcon name="arrow" className="w-3.5 h-3.5 shrink-0" />
+        <span className="flex w-0 overflow-hidden text-teal-700 opacity-0 transition-all duration-300 group-hover:ml-1 group-hover:w-4 group-hover:opacity-100 group-focus-visible:ml-1 group-focus-visible:w-4 group-focus-visible:opacity-100">
+          <AuthIcon name="arrow" className="w-4 h-4 shrink-0" />
         </span>
         <span aria-hidden className="absolute inset-x-0 bottom-0 h-[1.5px] origin-left rounded-full bg-teal-700 group-hover:animate-[auth-underline_.45s_ease-out] motion-reduce:animate-none" />
       </button>
@@ -398,7 +399,7 @@ export const OWNER = 'mcare.com'
 /** The copyright line at the foot of every signed-out page. */
 export function AuthRights({ className = '' }: { className?: string }) {
   return (
-    <p className={`text-center text-[9px] @2xl:text-[10px] text-gray-400 whitespace-nowrap ${className}`}>
+    <p className={`text-center text-[11px] @2xl:text-xs text-gray-400 whitespace-nowrap ${className}`}>
       © <span className="font-mono">{new Date().getFullYear()}</span> {OWNER} · All rights reserved
     </p>
   )

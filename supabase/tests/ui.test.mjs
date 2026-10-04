@@ -61,13 +61,21 @@ const check = (name, ok, extra = '') => { ok ? pass++ : fail++; console.log(`${o
 fs.mkdirSync(SHOTS, { recursive: true })
 
 const browser = await chromium.launch()
+/** Every console warning and error in every portal, at every size (the app runs as a dev build, so React's own warnings show too). */
+const consoleNotes = []
 async function session(size = 'phone') {
   const context = await browser.newContext({ viewport: SIZES[size] })
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', e => errors.push(e.message))
+  page.on('console', m => {
+    if (m.type() !== 'warning' && m.type() !== 'error') return
+    // The one step that cuts the backend off on purpose: its failed requests are the point of it.
+    if (s.offline && /ERR_INTERNET_DISCONNECTED|Failed to fetch|Failed to load resource|NetworkError|cannot be reached/i.test(m.text())) return
+    consoleNotes.push(`${m.type()}: ${m.text().slice(0, 240)}${m.location()?.url ? ` (${m.location().url.replace(/^https?:\/\/[^/]+/, '')})` : ''}`)
+  })
   const s = {
-    context, page, errors, size,
+    context, page, errors, size, offline: false,
     text: async () => (await page.locator('body').innerText()).replace(/\n+/g, ' | '),
     shot: name => page.screenshot({ path: join(SHOTS, `${size}-${name}.png`) }),
     nav: label => page.getByRole('navigation').getByRole('button', { name: new RegExp(label + '$') }).first().click(),
@@ -300,6 +308,7 @@ try {
 
   /* ── when the backend cannot be reached ── */
   console.log('\nWhen mCare cannot be reached')
+  p.offline = true
   await p.context.route(/\/(rest|auth|storage)\/v1\//, route => route.abort('internetdisconnected'))
   await step(p, 'a reading that cannot be saved says so and keeps what was typed', async () => {
     await p.openLog()
@@ -312,6 +321,7 @@ try {
     await p.page.getByText(/Showing what was loaded at/).waitFor({ timeout: 20000 })
   })
   await p.context.unroute(/\/(rest|auth|storage)\/v1\//)
+  p.offline = false
   check('nothing was saved while it was unreachable', (await row(service.from('readings').select('value').eq('patient_id', patId))).every(r => r.value !== '74'))
   check('no script errors', p.errors.length === 0, p.errors.join(' | '))
   await p.context.close()
@@ -600,6 +610,16 @@ try {
     await a.page.getByText('Messages sent outside the app').waitFor({ timeout: 10000 })
     await a.page.getByRole('row', { name: /Dr\. Test Achieng/ }).waitFor({ timeout: 5000 })
   })
+  await step(a, 'the admin decides how long audit entries are kept; the database keeps the choice and audits it', async () => {
+    await a.nav('Settings')
+    await a.page.getByLabel('Audit entries days').fill('2555')
+    await a.page.getByRole('button', { name: 'Save retention' }).click()
+    await a.page.getByText('Retention settings saved').waitFor({ timeout: 15000 })
+    const saved = await row(service.from('app_settings').select('value').eq('key', 'retention').single())
+    if (saved.value.audit_days !== 2555) throw new Error(JSON.stringify(saved.value))
+    const entry = await row(service.from('audit_log').select('action').eq('action', 'Changed settings').limit(1))
+    if (!entry?.length) throw new Error('the change was not audited')
+  })
   await step(a, 'the admin approves a doctor after checking the licence; the doctor can then work', async () => {
     await a.nav('Approvals')
     await a.page.getByText('Dr. Test Pending').waitFor({ timeout: 15000 })
@@ -711,6 +731,7 @@ try {
         ['support', async x => { await x.home2('Patients on mCare'); await x.page.getByRole('button', { name: /Support$/ }).first().click(); await x.page.getByText(/waiting ·/).waitFor() }],
         ['reports', async x => { await x.home2('Patients on mCare'); await x.page.getByRole('button', { name: /Reports$/ }).first().click(); await x.page.getByText('Doctor workload').waitFor({ timeout: 20000 }) }],
         ['audit', async x => { await x.home2('Patients on mCare'); await x.page.getByRole('button', { name: /Audit Log$/ }).first().click(); await x.page.getByPlaceholder(/Search the whole trail/).waitFor() }],
+        ['settings', async x => { await x.home2('Patients on mCare'); await x.page.getByRole('button', { name: /Settings$/ }).first().click(); await x.page.getByRole('heading', { name: 'Two-step sign-in' }).waitFor() }],
       ]],
     ]
     for (const [portal, email, marker, list] of portals) {
@@ -740,6 +761,9 @@ try {
       await x.context.close()
     }
   }
+  const notes = [...new Set(consoleNotes)]
+  check('no console warnings or errors in any portal, at any size', notes.length === 0, notes.slice(0, 8).join(' | '))
+  if (notes.length) console.log(notes.map(n => `    ${n}`).join('\n'))
 } finally {
   await browser.close()
   await vite.close()

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useApp, isActiveAlert } from '@/shared/state/AppContext'
 import {
   Pill, AlertStatusPill, ResolveAlertSheet, ChatThread, BackHeader, VitalCard, HERO_GRADIENT,
@@ -26,8 +26,10 @@ export type Section = 'overview' | 'vitals' | 'meds' | 'plan' | 'nutrition' | 'v
 
 export function PatientDetail({ patientId, onBack, initial = 'overview', initialDoc }: { patientId: string; onBack: () => void; initial?: Section; /** A document to open straight away (a link from an appointment). */ initialDoc?: string }) {
   const { documentsFor } = useApp()
-  const { doctor, patient: find, vitalDefs, alerts, reportRequests, doses, mealsDone, mealPlanOf, unreadFrom, now } = useDoctor()
+  const { doctor, patient: find, vitalDefs, alerts, reportRequests, doses, mealsDone, mealPlanOf, unreadFrom, now, logRecordView } = useDoctor()
   const patient = find(patientId)
+  // Opening the record is in the patient's access log ("Who opened my record").
+  useEffect(() => { if (patient) logRecordView(patient.id, 'record') }, [patient?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const [section, setSection] = useState<Section>(initial)
   const [resolveSheet, setResolveSheet] = useState<AppAlert | null>(null)
   const [docOpen, setDocOpen] = useState<string | null>(initialDoc ?? null)

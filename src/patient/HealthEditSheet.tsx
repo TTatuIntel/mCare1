@@ -15,7 +15,7 @@ const TITLES: Record<HealthSection, { title: string; subtitle: string }> = {
 /** Edits one section of the patient's health profile. Mount with a `key` per section so the draft starts fresh. */
 export function HealthEditSheet({ section, onClose }: { section: HealthSection; onClose: () => void }) {
   const { vitalDefs } = useApp()
-  const { patient, saveHealth } = usePatient()
+  const { patient, saveHealth, conditionDefs } = usePatient()
   const saved = healthOf(patient)
   const [draft, setDraft] = useState<HealthProfile>(saved)
   const saving = useSave()
@@ -26,7 +26,7 @@ export function HealthEditSheet({ section, onClose }: { section: HealthSection; 
 
   // Newly added conditions start tracking the vitals they call for; say so before saving.
   const added = draft.conditions.filter(c => !saved.conditions.includes(c))
-  const newVitals = [...suggestedVitals(added).keys()]
+  const newVitals = [...suggestedVitals(added, conditionDefs.length ? conditionDefs : undefined).keys()]
     .filter(v => !patient.trackedVitalIds.includes(v))
     .map(v => vitalDefs.find(d => d.id === v && d.active))
     .filter(d => !!d)

@@ -180,17 +180,17 @@ export function WelcomeScreen({ onGetStarted, onSignIn, onDemo }: {
         <SocialButtons />
       </>}
 
-      <div className="flex items-center justify-center gap-3 text-[10px] @2xl:text-xs font-semibold text-teal-700 flex-wrap">
+      <div className="flex items-center justify-center gap-3.5 text-xs @2xl:text-sm font-semibold text-teal-700 flex-wrap">
         {/* Demo accounts exist only in demo mode, where the sample data lives. */}
         {!backendConfigured && <>
           <button type="button" onClick={onDemo} className="underline-offset-4 hover:underline">Try a demo account</button>
-          <span aria-hidden className="h-2 w-px bg-gray-300" />
+          <span aria-hidden className="h-2.5 w-px bg-gray-300" />
         </>}
         <button type="button" onClick={() => setHelpOpen(true)} className="flex items-center gap-1 underline-offset-4 hover:underline">
-          <AuthIcon name="help" className="w-3 h-3 @2xl:w-3.5 @2xl:h-3.5" />
+          <AuthIcon name="help" className="w-3.5 h-3.5 @2xl:w-4 @2xl:h-4" />
           Help &amp; support
         </button>
-        <span aria-hidden className="h-2 w-px bg-gray-300" />
+        <span aria-hidden className="h-2.5 w-px bg-gray-300" />
         <button type="button" onClick={() => setAboutOpen(true)} className="underline-offset-4 hover:underline">About</button>
       </div>
 

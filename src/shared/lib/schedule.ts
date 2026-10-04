@@ -138,7 +138,7 @@ export function buildDaySchedule(patient: PatientUser, doses: MedDose[], mealsDo
   // weekly…): it is due when the first tracked vital is, so it agrees with every vital's page.
   const lastAt = patient.readings.reduce((t, r) => Math.max(t, r.at ?? 0), 0)
   const checks = patient.trackedVitalIds.map(id => {
-    const dueAt = checkInStatus(id, latestValid(patient, id)?.at, now).dueAt
+    const dueAt = checkInStatus(id, latestValid(patient, id)?.at, now, patient).dueAt
     return dueAt === undefined ? 0 : Math.round((dueAt - now) / 60_000)
   })
   const dueIn = checks.length ? Math.min(...checks) : 0

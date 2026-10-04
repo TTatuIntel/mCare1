@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useApp, isActiveAlert } from '@/shared/state/AppContext'
 import {
-  Pill, SectionHead, PATIENT_QUICK_REPLIES, useToast,
+  Pill, SectionHead, useToast,
   PortalHeader, HeroCard, QuickGrid, NoticeCard, HERO_GRADIENT, levelStyle,
 } from '@/shared'
 import { usePatient } from './usePatient'

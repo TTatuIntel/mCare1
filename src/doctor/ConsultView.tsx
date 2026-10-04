@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { isActiveAlert } from '@/shared/state/AppContext'
 import { BackHeader, Pill, AlertStatusPill, VitalCard, VitalChart, HealthSummary, CarePlanCard, EmptyState, useSave, SaveError } from '@/shared'
 import type { CareTeamMember, PatientUser } from '@/shared/lib/types'
@@ -11,7 +12,8 @@ import { useDoctor } from './useDoctor'
    Internal notes, documents and messages are not part of what a
    consulting doctor is given. */
 export function ConsultView({ patient, member, onBack }: { patient: PatientUser; member: CareTeamMember; onBack: () => void }) {
-  const { vitalDefs, alertsOf, notesFor, carePlansFor, nameOf, leaveCareTeam, now } = useDoctor()
+  const { vitalDefs, alertsOf, notesFor, carePlansFor, nameOf, leaveCareTeam, now, logRecordView } = useDoctor()
+  useEffect(() => { logRecordView(patient.id, 'consult') }, [patient.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const leave = useSave()
   const alerts = alertsOf(patient.id)
   const open = alerts.filter(isActiveAlert)

@@ -22,6 +22,9 @@ const url = configured?.startsWith('/') && typeof window !== 'undefined'
 
 /** True when the app has been pointed at a Supabase project. */
 export const backendConfigured = !!url && !!anonKey
+/** The backend's address and public key, for the few requests made outside supabase-js (the local backend's change notices). */
+export const backendUrl = url ?? ''
+export const backendAnonKey = anonKey ?? ''
 
 let client: Promise<SupabaseClient> | undefined
 

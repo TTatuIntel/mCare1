@@ -3,7 +3,8 @@ import {
   BottomSheet, SheetButton, Field, inputCls, Toggle, Pill, ChipFilter, VitalChart, VitalHistory, EmptyState,
   useSave, SaveError, useAct,
 } from '@/shared'
-import type { PatientUser, VitalDef } from '@/shared/lib/types'
+import type { PatientUser, VitalDef, VitalFrequency } from '@/shared/lib/types'
+import { FREQUENCY_LABELS, VITAL_FREQUENCIES } from '@/shared/lib/types'
 import { effectiveCriticalRange, latestValid, targetRange, validateReading, vitalTrend } from '@/shared/lib/vitals'
 import { useDoctor } from './useDoctor'
 
@@ -22,7 +23,7 @@ const num = (v: string) => (v.trim() === '' ? NaN : Number(v))
    each. A reading is never rewritten: a wrong one is marked invalid, with
    the reason, and stays in the record. */
 export function PatientVitals({ patient }: { patient: PatientUser }) {
-  const { vitalDefs, nameOf, now, setTrackedVitals, setTarget, setCriticalRange, recordReading, invalidateReading } = useDoctor()
+  const { vitalDefs, nameOf, now, setTrackedVitals, setTarget, setCriticalRange, recordReading, invalidateReading, setVitalPlan, reviewsOf, unreviewedOf, reviewVitals } = useDoctor()
   const activeVitals = vitalDefs.filter(v => v.active)
   const act = useAct()
   const [period, setPeriod] = useState<Period>('30')
@@ -89,6 +90,28 @@ export function PatientVitals({ patient }: { patient: PatientUser }) {
     act.say(targetChanged ? `${rangeDef.name} target saved · patient told` : criticalChanged ? `${rangeDef.name} critical range saved` : 'Nothing changed')
   }
 
+  /* how often the patient measures a vital */
+  const [plan, setPlan] = useState<{ def: VitalDef; frequency: VitalFrequency | null; reason: string } | null>(null)
+  const planSave = useSave()
+  const savePlan = async () => {
+    if (!plan) return
+    if (!(await planSave.run(() => setVitalPlan(patient.id, plan.def.id, plan.frequency, plan.reason))).ok) return
+    act.say(`${plan.def.name}: ${plan.frequency ? FREQUENCY_LABELS[plan.frequency].toLowerCase() : 'usual schedule'} · patient told`)
+    setPlan(null)
+  }
+
+  /* reviewing the readings */
+  const reviews = reviewsOf(patient.id)
+  const unreviewed = unreviewedOf(patient.id)
+  const [reviewing, setReviewing] = useState<{ note: string } | null>(null)
+  const reviewSave = useSave()
+  const saveReview = async () => {
+    if (!reviewing) return
+    if (!(await reviewSave.run(() => reviewVitals(patient.id, reviewing.note, reviewSave.ref))).ok) return
+    setReviewing(null)
+    act.say(`Readings marked reviewed · ${patient.name.split(' ')[0]} told`)
+  }
+
   const toggleTracked = (def: VitalDef) => {
     const on = patient.trackedVitalIds.includes(def.id)
     const next = on ? patient.trackedVitalIds.filter(v => v !== def.id) : [...patient.trackedVitalIds, def.id]
@@ -102,6 +125,21 @@ export function PatientVitals({ patient }: { patient: PatientUser }) {
       {act.node && <div className="span-all">{act.node}</div>}
       <button onClick={() => { readingSave.clear(); setReading({ vitalId: recordable[0]?.id ?? '', value: '', note: '' }) }} disabled={recordable.length === 0}
         className={`w-full py-3 rounded-2xl text-sm font-bold shadow span-all ${recordable.length ? 'bg-teal-700 text-white' : 'bg-gray-200 text-gray-400'}`}>+ Record a reading</button>
+
+      {/* what has been looked at: abnormal readings have their alerts; this records that everything was reviewed */}
+      <div className="bg-white rounded-2xl p-4 shadow-sm span-all flex items-start gap-3" aria-label="Readings review">
+        <span className="text-xl" aria-hidden="true">{unreviewed.length ? '🔎' : '✅'}</span>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-bold text-gray-900">
+            {unreviewed.length ? `${unreviewed.length} reading${unreviewed.length === 1 ? '' : 's'} since ${reviews.length ? 'the last review' : 'they started'}` : 'All readings reviewed'}
+          </p>
+          <p className="text-[11px] text-gray-400">
+            {reviews[0] ? `Last reviewed ${new Date(reviews[0].reviewedThrough).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} by ${nameOf(reviews[0].reviewerId, 'a previous doctor')}${reviews[0].note ? ` · “${reviews[0].note}”` : ''}` : 'Not reviewed yet.'}
+          </p>
+        </div>
+        <button onClick={() => { reviewSave.clear(); setReviewing({ note: '' }) }} disabled={!unreviewed.length && !!reviews.length}
+          className="text-xs font-bold text-white bg-teal-700 px-3 py-2 rounded-full flex-shrink-0 disabled:opacity-40">Mark reviewed</button>
+      </div>
 
       {patient.trackedVitalIds.length === 0
         ? <div className="span-all"><EmptyState icon="📈" title="No vitals assigned" text="Switch on the vitals this patient should record, below." /></div>
@@ -158,6 +196,10 @@ export function PatientVitals({ patient }: { patient: PatientUser }) {
                   <Pill color="teal">Target {target.min}–{target.max} {v.unit}</Pill>
                   <Pill color="red">Critical ≤ {critical.min} · ≥ {critical.max}</Pill>
                   <span className="text-[10px] text-gray-400">{own ? 'Your target' : 'Standard target'}{ownCritical ? ' · your critical range' : ''}</span>
+                  <button onClick={() => { planSave.clear(); setPlan({ def: v, frequency: patient.vitalPlans?.[v.id]?.frequency ?? null, reason: patient.vitalPlans?.[v.id]?.reason ?? '' }) }}
+                    className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-blue-50 text-blue-700" aria-label={`How often to measure ${v.name}`}>
+                    ⏱ {patient.vitalPlans?.[v.id]?.frequency ? FREQUENCY_LABELS[patient.vitalPlans[v.id].frequency!] : 'Usual schedule'}
+                  </button>
                 </div>
               ) : <p className="text-[10px] text-gray-400 mt-1">Not recorded by this patient.</p>}
             </div>
@@ -201,6 +243,45 @@ export function PatientVitals({ patient }: { patient: PatientUser }) {
             {readingIssue && <p className="text-xs text-red-500 -mt-2 mb-2">{readingIssue}</p>}
             <Field label="Note"><input value={reading.note} maxLength={500} onChange={e => setReading({ ...reading, note: e.target.value })} placeholder="e.g. Taken in clinic, seated" className={inputCls} /></Field>
             <SaveError message={readingSave.error} />
+          </>
+        )}
+      </BottomSheet>
+
+      <BottomSheet open={!!plan} onClose={() => setPlan(null)} title={`How often · ${plan?.def.name ?? ''}`}
+        subtitle={`${patient.name.split(' ')[0]} sees this on their schedule and is told when you change it.`}
+        footer={<><SheetButton tone="ghost" onClick={() => setPlan(null)}>Cancel</SheetButton>
+          <SheetButton disabled={planSave.busy} onClick={savePlan}>{planSave.busy ? 'Saving…' : 'Save'}</SheetButton></>}>
+        {plan && (
+          <>
+            <Field label="Measure">
+              <div className="grid grid-cols-2 gap-2">
+                {[null, ...VITAL_FREQUENCIES].map(f => (
+                  <button key={f ?? 'usual'} onClick={() => setPlan({ ...plan, frequency: f })} aria-pressed={plan.frequency === f}
+                    className={`py-2 rounded-xl text-xs font-semibold border-2 ${plan.frequency === f ? 'border-teal-600 bg-teal-50 text-teal-800' : 'border-gray-100 bg-gray-50 text-gray-600'}`}>
+                    {f ? FREQUENCY_LABELS[f] : 'Usual schedule'}
+                  </button>
+                ))}
+              </div>
+            </Field>
+            <Field label="Why (the patient reads this)">
+              <input value={plan.reason} maxLength={300} onChange={e => setPlan({ ...plan, reason: e.target.value })} placeholder="e.g. While we adjust your tablets" className={inputCls} />
+            </Field>
+            <SaveError message={planSave.error} />
+          </>
+        )}
+      </BottomSheet>
+
+      <BottomSheet open={!!reviewing} onClose={() => setReviewing(null)} title="Mark readings reviewed"
+        subtitle={`Records that you looked at ${patient.name.split(' ')[0]}'s readings up to now${unreviewed.length ? ` (${unreviewed.length} new)` : ''}. They are told.`}
+        footer={<><SheetButton tone="ghost" onClick={() => setReviewing(null)}>Cancel</SheetButton>
+          <SheetButton disabled={reviewSave.busy} onClick={saveReview}>{reviewSave.busy ? 'Saving…' : 'Mark reviewed'}</SheetButton></>}>
+        {reviewing && (
+          <>
+            <Field label="Note for the patient (optional)">
+              <textarea value={reviewing.note} onChange={e => setReviewing({ note: e.target.value })} rows={3} maxLength={1000}
+                placeholder="e.g. Your blood pressure is settling well. Keep going." className={`${inputCls} resize-none`} />
+            </Field>
+            <SaveError message={reviewSave.error} />
           </>
         )}
       </BottomSheet>

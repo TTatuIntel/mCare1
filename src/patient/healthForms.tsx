@@ -6,7 +6,8 @@
 import { useState } from 'react'
 import { Field, inputCls } from '@/shared'
 import type { Allergy, AllergySeverity, BiologicalSex, BloodType } from '@/shared/lib/types'
-import { BLOOD_TYPES, COMMON_ALLERGIES, COMMON_CONDITIONS, RELATIONSHIPS, SEVERITIES, SEX_OPTIONS } from '@/shared/lib/health'
+import { BLOOD_TYPES, COMMON_ALLERGIES, COMMON_CONDITIONS, RELATIONSHIPS, SEVERITIES, SEX_OPTIONS, type CatalogueCondition } from '@/shared/lib/health'
+import { usePatient } from './usePatient'
 
 /** Toggle chip: teal when selected (teal is the action colour). */
 export function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -82,16 +83,19 @@ export interface ConditionsValue { conditions: string[]; noConditions?: boolean;
 
 export function ConditionsFields({ value, onChange }: { value: ConditionsValue; onChange: (v: ConditionsValue) => void }) {
   const { conditions, noConditions } = value
+  // The catalogue an admin keeps (Settings → Conditions); the built-in list until it has loaded.
+  const { conditionDefs } = usePatient()
+  const catalogue: CatalogueCondition[] = conditionDefs.length ? conditionDefs : COMMON_CONDITIONS
   const toggle = (name: string) => onChange({
     ...value,
     noConditions: false,
     conditions: conditions.includes(name) ? conditions.filter(c => c !== name) : [...conditions, name],
   })
-  const custom = conditions.filter(c => !COMMON_CONDITIONS.some(x => x.name === c))
+  const custom = conditions.filter(c => !catalogue.some(x => x.name.toLowerCase() === c.toLowerCase()))
   return (
     <>
       <div className="flex flex-wrap gap-2">
-        {COMMON_CONDITIONS.map(c => (
+        {catalogue.map(c => (
           <Chip key={c.name} on={conditions.includes(c.name)} onClick={() => toggle(c.name)}>{c.icon} {c.name}</Chip>
         ))}
         {custom.map(c => <Chip key={c} on onClick={() => toggle(c)}>🩺 {c} ✕</Chip>)}

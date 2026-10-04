@@ -47,6 +47,8 @@ export function ChatThread({ meId, otherId, otherName, avatar, subtitle, fill, q
   const thread = threadOf(messages, meId, otherId)
   const last = thread[thread.length - 1]
   const unreadFromOther = thread.some(m => m.fromId === otherId && !m.read)
+  // The newest of my messages the other person has read: it says when.
+  const lastReadMine = [...thread].reverse().find(m => m.fromId === meId && m.read)
   useEffect(() => { if (unreadFromOther) void markMessagesRead(otherId, meId) }, [unreadFromOther, otherId, meId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toLatest = (smooth = false) => {
@@ -158,6 +160,9 @@ export function ChatThread({ meId, otherId, otherName, avatar, subtitle, fill, q
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d={m.read ? 'M2 13l4 4L16 7M11 16l1 1L22 7' : 'M5 13l4 4L19 7'} />
                                 </svg>
                                 <span className="sr-only">{m.read ? 'Read' : 'Sent'}</span>
+                                {m.id === lastReadMine?.id && m.readAt && (
+                                  <span className="font-sans">Read {new Date(m.readAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>
+                                )}
                               </>
                             )}
                           </span>

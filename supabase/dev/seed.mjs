@@ -234,6 +234,11 @@ async function buildWorld(ids, doctor) {
   if (res?.ok) dated = true
   else console.warn('  Readings history stays at today: this backend cannot move readings into the past (only the local one can).')
 
+  // The doctor's monitoring plan, and a review of the two weeks so far: today's readings come after it, so they wait for review.
+  must(await doctor.rpc('set_vital_plan', { patient: ids.patient, vital: 'bp', frequency: 'twice_daily', reason: 'TEST: while we adjust Amlodipine', condition: 'hypertension' }), 'blood pressure plan')
+  must(await doctor.rpc('set_vital_plan', { patient: ids.patient, vital: 'gluc', frequency: 'daily', reason: 'TEST: one fasting reading each morning', condition: 'diabetes_t2' }), 'sugar plan')
+  must(await doctor.rpc('review_vitals', { patient: ids.patient, note: 'TEST: Two steady weeks. Keep going.', ref: null }), 'review of the readings')
+
   // Today, one at a time as a person would: in range, then blood pressure high twice in a row, which raises an alert.
   const today = [['hr', '76'], ['gluc', '118'], ['spo2', '97'], ['temp', '98.4'], ['bp', '128/82'], ['bp', '152/96'], ['bp', '156/98']]
   for (const [vital_id, value] of today) must(await p1.from('readings').insert({ patient_id: ids.patient, vital_id, value }), `today's ${vital_id}`)

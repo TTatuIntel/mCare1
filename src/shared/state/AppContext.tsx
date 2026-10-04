@@ -5,14 +5,17 @@ import type {
   AccountStatus, SupportTicket, ResetToken, ResetChannel, AuthProvider, VitalsReportInclude, EmailContent, SentEmail, SentSms,
   MealPlan, HydrationLog, DoctorRating, Outcome, Invitation, UserRole, ReportNote,
   CarePlan, CarePlanDraft, CarePlanItemStatus, CarePlanStatus, CareAssignment, CareTeamMember, PastPatient, DeliveryReport, TimeOff, WorkBlock, DayAvailability, AdminReport,
+  AppSettings, ConditionDef, RecordView, RecordViewContext, RetentionSettings, SecuritySettings, VitalFrequency, VitalReview,
 } from '@/shared/lib/types'
+import { DEFAULT_SETTINGS, FREQUENCY_LABELS } from '@/shared/lib/types'
+import { COMMON_CONDITIONS } from '@/shared/lib/health'
 import { emails as mail, sms as smsText, appBaseUrl, activationLink, activationToken } from '@/shared/email/emailTemplate'
 import { RESET_TTL_MIN, MAX_RESET_ATTEMPTS, AUTH_PROVIDER_LABELS, FOLLOW_UP_REASON } from '@/shared/lib/types'
 import { passwordIssue } from './auth'
 import { DEMO } from './demoData'
-import { backendConfigured, getSupabase, localBackend } from '@/shared/api/supabase'
+import { backendAnonKey, backendConfigured, backendUrl, getSupabase, localBackend } from '@/shared/api/supabase'
 import { subscribePush, unsubscribePush } from '@/shared/lib/push'
-import { signOutBackend } from '@/shared/api/authBackend'
+import { mfaGate, signOutBackend, type MfaGate } from '@/shared/api/authBackend'
 import * as api from '@/shared/api/actions'
 import { changeToken, isoClock, isoDay, loadRecords, searchAudit as searchAuditApi, type AuditWho, type Records } from '@/shared/api/records'
 import { evaluate, alertIsFor, stamp, dateLabel, dayKey, targetRange, ESCALATE_AFTER_MIN, CORRECTION_WINDOW_MIN, type VitalLevel } from '@/shared/lib/vitals'
@@ -240,6 +243,41 @@ interface Ctx extends DocumentApi {
   supportTickets: SupportTicket[]
   createSupportTicket: (userId: string, subject: string, message: string) => Saved
   resolveSupportTicket: (ticketId: string, note?: string) => Saved
+  // Security and settings
+  /** Signs out, optionally saying why (shown on the sign-in page). */
+  signOut: (notice?: string) => void
+  /**
+   * Live mode: the account signed in but still owes the second step (the code from its authenticator app), or must
+   * set one up because an admin requires it for its role. The portal opens once `completeMfa` is called.
+   */
+  mfa: { step: Exclude<MfaGate, 'ok'>; account: AppUser } | null
+  completeMfa: () => void
+  cancelMfa: () => void
+  /** What an administrator decided for the whole service. Demo mode: the defaults. */
+  settings: AppSettings
+  saveSecuritySettings: (v: SecuritySettings) => Saved
+  saveRetentionSettings: (v: RetentionSettings) => Saved
+  /** Applies the retention settings now. Resolves with how many of each it removed. */
+  runRetentionNow: () => Saved<api.RetentionRun>
+  /** The conditions catalogue and the vitals each calls for. */
+  conditionDefs: ConditionDef[]
+  saveConditionDef: (def: ConditionDef) => Saved
+  // Monitoring plans, reviews, access log
+  /** The treating doctor sets how often a patient measures a vital (null: the usual schedule). */
+  setVitalPlan: (patientId: string, vitalId: string, frequency: VitalFrequency | null, reason?: string) => Saved
+  vitalReviews: VitalReview[]
+  /** The treating doctor marks a patient's readings reviewed up to now. `ref` is the form's reference. */
+  reviewVitals: (patientId: string, note?: string, ref?: string) => Saved
+  /** Who opened which patient's record (the patient's own list; everyone's for staff who view logs). */
+  recordViews: RecordView[]
+  /** The signed-in person opened part of a patient's record. Never fails the screen. */
+  logRecordView: (patientId: string, context: RecordViewContext) => void
+  /** The signed-in patient's whole record, as one document to download. */
+  exportMyRecord: () => Saved<Record<string, unknown>>
+  /** Support corrects someone's name, phone or date of birth, with the reason. */
+  adminUpdateProfile: (id: string, changes: { name?: string; phone?: string; dob?: string }, reason: string) => Saved
+  /** An admin resets the two-step sign-in of someone who lost their phone, with the reason. Live mode only. */
+  resetTwoStep: (id: string, reason: string) => Saved
 }
 
 export const AppContext = createContext<Ctx | null>(null)
@@ -272,6 +310,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [pastPatients, setPastPatients] = useState<PastPatient[]>([])
   const [timeOff, setTimeOff] = useState<TimeOff[]>([])
   const [careTeam, setCareTeam] = useState<CareTeamMember[]>([])
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
+  const [conditionDefs, setConditionDefs] = useState<ConditionDef[]>(() => LIVE ? [] : COMMON_CONDITIONS.map((c, i) => ({
+    code: c.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `c${i}`, name: c.name, icon: c.icon, active: true, vitals: c.vitals })))
+  const [vitalReviews, setVitalReviews] = useState<VitalReview[]>([])
+  const [recordViews, setRecordViews] = useState<RecordView[]>([])
+  const [mfa, setMfa] = useState<{ step: Exclude<MfaGate, 'ok'>; account: AppUser; acceptedTerms: boolean } | null>(null)
   const [now, setNow] = useState(Date.now())
 
   // Always-fresh refs so callbacks never read stale state
@@ -301,6 +345,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const loadSeq = useRef(0)
   /** The change token that goes with what is on screen (see my_change_token in the database). */
   const lastToken = useRef('')
+  /** Stops the change checks of the signed-in session. Signing out calls it first, so no check goes out with a session that has just ended. */
+  const stopSync = useRef<() => void>(undefined)
 
   /* ─ notifications & audit ─ */
   /* ─ outgoing email: every message goes through the one mCare template ─ */
@@ -425,6 +471,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setReportRequests(r.reportRequests); setClinicalNotes(r.clinicalNotes); setSupportTickets(r.supportTickets); setAudit(r.audit)
     setMealPlans(r.mealPlans); setHydrationLogs(r.hydration); setRatings(r.ratings); setInvitations(r.invitations)
     setCarePlans(r.carePlans); setCareAssignments(r.careAssignments); setPastPatients(r.pastPatients); setTimeOff(r.timeOff); setCareTeam(r.careTeam)
+    setSettings(r.settings); setConditionDefs(r.conditionDefs); setVitalReviews(r.vitalReviews); setRecordViews(r.recordViews)
     docStore.hydrateDocuments(r.documents, r.docEvents, r.shareLinks, r.supportGrants)
   }
   /**
@@ -440,14 +487,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     users: [], vitalDefs: [], alerts: [], appointments: [], messages: [], notifications: [], doses: [], mealsDone: [], reportRequests: [],
     clinicalNotes: [], supportTickets: [], audit: [], mealPlans: [], hydration: [], ratings: [], documents: [], docEvents: [], shareLinks: [], supportGrants: [], invitations: [],
     carePlans: [], careAssignments: [], pastPatients: [], timeOff: [], careTeam: [],
+    settings: DEFAULT_SETTINGS, conditionDefs: [], vitalReviews: [], recordViews: [],
   }
 
   /** Signs out locally. `notice` says why, when the person did not choose to. */
   const leave = (notice?: string) => {
+    stopSync.current?.(); stopSync.current = undefined
     signOutBackend()
     loadSeq.current++
     meRef.current = null; pendingRef.current = null
-    setCurrentUserId(null)
+    setCurrentUserId(null); setMfa(null)
     if (LIVE) { apply(EMPTY); lastToken.current = ''; setSync({ at: null, refreshing: false }) }
     setEnterError(notice)
   }
@@ -476,6 +525,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setEntering(true); setEnterError(undefined)
     const mine = ++loadSeq.current
     try {
+      // The database refuses a session that still owes the second step; ask for it before loading anything.
+      const gate = await mfaGate().catch(() => 'ok' as const)
+      if (mine !== loadSeq.current) return
+      if (gate !== 'ok') { setMfa({ step: gate, account, acceptedTerms }); return }
       // Consent given on the sign-up form is recorded once the account can speak for itself.
       if (acceptedTerms) await api.acceptTerms().catch(() => {})
       const { records, token } = await load(account)
@@ -500,6 +553,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setCurrentUserId(account.id)
   }
   const retryEnter = () => { if (pendingRef.current) void enter(pendingRef.current, false) }
+  /** The second step is done (or set up): open the portal. */
+  const completeMfa = () => { const m = mfa; setMfa(null); if (m) void enter(m.account, m.acceptedTerms) }
+  const cancelMfa = () => leave()
+  const signOut = (notice?: string) => leave(notice)
 
   const setCurrentUser = (u: AppUser | null) => {
     // Signing out also ends the backend session, or the next load would sign straight back in.
@@ -530,6 +587,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     const quick = setInterval(check, CHECK_EVERY_MS)
     const full = setInterval(() => { if (visible()) void refresh() }, RELOAD_EVERY_MS)
+    // The local backend has no Realtime: it answers /__dev/changes the moment anything is saved, so open screens update
+    // at once there too. The token check above still decides whether anything this person may see changed.
+    const listening = new AbortController()
+    stopSync.current = () => { stopped = true; listening.abort(); clearInterval(quick); clearInterval(full) }
+    if (localBackend) void (async () => {
+      let pulse = -1
+      const pause = (ms: number) => new Promise(r => setTimeout(r, ms))
+      while (!stopped) {
+        try {
+          const token = (await (await getSupabase()).auth.getSession()).data.session?.access_token
+          if (!token) { await pause(5000); continue }
+          const res = await fetch(`${backendUrl}/__dev/changes?since=${pulse}`, {
+            headers: { apikey: backendAnonKey, Authorization: `Bearer ${token}` }, cache: 'no-store', signal: listening.signal })
+          if (!res.ok) { await pause(5000); continue }
+          const next = (await res.json() as { pulse: number }).pulse
+          if (pulse !== -1 && next !== pulse) void check()
+          pulse = next
+        } catch {
+          if (stopped) return
+          await pause(5000)
+        }
+      }
+    })()
     const onVisible = () => { if (visible()) void refresh() }
     const onOnline = () => { setOnline(true); void refresh() }
     const onOffline = () => setOnline(false)
@@ -538,6 +618,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     window.addEventListener('offline', onOffline)
     return () => {
       stopped = true
+      listening.abort()
       clearInterval(quick); clearInterval(full)
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('online', onOnline)
@@ -596,8 +677,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (p.permissions) await api.setAssistantPerms(id, p.permissions)
     // A doctor resubmitting after "sent back" goes through the approval queue; other detail edits are plain saves.
     if (p.approvalStatus === 'pending') await api.resubmitDoctorApplication(p.specialty ?? '', p.licenseNo ?? '', p.hospital ?? '')
-    else if ('specialty' in p || 'licenseNo' in p || 'hospital' in p || 'signature' in p)
-      await api.setDoctorDetails(id, { specialty: p.specialty, licenseNo: p.licenseNo, hospital: p.hospital, ...('signature' in p ? { signature: p.signature ?? null } : {}) })
+    else if ('specialty' in p || 'licenseNo' in p || 'hospital' in p)
+      await api.setDoctorDetails(id, { specialty: p.specialty, licenseNo: p.licenseNo, hospital: p.hospital })
+    if ('signature' in p) await api.saveSignature(id, p.signature ?? null)
   }
 
   const updateUser = (id: string, patch: Partial<AppUser>): Saved => {
@@ -1346,7 +1428,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return done()
   }
   const markMessagesRead = (fromId: string, toId: string): Saved => {
-    setMessages(prev => prev.map(m => m.fromId === fromId && m.toId === toId && !m.read ? { ...m, read: true } : m))
+    setMessages(prev => prev.map(m => m.fromId === fromId && m.toId === toId && !m.read ? { ...m, read: true, readAt: Date.now() } : m))
     return LIVE ? save(() => api.markMessagesRead(fromId, toId)) : done()
   }
   const markNotificationRead = (id: string): Saved => {
@@ -1756,6 +1838,115 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return done()
   }
 
+  /* ─ settings, monitoring plans, reviews, access log: live calls the database; demo applies the same rules here ─ */
+  const isAdminNow = () => currentUser?.role === 'admin' && currentUser.status === 'active'
+  const saveSecuritySettings = (v: SecuritySettings): Saved => {
+    if (Object.values(v.idleMinutes).some(m => m !== 0 && (m < 5 || m > 720))) return refused('Idle sign-out must be between 5 and 720 minutes, or 0 for never.')
+    if (LIVE) return run(() => api.saveSecuritySettings(v))
+    if (!isAdminNow()) return refused('Only an admin can change the settings.')
+    setSettings(prev => ({ ...prev, security: { mfaRequiredRoles: [...new Set(v.mfaRequiredRoles)].sort(), idleMinutes: v.idleMinutes } }))
+    logAudit('Changed settings', 'Security')
+    return done()
+  }
+  const saveRetentionSettings = (v: RetentionSettings): Saved => {
+    const bad = (n: number | null, lo: number, hi: number) => n !== null && (!Number.isInteger(n) || n < lo || n > hi)
+    if (bad(v.auditDays, 180, 36500)) return refused('Audit entries must be kept between 180 and 36500 days, or empty to keep for ever.')
+    if (bad(v.deletedDocumentDays, 1, 3650)) return refused('Deleted documents must be kept between 1 and 3650 days, or empty to keep for ever.')
+    if (bad(v.readNotificationDays, 7, 3650) || bad(v.deliveryDays, 7, 3650)) return refused('Notifications and message records must be kept at least 7 days, or empty to keep for ever.')
+    if (LIVE) return run(() => api.saveRetentionSettings(v))
+    if (!isAdminNow()) return refused('Only an admin can change the settings.')
+    setSettings(prev => ({ ...prev, retention: v }))
+    logAudit('Changed settings', 'Data retention')
+    return done()
+  }
+  const runRetentionNow = (): Saved<api.RetentionRun> => {
+    if (LIVE) return run(() => api.runRetentionNow())
+    if (!isAdminNow()) return refused('Only an admin can apply retention.')
+    return done({ documents: 0, audit: 0, notifications: 0, deliveries: 0 })
+  }
+  const saveConditionDef = (def: ConditionDef): Saved => {
+    if (!def.name.trim()) return refused('Give the condition a name.')
+    if (LIVE) return run(() => api.saveConditionDef(def))
+    if (!isAdminNow()) return refused('Only an admin can change the conditions list.')
+    const code = def.code || def.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+    const before = conditionDefs.find(c => c.code === code)
+    setConditionDefs(prev => before ? prev.map(c => c.code === code ? { ...def, code, name: def.name.trim() } : c) : [...prev, { ...def, code, name: def.name.trim() }])
+    logAudit(before ? (before.active !== def.active ? (def.active ? 'Activated condition' : 'Deactivated condition') : 'Updated condition') : 'Added condition', def.name.trim())
+    return done()
+  }
+  const treatsNow = (patientId: string) => currentUser?.role === 'doctor' && (findUser(patientId) as PatientUser | undefined)?.assignedDoctorId === currentUser.id
+  const setVitalPlan = (patientId: string, vitalId: string, frequency: VitalFrequency | null, reason?: string): Saved => {
+    if (LIVE) return run(() => api.setVitalPlan(patientId, vitalId, frequency, reason))
+    if (!treatsNow(patientId)) return refused("Only the patient's treating doctor can set their monitoring plan.")
+    const def = vitalDefs.find(v => v.id === vitalId)
+    if (!def?.active) return refused('That vital is not collected.')
+    const why = reason?.trim() || undefined
+    patchPatient(patientId, p => {
+      const plans = { ...(p.vitalPlans ?? {}) }
+      if (frequency || why) plans[vitalId] = { frequency: frequency ?? undefined, reason: why, assignedBy: actorId(), assignedAt: Date.now() }
+      else delete plans[vitalId]
+      return { ...p, vitalPlans: Object.keys(plans).length ? plans : undefined, trackedVitalIds: p.trackedVitalIds.includes(vitalId) ? p.trackedVitalIds : [...p.trackedVitalIds, vitalId] }
+    })
+    notify(patientId, 'care_plan', `Measuring ${def.name}`, frequency
+      ? `${currentUser?.name ?? 'Your doctor'} asked you to measure ${def.name} ${FREQUENCY_LABELS[frequency].toLowerCase()}${why ? ` · ${why}` : ''}`
+      : `${currentUser?.name ?? 'Your doctor'} set ${def.name} back to the usual schedule`, 'vitals')
+    logAudit('Set monitoring plan', `${findUser(patientId)?.name} · ${def.name} · ${frequency ? FREQUENCY_LABELS[frequency] : 'as usual'}`)
+    return done()
+  }
+  const reviewVitals = (patientId: string, note?: string, ref?: string): Saved => {
+    if (LIVE) return run(async () => { await api.reviewVitals(patientId, note, ref) })
+    if (!treatsNow(patientId)) return refused("Only the patient's treating doctor can review their readings.")
+    const last = vitalReviews.filter(r => r.patientId === patientId).reduce((m, r) => Math.max(m, r.reviewedThrough), 0)
+    const pt = findUser(patientId) as PatientUser | undefined
+    const count = (pt?.readings ?? []).filter(r => !r.invalid && (r.at ?? 0) > last).length
+    const t = Date.now(), clean = note?.trim() || undefined
+    setVitalReviews(prev => [{ id: ref ?? uid('vr'), patientId, reviewerId: actorId(), reviewedThrough: t, note: clean, readings: count, createdAt: stamp(new Date(t)) }, ...prev])
+    notify(patientId, 'care_plan', 'Your doctor reviewed your readings', `${currentUser?.name ?? 'Your doctor'} looked at your readings${clean ? `: ${clean}` : '.'}`, 'vitals')
+    logAudit('Reviewed readings', `${pt?.name} · ${count} reading${count === 1 ? '' : 's'}`)
+    return done()
+  }
+  const logRecordView = (patientId: string, context: RecordViewContext) => {
+    if (!currentUser || currentUser.id === patientId) return
+    if (LIVE) { api.logRecordView(patientId, context).catch(() => {}); return }
+    const t = Date.now()
+    setRecordViews(prev => prev.some(v => v.viewerId === currentUser.id && v.patientId === patientId && v.context === context && t - v.at < 30 * MIN) ? prev
+      : [{ id: uid('rv'), patientId, viewerId: currentUser.id, viewerRole: currentUser.role, context, at: t, createdAt: stamp(new Date(t)) }, ...prev])
+  }
+  const exportMyRecord = (): Saved<Record<string, unknown>> => {
+    if (LIVE) return run(() => api.exportMyRecord())
+    const p = currentUser as PatientUser | null
+    if (!p || p.role !== 'patient') return refused('Only a patient can download their own record.')
+    logAudit('Downloaded own record', p.name)
+    return done({
+      format: 'mCare patient record, version 1 (demo)', exported_at: new Date().toISOString(),
+      profile: { name: p.name, email: p.email, phone: p.phone, date_of_birth: p.dob }, health: p.health, emergency_contacts: p.emergencyContacts,
+      monitoring: p.trackedVitalIds.map(id => ({ vital: id, ...(p.vitalPlans?.[id] ?? {}), target: p.thresholds[id] })),
+      readings: p.readings, prescriptions: p.prescriptions,
+      notes_from_your_doctor: clinicalNotes.filter(n => n.patientId === p.id && n.visibility === 'shared'),
+      appointments: appointments.filter(a => a.patientId === p.id), alerts: alerts.filter(a => a.patientId === p.id),
+      messages: messages.filter(m => m.fromId === p.id || m.toId === p.id), who_opened_your_record: recordViews.filter(v => v.patientId === p.id),
+    })
+  }
+  const adminUpdateProfile = (id: string, changes: { name?: string; phone?: string; dob?: string }, reason: string): Saved => {
+    if (reason.trim().length < 5) return refused('Say why you are changing these details.')
+    if (changes.name !== undefined && !changes.name.trim()) return refused('Enter their name.')
+    if (LIVE) return run(() => api.adminUpdateProfile(id, changes, reason))
+    const can = currentUser?.role === 'admin' || (currentUser?.role === 'assistant' && (currentUser as AdminUser).permissions.includes('handle_support'))
+    if (!can) return refused('Not allowed.')
+    if (id === currentUserId) return refused('Change your own details from your profile.')
+    patchUser(id, { ...(changes.name !== undefined ? { name: changes.name.trim() } : {}), ...(changes.phone !== undefined ? { phone: changes.phone.trim() } : {}),
+      ...(changes.dob !== undefined ? { dob: changes.dob || undefined } : {}) })
+    notify(id, 'account', 'Your details were updated', `mCare support updated your details: ${reason.trim()}`)
+    logAudit('Support updated details', `${findUser(id)?.name ?? id} · ${reason.trim()}`)
+    return done()
+  }
+
+  const resetTwoStep = (id: string, reason: string): Saved => {
+    if (reason.trim().length < 5) return refused('Say why two-step sign-in is being reset.')
+    if (LIVE) return run(() => api.resetTwoStep(id, reason))
+    return refused('Two-step sign-in works when mCare is connected to its server.')
+  }
+
   return (
     <AppContext.Provider value={{
       ...docStore,
@@ -1783,6 +1974,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       changePassword, requestPasswordReset, verifyResetCode, verifyResetLink,
       setPasswordAfterVerification, recoveryChannels, requestAdminPasswordHelp, socialAuth,
       supportTickets, createSupportTicket, resolveSupportTicket,
+      signOut, mfa: mfa ? { step: mfa.step, account: mfa.account } : null, completeMfa, cancelMfa,
+      settings, saveSecuritySettings, saveRetentionSettings, runRetentionNow, conditionDefs, saveConditionDef,
+      setVitalPlan, vitalReviews, reviewVitals, recordViews, logRecordView, exportMyRecord, adminUpdateProfile, resetTwoStep,
     }}>
       {children}
     </AppContext.Provider>
