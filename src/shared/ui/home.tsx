@@ -4,6 +4,7 @@
  */
 import { useApp } from '@/shared/state/AppContext'
 import { greeting } from '@/shared/lib/vitals'
+import type { AppNotification } from '@/shared/lib/types'
 import { Avatar } from './primitives'
 import { NotificationBell } from './NotificationBell'
 
@@ -15,7 +16,8 @@ export function PortalHeader({ title, eyebrow, onNavigate, onProfile }: {
   title?: string
   /** Defaults to a time-of-day greeting. */
   eyebrow?: string
-  onNavigate: (tab: string) => void
+  /** Opens the screen a notification points to; `about` is the record it concerns, when it says. */
+  onNavigate: (tab: string, about?: AppNotification['resource']) => void
   onProfile: () => void
 }) {
   const { currentUser } = useApp()

@@ -1,12 +1,11 @@
 import { useMemo, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
-import { BackHeader, Pill, useToast } from '@/shared'
-import type { AdminUser } from '@/shared/lib/types'
+import { BackHeader, Pill, Segmented, StatTiles, EmptyState, useAct } from '@/shared'
 import { isOfficial, DOC_RETENTION_DAYS, SUPPORT_ACCESS_MIN } from '@/shared/documents/documents'
 import { ago } from '@/shared/lib/vitals'
 import { DocRow, useDocFilters } from '@/shared/documents/DocKit'
 import { DocumentViewer } from '@/shared/documents/DocumentViewer'
-import { isFullAdmin } from '@/assistant/permissions'
+import { useAdmin } from './useAdmin'
 
 type View = 'registry' | 'recovery' | 'policy'
 const DAY = 86_400_000
@@ -17,16 +16,16 @@ const DAY = 86_400_000
  * reading them. A full Admin can open one document's content for a support
  * case — time-limited, reason required, patient notified.
  */
-export default function DocumentsTab({ admin, onBack }: { admin: AdminUser; onBack: () => void }) {
+export default function DocumentsTab({ onBack }: { onBack: () => void }) {
   const {
-    users, now, documentsFor, docBackups, createDocBackup, testDocBackup, restoreDocBackup, purgeExpired,
+    users, documentsFor, docBackupsHere, docBackups, createDocBackup, testDocBackup, restoreDocBackup, purgeExpired,
     restoreDocument, runDocSelfTests,
   } = useApp()
+  const { full, nameOf, now } = useAdmin()
   const [view, setView] = useState<View>('registry')
   const [openId, setOpenId] = useState<string | null>(null)
   const [attention, setAttention] = useState(false)
-  const toast = useToast()
-  const full = isFullAdmin(admin)
+  const toast = useAct()
 
   const all = documentsFor(undefined, { allVersions: true })
   const deleted = documentsFor(undefined, { deleted: true, allVersions: true })
@@ -34,20 +33,13 @@ export default function DocumentsTab({ admin, onBack }: { admin: AdminUser; onBa
   const needsAttention = (e: typeof all[number]) =>
     e.doc.upload?.state === 'failed' || (isOfficial(e.doc) && e.doc.status !== 'released' && now - e.doc.at > DAY)
   const { filtered, controls } = useDocFilters(attention ? all.filter(needsAttention) : all, users)
-  const patientName = (id: string) => users.find(u => u.id === id)?.name ?? '—'
+  const patientName = (id: string) => nameOf(id, '—')
 
   if (openId) return <DocumentViewer docId={openId} onBack={() => setOpenId(null)} onOpenDoc={setOpenId} />
 
   const expired = deleted.filter(e => now - (e.doc.deletedAt ?? now) > DOC_RETENTION_DAYS * DAY)
   const lastTest = docBackups.find(b => b.lastTest)?.lastTest
-  const stats = [
-    { v: all.length, l: 'Documents', c: 'text-teal-700' },
-    { v: all.filter(e => isOfficial(e.doc)).length, l: 'Official', c: 'text-emerald-600' },
-    { v: all.filter(e => !isOfficial(e.doc)).length, l: 'Personal', c: 'text-gray-700' },
-    { v: all.filter(e => isOfficial(e.doc) && e.doc.status !== 'released').length, l: 'Unreleased', c: 'text-amber-600' },
-    { v: all.filter(e => e.doc.upload?.state === 'failed').length, l: 'Failed uploads', c: 'text-red-500' },
-    { v: deleted.length, l: 'Deleted', c: 'text-gray-500' },
-  ]
+
   const passed = tests.filter(t => t.pass).length
 
   return (
@@ -63,32 +55,32 @@ export default function DocumentsTab({ admin, onBack }: { admin: AdminUser; onBa
         </p>
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
-        {stats.map(s => (
-          <div key={s.l} className="bg-white rounded-2xl py-2.5 text-center shadow-sm">
-            <p className={`text-lg font-black ${s.c}`}>{s.v}</p>
-            <p className="text-[9px] text-gray-400 leading-tight">{s.l}</p>
-          </div>
-        ))}
+      <div className="span-all">
+        <StatTiles items={[
+          { value: all.length, label: 'Documents', tone: 'teal' },
+          { value: all.filter(e => isOfficial(e.doc)).length, label: 'Official', tone: 'green' },
+          { value: all.filter(e => !isOfficial(e.doc)).length, label: 'Personal', tone: 'gray' },
+          { value: all.filter(e => isOfficial(e.doc) && e.doc.status !== 'released').length, label: 'Unreleased', tone: 'amber' },
+          { value: all.filter(e => e.doc.upload?.state === 'failed').length, label: 'Failed uploads', tone: 'red' },
+          { value: deleted.length, label: 'Deleted', tone: 'gray' },
+        ]} />
       </div>
 
-      <div className="flex bg-white rounded-full p-0.5 shadow-sm">
-        {([['registry', 'Registry'], ['recovery', 'Recovery'], ['policy', `Policy ${passed}/${tests.length}`]] as [View, string][]).map(([id, label]) => (
-          <button key={id} onClick={() => setView(id)}
-            className={`flex-1 py-1.5 rounded-full text-[11px] font-bold ${view === id ? 'bg-teal-700 text-white' : 'text-gray-500'}`}>{label}</button>
-        ))}
+      <div className="span-all">
+        <Segmented label="Which view" value={view} onChange={setView}
+          options={[{ id: 'registry', label: 'Registry' }, { id: 'recovery', label: 'Recovery' }, { id: 'policy', label: `Policy ${passed}/${tests.length}` }]} />
       </div>
 
       {view === 'registry' && (
         <>
           <button onClick={() => setAttention(a => !a)}
-            className={`self-start px-3 py-1.5 rounded-full text-[10px] font-bold ${attention ? 'bg-amber-500 text-white' : 'bg-white text-amber-700 shadow-sm'}`}>
+            aria-pressed={attention} className={`self-start px-3 py-1.5 rounded-full text-[10px] font-bold ${attention ? 'bg-teal-700 text-white' : 'bg-white text-amber-700 shadow-sm'}`}>
             ⚠ Needs attention ({all.filter(needsAttention).length})
           </button>
           {controls}
           <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
             {filtered.length === 0
-              ? <p className="text-xs text-gray-400 text-center py-8">No documents match.</p>
+              ? <EmptyState icon="🗂️" title={all.length ? 'No documents match' : 'No documents yet'} text={all.length ? 'Try another filter.' : 'Documents appear here as patients and doctors add them.'} />
               : filtered.map((e, i) => <DocRow key={e.doc.id} entry={e} onOpen={setOpenId} patientName={patientName(e.doc.patientId)} last={i === filtered.length - 1} />)}
           </div>
         </>
@@ -109,22 +101,29 @@ export default function DocumentsTab({ admin, onBack }: { admin: AdminUser; onBa
                   <div className="flex-1 min-w-0"><DocRow entry={e} onOpen={setOpenId} patientName={patientName(e.doc.patientId)} last /></div>
                   {past
                     ? <Pill color="gray">Expired</Pill>
-                    : <button onClick={() => { restoreDocument(e.doc.id); toast.show('Document restored') }} className="text-[11px] font-bold text-teal-700 flex-shrink-0">Restore</button>}
+                    : <button disabled={toast.busy} onClick={() => toast.run(() => restoreDocument(e.doc.id), 'Document restored · the patient has been told')} className="text-[11px] font-bold text-teal-700 flex-shrink-0 disabled:opacity-50">Restore</button>}
                 </div>
               )
             })}
             {expired.length > 0 && full && (
               <div className="px-4 py-3 bg-gray-50">
                 <p className="text-[10px] text-gray-500 mb-1.5">{expired.length} document{expired.length > 1 ? 's are' : ' is'} past the recovery window. Purging removes {expired.length > 1 ? 'them' : 'it'} permanently — take a backup first.</p>
-                <button onClick={() => toast.show(`Purged ${purgeExpired()} document(s)`)} className="text-[11px] font-bold text-red-600">Purge expired</button>
+                <button disabled={toast.busy} onClick={() => toast.run(() => purgeExpired(), n => `Purged ${n} document${n === 1 ? '' : 's'}`)} className="text-[11px] font-bold text-red-600 disabled:opacity-50">Purge expired</button>
               </div>
             )}
           </div>
 
-          <div className="bg-white rounded-2xl p-4 shadow-sm">
+          {!docBackupsHere && (
+            <div className="bg-white rounded-2xl p-4 shadow-sm">
+              <p className="text-xs font-bold text-gray-900">Backups</p>
+              <p className="text-[11px] text-gray-500 mt-1 leading-relaxed">Backups of the database and of stored files are taken by the hosting service, and restored from there. A document someone deleted can be recovered above for {DOC_RETENTION_DAYS} days.</p>
+            </div>
+          )}
+
+          {docBackupsHere && <div className="bg-white rounded-2xl p-4 shadow-sm">
             <div className="flex items-center justify-between mb-1">
               <p className="text-xs font-bold text-gray-900">Backups</p>
-              <button onClick={() => { createDocBackup(); toast.show('Backup created') }} className="text-[11px] font-bold text-white bg-teal-700 px-3 py-1 rounded-full">+ Back up now</button>
+              <button onClick={() => { createDocBackup(); toast.say('Backup created') }} className="text-[11px] font-bold text-white bg-teal-700 px-3 py-1 rounded-full">+ Back up now</button>
             </div>
             <p className="text-[10px] text-gray-400 mb-2">
               {lastTest ? `Last restore test ${ago(lastTest.at, now)}: ${lastTest.ok ? 'passed' : 'FAILED'}` : 'No restore test recorded yet — create a backup and test it.'}
@@ -142,12 +141,12 @@ export default function DocumentsTab({ admin, onBack }: { admin: AdminUser; onBa
                 )}
                 <div className="flex gap-3 mt-1.5">
                   <button onClick={() => testDocBackup(b.id)} className="text-[11px] font-bold text-teal-700">Test restore</button>
-                  {full && <button onClick={() => { const n = restoreDocBackup(b.id); toast.show(n ? `Recovered ${n} document(s)` : 'Nothing missing — live data already complete') }} className="text-[11px] font-bold text-blue-600">Restore missing</button>}
+                  {full && <button onClick={() => { const n = restoreDocBackup(b.id); toast.say(n ? `Recovered ${n} document${n === 1 ? '' : 's'}` : 'Nothing missing: every document is already here') }} className="text-[11px] font-bold text-teal-700">Restore missing</button>}
                 </div>
               </div>
             ))}
             <p className="text-[9px] text-gray-400 mt-2">Restore is non-destructive: it recovers records missing from live data and never overwrites newer changes.</p>
-          </div>
+          </div>}
         </>
       )}
 

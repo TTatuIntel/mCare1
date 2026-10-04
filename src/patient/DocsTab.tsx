@@ -13,13 +13,13 @@ import { dayKey } from '@/shared/lib/vitals'
 import { ReportRequestSheet } from './ReportRequest'
 
 /* ─── Documents & Reports ────────────────────────────────────────────── */
-export function DocsTab({ go }: { go: (t: string) => void }) {
+export function DocsTab({ go, openDoc }: { go: (t: string, target?: string) => void; /** A document to open straight away (a link from an appointment). */ openDoc?: string }) {
   const {
     currentUser, users, documentsFor, retryUpload, discardUpload, markDocsSeen, setDocPrivacyDefault, shareLinksFor, recordDownload, now,
     getDocument, reportRequests, loadDocumentFile,
   } = useApp()
   const patient = currentUser as PatientUser
-  const [openId, setOpenId] = useState<string | null>(null)
+  const [openId, setOpenId] = useState<string | null>(openDoc ?? null)
   const [requesting, setRequesting] = useState(false)
   const toast = useToast()
   const [upload, setUpload] = useState(false)
@@ -41,7 +41,7 @@ export function DocsTab({ go }: { go: (t: string) => void }) {
 
   const followLink = (l: DocSourceLink) => {
     const tab = { reading: 'vitals', alert: 'alerts', prescription: 'medicine', appointment: 'appts', note: 'home' }[l.kind]
-    go(tab)
+    go(tab, l.kind === 'appointment' ? l.id : undefined)
   }
 
   /** Everything currently listed, as one zip: original files plus reports as printable pages. */

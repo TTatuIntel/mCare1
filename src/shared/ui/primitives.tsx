@@ -61,11 +61,14 @@ export function Pill({ children, color = 'teal' }: { children: React.ReactNode; 
 }
 
 /* ─── Toggle ────────────────────────────────────────────────────────── */
-export function Toggle({ on, onChange, disabled }: { on: boolean; onChange: () => void; disabled?: boolean }) {
+export function Toggle({ on, onChange, disabled, label }: { on: boolean; onChange: () => void; disabled?: boolean; label?: string }) {
   return (
     <button
       onClick={onChange}
       disabled={disabled}
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
       className={`w-11 h-6 rounded-full transition-colors relative flex-shrink-0 ${on ? 'bg-teal-600' : 'bg-gray-200'} ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
     >
       <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${on ? 'left-5' : 'left-0.5'}`} />

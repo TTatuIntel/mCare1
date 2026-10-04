@@ -33,7 +33,7 @@ const today = () => new Date().toISOString().slice(0, 10)
  */
 export default function HealthSetup() {
   const { vitalDefs } = useApp()
-  const { patient, saveHealth: saveHealthProfile, saveAbout, saveEmergencyContact, setTrackedVitals, completeSetup, skipSetup, signOut } = usePatient()
+  const { patient, saveHealth: saveHealthProfile, saveAbout, saveEmergencyContact, setTrackedVitals, completeSetup, skipSetup, signOut, conditionDefs } = usePatient()
   const h = healthOf(patient)
   const contacts = patient.emergencyContacts ?? []
   const existingKin = contacts.find(c => c.nextOfKin) ?? contacts[0]
@@ -57,7 +57,7 @@ export default function HealthSetup() {
   const applied = useRef(new Set<string>())
 
   const activeVitals = vitalDefs.filter(v => v.active)
-  const suggestions = suggestedVitals(cond.conditions)
+  const suggestions = suggestedVitals(cond.conditions, conditionDefs.length ? conditionDefs : undefined)
   const age = dob ? calcAge(dob) : null
   const current = STEPS[step]
 

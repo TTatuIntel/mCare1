@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import { NavBar } from './NavBar'
+import { IdleSignOut } from './IdleSignOut'
 
 /** Scroll movement (px) smaller than this is ignored, so the floating button doesn't flicker. */
 const SCROLL_JITTER = 6
@@ -72,7 +73,7 @@ export function PortalShell({ screen, animKey, nav, onSelect, homeId, fill, hide
   fill?: boolean
   /** The screen draws its own BackHeader, so skip the "← Home" link. */
   hideBack?: boolean
-  /** Keep a single reading-width column on tablet and web (forms, profile). Screens that `fill` are always narrow. */
+  /** Keep a single reading-width column on tablet and web (forms, profile). */
   narrow?: boolean
   /**
    * A floating action button for this screen (e.g. the patient's "Log vitals"). Its wrapper is a
@@ -105,7 +106,7 @@ export function PortalShell({ screen, animKey, nav, onSelect, homeId, fill, hide
               : `overflow-y-auto ${floating ? 'pb-44 @2xl:pb-24' : 'pb-28 @2xl:pb-10'}`}`}
           style={{ scrollbarWidth: 'none' }}
         >
-          <div className={`mx-auto w-full ${narrow || fill ? 'max-w-2xl' : 'max-w-5xl'} ${fill ? 'flex-1 min-h-0 flex flex-col' : ''}`}>
+          <div className={`mx-auto w-full ${narrow ? 'max-w-2xl' : 'max-w-5xl'} ${fill ? 'flex-1 min-h-0 flex flex-col' : ''}`}>
             <ConnectionBanner />
             {!inNav && !hideBack && (
               <button onClick={() => onSelect(homeId)} className="text-xs text-teal-700 font-semibold mb-1">← Home</button>
@@ -117,6 +118,7 @@ export function PortalShell({ screen, animKey, nav, onSelect, homeId, fill, hide
         {floating && <div data-compact={compact} className="group/fab absolute z-[5] right-4 bottom-24 @2xl:right-8 @2xl:bottom-8">{floating}</div>}
       </div>
       <NavBar items={nav.map(n => ({ ...n, badge: n.badge || undefined }))} active={inNav ? screen : homeId} onSelect={onSelect} onHome={() => onSelect(homeId)} />
+      <IdleSignOut />
     </div>
   )
 }

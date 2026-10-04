@@ -1,6 +1,11 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;0,9..144,700;1,9..144,400&family=DM+Mono:wght@400;500&display=swap');
 @import 'tailwindcss';
 
+/* `motion-safe:` and `motion-reduce:` follow the app's motion setting (data-motion on <html>, shared/layout/motion.ts)
+   instead of the device's media query, so the person's choice in Theme & Font applies to them too. */
+@custom-variant motion-safe (&:where(:root:not([data-motion='reduce']) *));
+@custom-variant motion-reduce (&:where(:root[data-motion='reduce'] *));
+
 @theme {
   --color-primary: #0a6e6e;
   --color-primary-light: #0d8a8a;
@@ -91,11 +96,6 @@ body {
 /* Loading popup logo: settles in over the frosted page. */
 @keyframes loader-pop { from { opacity: 0; transform: scale(.94) translateY(4px); } to { opacity: 1; transform: none; } }
 .loader-pop { animation: loader-pop .24s cubic-bezier(.2,.8,.2,1); }
-/* Boot splash: the logo comes into focus, then the tagline rises in after it. */
-@keyframes splash-logo-in { from { opacity: 0; transform: scale(.92) translateY(8px); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
-@keyframes splash-tag-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-.splash-logo-in { animation: splash-logo-in .6s cubic-bezier(.2,.8,.2,1) both; }
-.splash-tag-in { animation: splash-tag-in .5s ease-out .3s both; }
 /* Welcome screen: sections rise in one after another (delay set inline). */
 @keyframes rise-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 .rise-in { animation: rise-in .55s cubic-bezier(.2,.8,.2,1) both; }
@@ -208,17 +208,29 @@ body {
   .social-btn:hover .social-mark { animation: social-mark .45s cubic-bezier(.2,.8,.2,1) forwards; }
   .social-btn:hover .social-sheen { animation: social-sheen .7s ease-out; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .social-btn .social-mark, .social-btn .social-sheen { animation: none; }
-  .sheet-up, .sheet-fade, .screen-in, .loader-pop, .splash-logo-in, .splash-tag-in, .rise-in,
-  .auth-float, .auth-drift, .auth-shake, .auth-pop, .auth-check,
-  .auth-item-in, .auth-ekg, .auth-shimmer,
-  .auth-tile-in, .auth-stage-open, .auth-scene-in, .auth-slide-next, .auth-slide-prev,
-  .auth-icon-vitals, .auth-icon-pill, .auth-icon-chat, .auth-icon-bell, .auth-icon-users { animation: none; }
-  .auth-ekg { stroke-dashoffset: 0; }
-  .auth-word-up, .auth-glow, .auth-nudge, .auth-stagger > * { animation: none; }
-  .auth-ring, .auth-sheen, .auth-halo, .auth-cta-ring, .auth-leave-next, .auth-leave-prev { animation: none; opacity: 0; }
-}
+/* Reduced motion: `data-motion="reduce"` on <html>, set by shared/layout/motion.ts from the device's
+   "Reduce motion" / "Remove animations" setting (often switched on by battery saver) unless the person chose
+   otherwise in Theme & Font. Never test `prefers-reduced-motion` directly: the person's choice would be ignored.
+   Nothing slides, flies, swings or shakes; things still arrive with a fade, and the loops become a soft glow in
+   place (opacity only), so the app is calm but never looks frozen. `:where` keeps each rule as strong as before. */
+@keyframes calm-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes calm-breathe { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+@keyframes calm-pulse { 0% { opacity: .5; } 100% { opacity: 0; } }
+:where(:root[data-motion='reduce']) .social-btn .social-mark,
+:where(:root[data-motion='reduce']) .social-btn .social-sheen { animation: none; }
+/* arrivals: a fade in place of the movement */
+:where(:root[data-motion='reduce']) :is(.sheet-up, .sheet-fade, .screen-in, .loader-pop, .rise-in,
+  .auth-pop, .auth-check, .auth-item-in, .auth-tile-in, .auth-stage-open, .auth-scene-in,
+  .auth-slide-next, .auth-slide-prev, .auth-word-up) { animation-name: calm-in; animation-duration: .25s; animation-timing-function: ease-out; animation-fill-mode: both; }
+:where(:root[data-motion='reduce']) :where(.auth-stagger) > * { animation: calm-in .25s ease-out both; }
+/* loops: a glow that breathes in place */
+:where(:root[data-motion='reduce']) :is(.auth-float, .auth-glow,
+  .auth-icon-vitals, .auth-icon-pill, .auth-icon-chat, .auth-icon-bell, .auth-icon-users) { animation: calm-breathe 2.4s ease-in-out infinite; }
+:where(:root[data-motion='reduce']) :is(.auth-ring, .auth-halo, .auth-cta-ring) { animation: calm-pulse 2.2s ease-out infinite; }
+/* movement across the screen: off. The heart trace (.auth-ekg) and the shimmer keep running: they draw and
+   change colour in place, like the logo's own trace. */
+:where(:root[data-motion='reduce']) :is(.auth-drift, .auth-shake, .auth-nudge) { animation: none; }
+:where(:root[data-motion='reduce']) :is(.auth-sheen, .auth-leave-next, .auth-leave-prev) { animation: none; opacity: 0; }
 
 /* Home vitals trend popover: blurs in and "solidifies", then dissolves on leave.
    It drifts in from its anchor — down when below, up when above, sideways
@@ -260,10 +272,8 @@ body {
   .vital-glass { background: rgba(4, 46, 46, .94); }
   .vital-glass-caret { background: rgb(4, 46, 46); }
 }
-@media (prefers-reduced-motion: reduce) {
-  .vital-pop { transition: opacity .15s linear; }
-  .vital-pop[data-open='false'][data-side] { filter: none; transform: none; }
-}
+:where(:root[data-motion='reduce']) .vital-pop { transition: opacity .15s linear; }
+:where(:root[data-motion='reduce']) .vital-pop[data-open='false'][data-side] { filter: none; transform: none; }
 
 /* Home "Up next" ticker: each item rises in; the active dot fills, then advances. */
 @keyframes upnext-in { from { opacity: 0; transform: translateY(8px); filter: blur(3px); } to { opacity: 1; transform: none; filter: none; } }
@@ -278,12 +288,9 @@ body {
 @keyframes fab-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
 .fab-in { animation: fab-in .5s cubic-bezier(.2,.8,.2,1) .15s both; }
 .fab-float { animation: fab-float 3.6s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) {
-  .alert-pop, .fab-in, .fab-float { animation: none; }
-  .upnext-in { animation: none; }
-  /* No auto-rotation when motion is reduced; the dots still switch items. */
-  .upnext-progress { animation: none; width: 100%; }
-}
+:where(:root[data-motion='reduce']) .fab-float { animation: none; }
+:where(:root[data-motion='reduce']) :is(.alert-pop, .fab-in, .upnext-in) { animation: calm-in .25s ease-out both; }
+/* The ticker keeps rotating under reduced motion: its progress bar is what advances it, and a bar filling is not movement across the screen. */
 
 /* ─── mCare logo: hospital-monitor EKG trace ─────────────────────────
    One 2.4s cycle drives everything, so the sweep dot, the drawn trace,
@@ -355,16 +362,9 @@ body {
   animation-delay: var(--mcare-beat-delay, 0s);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .mcare-heartbeat,
-  .mcare-trace-path,
-  .mcare-sweep-dot { animation: none; }
-  .mcare-trace-path { stroke-dashoffset: 0; opacity: 1; }
-  .mcare-sweep-dot { opacity: 0; }
-  /* No beat means no color changes either — pin the resting hue. */
-  .mcare-pulse-text,
-  .mcare-trace { color: #047857; }
-}
+/* The heartbeat is the brand and stays on under reduced motion: the trace still draws and the colour still changes.
+   Only the "m" stops pulsing in size. */
+:where(:root[data-motion='reduce']) .mcare-heartbeat { animation: none; }
 
 /* ─── Theme: dark mode via filter flip ───────────────────────────────
    The app's screens use hardcoded light-palette utility classes, so a

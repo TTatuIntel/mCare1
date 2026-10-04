@@ -4,11 +4,12 @@
  * resetting a forgotten password. Demo mode uses VerificationScreen and
  * ForgotPassword instead.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import type { AppUser } from '@/shared/lib/types'
 import { isEmail, passwordIssue } from '@/shared/state/auth'
-import { resendSignUpCode, sendPasswordReset, setNewPassword, takeConsent, verifyEmailCode } from '@/shared/api/authBackend'
+import { getLocalTestAuthCode, resendSignUpCode, sendPasswordReset, setNewPassword, takeConsent, verifyEmailCode } from '@/shared/api/authBackend'
+import { localBackend } from '@/shared/api/supabase'
 import { appBaseUrl } from '@/shared/email/emailTemplate'
 import {
   AuthBack, AuthButton, AuthField, AuthHeading, OtpInput, PasswordInput, PasswordMeter, StepBar, SuccessCheck, SIGNUP_STEPS, authInputCls,
@@ -48,13 +49,14 @@ function ResendLink({ left, onResend }: { left: number; onResend: () => void }) 
 
 /* ─── Confirm a new account's email ─────────────────────────────────── */
 
-export function ConfirmEmail({ email, onBack }: { email: string; onBack: () => void }) {
+export function ConfirmEmail({ email, onBack, initialCode }: { email: string; onBack: () => void; initialCode?: string }) {
   const adopt = useAdoptAccount()
   const wait = useResendWait()
-  const [code, setCode] = useState('')
+  const [code, setCode] = useState(initialCode ?? '')
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
+  const autoVerifyStarted = useRef(false)
 
   const verify = async (entered: string) => {
     if (busy) return
@@ -64,6 +66,12 @@ export function ConfirmEmail({ email, onBack }: { email: string; onBack: () => v
     if (res.ok) adopt(res.user)
     else setError(res.error ?? 'That code is incorrect or has expired.')
   }
+
+  useEffect(() => {
+    if (!initialCode || autoVerifyStarted.current) return
+    autoVerifyStarted.current = true
+    void verify(initialCode)
+  }, [initialCode])
 
   const resend = async () => {
     setCode(''); setError('')
@@ -86,6 +94,8 @@ export function ConfirmEmail({ email, onBack }: { email: string; onBack: () => v
           onChange={v => { setCode(v); setError(''); setStatus(''); if (v.length === 6) verify(v) }} />
         <p role="status" className={`min-h-4 mt-2 text-xs text-center ${error ? 'text-red-500' : 'text-emerald-600'}`}>{error || status}</p>
       </div>
+
+      <LocalTestAuthDetails email={email} kind="signup" />
 
       <AuthButton type="submit" disabled={code.length < 6 || busy}>{busy ? 'Checking…' : 'Verify Account'}</AuthButton>
       <ResendLink left={wait.left} onResend={resend} />
@@ -188,6 +198,7 @@ export function LiveRecovery({ initialEmail, recovered, onBack }: {
             onChange={v => { setCode(v); setError(''); if (v.length === 6) verify(v) }} />
           <p role="status" className="min-h-4 mt-2 text-xs text-center text-red-500">{error}</p>
         </div>
+        <LocalTestAuthDetails email={email} kind="recovery" />
         <AuthButton type="submit" disabled={code.length < 6 || busy}>{busy ? 'Checking…' : 'Verify code'}</AuthButton>
         <ResendLink left={wait.left} onResend={send} />
       </form>
@@ -210,5 +221,40 @@ export function LiveRecovery({ initialEmail, recovered, onBack }: {
       {error && <p role="alert" className="auth-shake text-xs text-red-500 text-center">{error}</p>}
       <AuthButton type="submit" disabled={!!issue || !confirm || mismatch || busy}>{busy ? 'Saving…' : 'Save new password'}</AuthButton>
     </form>
+  )
+}
+
+function LocalTestAuthDetails({ email, kind }: { email: string; kind: 'signup' | 'recovery' }) {
+  const [code, setCode] = useState('')
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || !localBackend) return
+    let current = true
+    const load = async () => {
+      const next = await getLocalTestAuthCode(email, kind)
+      if (current) setCode(next ?? '')
+    }
+    void load()
+    const timer = window.setInterval(load, 1500)
+    return () => { current = false; window.clearInterval(timer) }
+  }, [email, kind])
+
+  if (!import.meta.env.DEV || !localBackend) return null
+
+  let activationHref = ''
+  if (kind === 'signup' && code) {
+    const url = new URL(appBaseUrl())
+    url.searchParams.set('mcare_test_activation', 'signup')
+    url.searchParams.set('email', email)
+    url.searchParams.set('code', code)
+    activationHref = url.href
+  }
+
+  return (
+    <aside className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950" aria-label="Local test email">
+      <p className="font-semibold">Local testing only</p>
+      <p className="mt-1">One-time code: <span className="font-mono font-bold">{code || 'Waiting for code…'}</span></p>
+      {activationHref && <a className="mt-1 inline-block font-semibold text-teal-800 underline" href={activationHref}>Open test activation link</a>}
+    </aside>
   )
 }

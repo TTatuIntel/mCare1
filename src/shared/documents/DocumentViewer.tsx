@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
-import { BackHeader, BottomSheet, SheetButton, Field, Pill, Toggle, inputCls, useToast } from '@/shared'
+import { BackHeader, BottomSheet, SheetButton, Field, Pill, Toggle, inputCls, useAct, useSave, SaveError } from '@/shared'
 import type { DocSourceLink, DoctorUser, PatientUser } from '@/shared/lib/types'
 import { SignatureSheet } from '@/shared/profile/SignatureSheet'
 import {
@@ -8,11 +8,12 @@ import {
   canSign, canRelease, canCorrect, canDelete, canRestore, canShare, SUPPORT_ACCESS_MIN, DOC_RETENTION_DAYS,
 } from './documents'
 import { ago } from '@/shared/lib/vitals'
-import { DocBadges, DocBodyView, docDate } from './DocKit'
+import { DocBadges, docDate } from './DocKit'
 import { DownloadSheet } from './DownloadSheet'
 import { DocumentReader } from './DocumentReader'
 import { formatOf, FAMILY_META } from './fileFormats'
 import { UploadSheet } from './UploadSheet'
+import { suggestInterpretation } from './analysis'
 import { ShareSheet } from './ShareSheet'
 
 const ACTION_LABEL: Record<string, string> = {
@@ -43,7 +44,9 @@ export function DocumentViewer({ docId, onBack, onLink, onOpenDoc }: {
     correctReport, supportGrantFor, requestSupportAccess, documentsFor, setReportInterpretation,
   } = app
   const entry = getDocument(docId)
-  const toast = useToast()
+  // `toast` is the screen's one result line; `save` belongs to whichever sheet is open.
+  const toast = useAct()
+  const save = useSave()
   const [sheet, setSheet] = useState<null | 'versions' | 'history' | 'share' | 'correct' | 'correctFile' | 'support' | 'delete' | 'release' | 'download'>(null)
   const [reason, setReason] = useState('')
   const [interpDraft, setInterpDraft] = useState('')
@@ -98,9 +101,31 @@ export function DocumentViewer({ docId, onBack, onLink, onOpenDoc }: {
   const countText = Object.entries(counts).map(([k, n]) => `${n} ${k}${n > 1 ? 's' : ''}`).join(' · ')
 
   const doCorrect = async () => {
-    const id = await correctReport(doc.id, reason)
+    const drafted = await save.run(async () => {
+      const id = await correctReport(doc.id, reason)
+      return id ? { ok: true as const, value: id } : { ok: false as const, error: 'The correction could not be started. Check your connection and try again.' }
+    })
+    if (!drafted.ok) return
     setSheet(null); setReason('')
-    if (id) { toast.show('Correction drafted — review, then release'); onOpenDoc(id) }
+    toast.say('Correction drafted. Review it, then release.')
+    onOpenDoc(drafted.value)
+  }
+  /** The words first, then the release: saving the interpretation after signing would void the signature. */
+  const doRelease = async () => {
+    const released = await save.run(async () => {
+      if (doc.body?.type === 'vitals') {
+        const edited = await setReportInterpretation(doc.id, interpDraft)
+        if (!edited.ok) return edited
+      }
+      return releaseDocument(doc.id)
+    })
+    if (!released.ok) return
+    setSheet(null)
+    toast.say(doc.supersedes ? 'Correction released · the previous version is superseded' : 'Released to the patient')
+  }
+  const doDelete = async () => {
+    if (!(await save.run(() => deleteDocument(doc.id))).ok) return
+    setSheet(null); onBack()
   }
   const doSupport = async () => {
     const res = await requestSupportAccess(doc.id, reason)
@@ -120,14 +145,14 @@ export function DocumentViewer({ docId, onBack, onLink, onOpenDoc }: {
 
   const actions: { key: string; label: string; onClick: () => void; tone?: string }[] = []
   if (canShare(me, doc, ctx)) actions.push({ key: 'share', label: '🔗 Share', onClick: () => setSheet('share') })
-  if (canSign(me, doc, ctx)) actions.push({ key: 'sign', label: '✍️ Sign', onClick: () => { signDocument(doc.id); toast.show('Signed — not yet released') } })
-  if (canRelease(me, doc, ctx)) actions.push({ key: 'rel', label: doc.status === 'draft' ? '✅ Sign & release' : '📤 Release', onClick: () => setSheet('release'), tone: 'primary' })
+  if (canSign(me, doc, ctx)) actions.push({ key: 'sign', label: '✍️ Sign', onClick: () => { void toast.run(() => signDocument(doc.id), 'Signed · not yet released') } })
+  if (canRelease(me, doc, ctx)) actions.push({ key: 'rel', label: doc.status === 'draft' ? '✅ Sign & release' : '📤 Release', onClick: () => { save.clear(); setSheet('release') }, tone: 'primary' })
   if (canCorrect(me, doc, documentsFor(doc.patientId, { allVersions: true, deleted: false }).map(e => e.doc), ctx))
-    actions.push({ key: 'corr', label: '✏️ Issue correction', onClick: () => { setReason(''); setSheet(doc.origin === 'system_generated' ? 'correct' : 'correctFile') } })
+    actions.push({ key: 'corr', label: '✏️ Issue correction', onClick: () => { setReason(''); save.clear(); setSheet(doc.origin === 'system_generated' ? 'correct' : 'correctFile') } })
   if (versions.length > 1) actions.push({ key: 'ver', label: `🕘 Versions (${versions.length})`, onClick: () => setSheet('versions') })
   if (events.length > 0 || me.id === doc.patientId) actions.push({ key: 'hist', label: '👁 Access history', onClick: () => setSheet('history') })
-  if (canDelete(me, doc, ctx)) actions.push({ key: 'del', label: '🗑 Delete', onClick: () => setSheet('delete'), tone: 'danger' })
-  if (canRestore(me, doc, ctx)) actions.push({ key: 'res', label: '♻️ Restore', onClick: () => { restoreDocument(doc.id); toast.show('Document restored') }, tone: 'primary' })
+  if (canDelete(me, doc, ctx)) actions.push({ key: 'del', label: '🗑 Delete', onClick: () => { save.clear(); setSheet('delete') }, tone: 'danger' })
+  if (canRestore(me, doc, ctx)) actions.push({ key: 'res', label: '♻️ Restore', onClick: () => { void toast.run(() => restoreDocument(doc.id), 'Document restored') }, tone: 'primary' })
   if (me.role === 'admin' && level === 'metadata' && !doc.deletedAt) actions.push({ key: 'sup', label: '🛟 Support access', onClick: () => { setReason(''); setErr(''); setSheet('support') } })
 
   const openers = whoCanOpen(doc, ctx).filter(x => x.access.level === 'content')
@@ -234,7 +259,8 @@ export function DocumentViewer({ docId, onBack, onLink, onOpenDoc }: {
             <p className="text-xs font-bold text-gray-900">Share with my care team</p>
             <p className="text-[10px] text-gray-400">{doc.visibility === 'private' ? 'Private — your doctor cannot open it.' : 'Your doctor can open this file.'}</p>
           </div>
-          <Toggle on={doc.visibility === 'care_team'} onChange={() => setDocVisibility(doc.id, doc.visibility === 'private' ? 'care_team' : 'private')} />
+          <Toggle on={doc.visibility === 'care_team'} disabled={toast.busy} label="Share with my care team"
+            onChange={() => { void toast.run(() => setDocVisibility(doc.id, doc.visibility === 'private' ? 'care_team' : 'private'), doc.visibility === 'private' ? 'Shared with your care team' : 'Now private') }} />
         </div>
       )}
 
@@ -303,7 +329,7 @@ export function DocumentViewer({ docId, onBack, onLink, onOpenDoc }: {
       {/* ── Sheets ── */}
       <BottomSheet open={sheet === 'release'} onClose={() => setSheet(null)} title={doc.status === 'draft' ? 'Sign & release' : 'Release to patient'}
         subtitle="Releasing makes this an official document in the patient's library and notifies them."
-        footer={<><SheetButton tone="ghost" onClick={() => setSheet(null)}>Cancel</SheetButton><SheetButton onClick={() => { if (doc.body?.type === 'vitals') setReportInterpretation(doc.id, interpDraft); releaseDocument(doc.id); setSheet(null); toast.show(doc.supersedes ? 'Correction released — previous version superseded' : 'Released to patient') }}>{doc.status === 'draft' ? 'Sign & release' : 'Release'}</SheetButton></>}>
+        footer={<><SheetButton tone="ghost" onClick={() => setSheet(null)}>Cancel</SheetButton><SheetButton disabled={save.busy} onClick={doRelease}>{save.busy ? 'Releasing…' : doc.status === 'draft' ? 'Sign & release' : 'Release'}</SheetButton></>}>
         <div className="bg-gray-50 rounded-xl px-3 py-2.5 text-[11px] text-gray-600 leading-relaxed">
           I, {me.name}, confirm I have reviewed <b>{doc.title}</b>{doc.version > 1 ? ` (version ${doc.version})` : ''} for {patient?.name} and that it is accurate to the best of my knowledge.
           {doc.supersedes && <><br />Version {doc.version - 1} will be marked superseded; the patient keeps access to it in the version history.</>}
@@ -314,7 +340,9 @@ export function DocumentViewer({ docId, onBack, onLink, onOpenDoc }: {
               <textarea value={interpDraft} onChange={e => setInterpDraft(e.target.value)} rows={5} className={`${inputCls} resize-none`}
                 placeholder="Your assessment of these readings and the plan — printed above your signature." />
             </Field>
-            <p className="text-[10px] text-gray-400 -mt-1">{interpDraft.trim() ? 'Locked once released. Later changes need a correction.' : 'Optional, but recommended — without it the report shows findings only.'}</p>
+            <button onClick={() => { if (doc.body?.type === 'vitals') setInterpDraft(suggestInterpretation(doc.body, patient)) }}
+              className="text-[10px] font-bold text-teal-700 -mt-1 mb-1 block">✨ {interpDraft.trim() ? 'Replace with suggested analysis' : 'Suggest analysis from the readings'}</button>
+            <p className="text-[10px] text-gray-400">{interpDraft.trim() ? 'Locked once released. Later changes need a correction.' : 'Optional, but recommended — without it the report shows findings only.'}</p>
           </div>
         )}
         {doc.status === 'draft' && me.role === 'doctor' && (
@@ -328,20 +356,22 @@ export function DocumentViewer({ docId, onBack, onLink, onOpenDoc }: {
               : <p className="text-[11px] text-gray-500 mt-1">No handwritten signature yet — your typed name is used. <button onClick={() => setSigOpen(true)} className="font-bold text-teal-700">Add one now</button></p>}
           </div>
         )}
+        <SaveError message={save.error} className="mt-3" />
       </BottomSheet>
       <SignatureSheet open={sigOpen} onClose={() => setSigOpen(false)} />
 
       <BottomSheet open={sheet === 'correct'} onClose={() => setSheet(null)} title="Issue a correction"
         subtitle={`Creates version ${doc.version + 1} from the current record as a draft. Version ${doc.version} stays current until you release the correction.`}
-        footer={<><SheetButton tone="ghost" onClick={() => setSheet(null)}>Cancel</SheetButton><SheetButton disabled={reason.trim().length < 5} onClick={doCorrect}>Create draft</SheetButton></>}>
+        footer={<><SheetButton tone="ghost" onClick={() => setSheet(null)}>Cancel</SheetButton><SheetButton disabled={reason.trim().length < 5 || save.busy} onClick={doCorrect}>{save.busy ? 'Creating…' : 'Create draft'}</SheetButton></>}>
         <Field label="Reason for correction *">
           <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3} className={`${inputCls} resize-none`}
             placeholder="e.g. A reading used in this report was later marked invalid." />
         </Field>
+        <SaveError message={save.error} />
       </BottomSheet>
 
       <UploadSheet open={sheet === 'correctFile'} onClose={() => setSheet(null)} patientId={doc.patientId} correcting={doc}
-        onDone={id => { toast.show('Correction uploading — release it when ready'); onOpenDoc(id) }} />
+        onDone={id => { toast.say('Correction uploading. Release it when ready.'); onOpenDoc(id) }} />
 
       <BottomSheet open={sheet === 'support'} onClose={() => setSheet(null)} title="Open for support"
         subtitle={`Grants you content access to this one document for ${SUPPORT_ACCESS_MIN} minutes. The patient is notified with your reason, and every step is audited.`}
@@ -355,8 +385,9 @@ export function DocumentViewer({ docId, onBack, onLink, onOpenDoc }: {
 
       <BottomSheet open={sheet === 'delete'} onClose={() => setSheet(null)} title="Delete document?"
         subtitle={`It moves to Recently deleted and can be restored for ${DOC_RETENTION_DAYS} days.`}
-        footer={<><SheetButton tone="ghost" onClick={() => setSheet(null)}>Cancel</SheetButton><SheetButton tone="danger" onClick={() => { deleteDocument(doc.id); setSheet(null); onBack() }}>Delete</SheetButton></>}>
+        footer={<><SheetButton tone="ghost" onClick={() => setSheet(null)}>Cancel</SheetButton><SheetButton tone="danger" disabled={save.busy} onClick={doDelete}>{save.busy ? 'Deleting…' : 'Delete'}</SheetButton></>}>
         <p className="text-xs text-gray-600">{doc.title}</p>
+        <SaveError message={save.error} className="mt-3" />
       </BottomSheet>
 
       <BottomSheet open={sheet === 'versions'} onClose={() => setSheet(null)} title="Version history" subtitle="Every version is kept. The current one is marked."

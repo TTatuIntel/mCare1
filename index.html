@@ -1,7 +1,6 @@
 <!doctype html>
-<html lang="<!-- figma:lang -->">
+<html lang="en">
   <head>
-    <!-- figma:head-start -->
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Follow the text size set on the device: the app is sized in rem, so it all scales together. -->
@@ -9,17 +8,106 @@
     <!-- Open the font connections early so the splash's brand font is ready sooner. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <title><!-- figma:title --></title>
-    <!-- figma:head-end -->
+    <title>mCare</title>
+    <meta name="description" content="mCare: remote patient monitoring. Patients log vitals, medicines and meals; doctors follow them, answer alerts and keep the clinical record." />
+    <!-- A private health app: keep it out of search engines (the production headers say the same: X-Robots-Tag). -->
+    <meta name="robots" content="noindex, nofollow" />
+    <meta property="og:title" content="mCare" />
+    <meta property="og:description" content="mCare: remote patient monitoring. Patients log vitals, medicines and meals; doctors follow them, answer alerts and keep the clinical record." />
+    <!-- The brand fonts (the same address index.css imports, so they are fetched once). Loaded without holding up the first paint. -->
+    <link id="brand-fonts" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;0,9..144,700;1,9..144,400&family=DM+Mono:wght@400;500&display=swap" media="print" onload="this.media='all'" />
+    <!-- How much the app may move on this device: the person's choice (Profile → Theme & Font → Animations), else the
+         device's own setting. Set before anything paints so the splash agrees with the app. Same rule as shared/layout/motion.ts. -->
+    <script>
+      (function () {
+        var pref = null
+        try { pref = localStorage.getItem('mcare-motion') } catch (e) {}
+        var reduce = pref === 'reduced' || (pref !== 'full' && !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches))
+        document.documentElement.setAttribute('data-motion', reduce ? 'reduce' : 'full')
+      })()
+    </script>
+    <!-- The boot splash is plain HTML and CSS so it is on screen at once, before the app's code has downloaded
+         (which takes seconds on a phone). SplashScreen.tsx takes it down when the app is ready. -->
+    <style>
+      html, body { margin: 0; }
+      #boot-splash {
+        position: fixed; inset: 0; z-index: 100;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        background: radial-gradient(120% 70% at 50% 42%, #ffffff 0%, #f6f8fb 60%, #eef3f6 100%);
+        transition: opacity .35s ease-out;
+      }
+      #boot-splash.boot-leave { opacity: 0; pointer-events: none; }
+      /* Same proportions as the app's logo at its largest size; follows the phone's width like the app does. */
+      .boot-logo {
+        display: flex; flex-direction: column; align-items: center; gap: .15625em;
+        font: 900 clamp(3.2rem, 16.41vw, 4.4rem)/1 'Fraunces', Georgia, serif; letter-spacing: -.025em;
+        color: #047857; opacity: 0;
+        animation: boot-hue 28.8s steps(1) 1.008s infinite both;
+      }
+      @media (min-width: 672px) { .boot-logo { font-size: 4rem; } }
+      .boot-m { display: inline-block; animation: boot-beat 2.4s ease-in-out infinite; }
+      .boot-care { color: #6d5cf5; }
+      .boot-trace { width: 3.4375em; height: .625em; overflow: visible; filter: drop-shadow(0 0 2px currentColor); }
+      .boot-trace-path { stroke-dasharray: 232; animation: boot-sweep 2.4s linear infinite, boot-fade 2.4s linear infinite; }
+      .boot-dot { offset-path: path('M0,20 L46,20 C52,20 54,14 58,14 C62,14 64,20 70,20 L76,20 L80,24 L86,3 L92,36 L97,17 L102,20 L112,20 C120,20 122,11 130,11 C138,11 140,20 148,20 L200,20'); offset-rotate: 0deg; animation: boot-dot 2.4s linear infinite; }
+      .boot-tag { margin: 2rem 0 0; font: 500 1rem/1.5 'DM Sans', system-ui, sans-serif; letter-spacing: .025em; color: #6b7280; opacity: 0; }
+      /* Only on a slow connection: appears after ten seconds so a long wait never looks frozen. */
+      .boot-hint { margin: .75rem 1.5rem 0; font: 500 .75rem/1.4 'DM Sans', system-ui, sans-serif; color: #92400e; text-align: center; opacity: 0; animation: boot-calm-in .4s ease-out 10s both; }
+      .boot-show .boot-logo { animation: boot-hue 28.8s steps(1) 1.008s infinite both, boot-logo-in .6s cubic-bezier(.2,.8,.2,1) both; opacity: 1; }
+      .boot-show .boot-tag { animation: boot-tag-in .5s ease-out .3s both; }
+      @keyframes boot-logo-in { from { opacity: 0; transform: scale(.92) translateY(8px); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
+      @keyframes boot-tag-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+      @keyframes boot-sweep { 0% { stroke-dashoffset: 232; } 55%, 100% { stroke-dashoffset: 0; } }
+      @keyframes boot-fade { 0%, 55% { opacity: 1; } 100% { opacity: .15; } }
+      @keyframes boot-dot { 0% { offset-distance: 0%; opacity: 0; } 4%, 96% { opacity: 1; } 100% { offset-distance: 100%; opacity: 0; } }
+      @keyframes boot-beat { 0%, 34% { transform: scale(1); } 38% { transform: scale(1.06); } 41% { transform: scale(1); } 45% { transform: scale(1.13); } 52%, 100% { transform: scale(1); } }
+      /* A new monitor hue on every beat, as in the app's logo. */
+      @keyframes boot-hue {
+        0% { color: #047857; } 8.33% { color: #1e40af; } 16.67% { color: #9d174d; } 25% { color: #0f766e; }
+        33.33% { color: #5b21b6; } 41.67% { color: #9a3412; } 50% { color: #155e75; } 58.33% { color: #7e22ce; }
+        66.67% { color: #3f6212; } 75% { color: #3730a3; } 83.33% { color: #9f1239; } 91.67% { color: #854d0e; }
+      }
+      /* Reduced motion (data-motion, set by the script above): the "m" holds its size and the logo fades in;
+         the trace keeps drawing and changing colour, as in the app (index.css). */
+      :root[data-motion="reduce"] .boot-m { animation: none; }
+      :root[data-motion="reduce"] .boot-show .boot-logo { animation: boot-hue 28.8s steps(1) 1.008s infinite both, boot-calm-in .25s ease-out both; }
+      :root[data-motion="reduce"] .boot-show .boot-tag { animation: boot-calm-in .25s ease-out both; }
+      @keyframes boot-calm-in { from { opacity: 0; } to { opacity: 1; } }
+    </style>
   </head>
   <body>
-    <!-- figma:body-start -->
-    <div id="root">
-      <!-- Pre-JS: just the page background, so there's no white flash and no
-           second logo. The one splash (SplashScreen) appears when React mounts. -->
-      <div style="position:fixed;inset:0;background:linear-gradient(160deg,#d8eae8 0%,#c4d8e8 100%)"></div>
+    <div id="root"></div>
+    <div id="boot-splash" role="status" aria-live="polite" aria-label="mCare is starting">
+      <div class="boot-logo">
+        <div><span class="boot-m">m</span><span class="boot-care">Care</span></div>
+        <svg class="boot-trace" viewBox="0 0 200 40" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path stroke-width="1.98" opacity=".12" d="M0,20 L46,20 C52,20 54,14 58,14 C62,14 64,20 70,20 L76,20 L80,24 L86,3 L92,36 L97,17 L102,20 L112,20 C120,20 122,11 130,11 C138,11 140,20 148,20 L200,20" />
+          <path class="boot-trace-path" stroke-width="3.6" d="M0,20 L46,20 C52,20 54,14 58,14 C62,14 64,20 70,20 L76,20 L80,24 L86,3 L92,36 L97,17 L102,20 L112,20 C120,20 122,11 130,11 C138,11 140,20 148,20 L200,20" />
+          <g class="boot-dot" stroke="none" fill="currentColor"><circle r="7.68" opacity=".25" /><circle r="3.2" /></g>
+        </svg>
+      </div>
+      <p class="boot-tag">Better Health Together</p>
+      <p class="boot-hint">Slow connection. Still loading…</p>
     </div>
+    <script>
+      // Show the logo once the brand font is in (no flash of the fallback), or after 0.8 s whichever comes first.
+      (function () {
+        var splash = document.getElementById('boot-splash')
+        function show() {
+          if (splash.dataset.shownAt) return
+          splash.dataset.shownAt = String(Date.now())
+          splash.classList.add('boot-show')
+        }
+        setTimeout(show, 800)
+        // The font's rules arrive with the stylesheet in the head; ask for the font then, and now in case it is already in.
+        function askFont() {
+          // The font can fail to arrive (no internet, Google Fonts blocked): the timer then shows the logo in the fallback font.
+          try { document.fonts.load('900 64px Fraunces').then(function (faces) { if (faces.length) show() }, function () {}) } catch (e) { /* older browser: the timer shows it */ }
+        }
+        document.getElementById('brand-fonts').addEventListener('load', askFont)
+        askFont()
+      })()
+    </script>
     <script type="module" src="/src/main.tsx"></script>
-    <!-- figma:body-end -->
   </body>
 </html>

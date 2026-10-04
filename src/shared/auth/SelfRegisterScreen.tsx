@@ -40,7 +40,7 @@ export function SelfRegisterScreen({ onSignIn, onConfirm }: {
   const mismatch = !!confirm && confirm !== form.password
   const phone = fullPhone(country, form.phone)
   const phoneBad = phoneTouched && !!form.phone && !phone
-  const ready = !!form.name.trim() && emailOk && !!phone && !passwordIssue(form.password) && confirm === form.password && agreed && !busy
+  const passwordProblem = passwordIssue(form.password)
 
   /** Live mode: the backend creates the account and emails the confirmation. */
   const registerLive = async () => {
@@ -54,7 +54,20 @@ export function SelfRegisterScreen({ onSignIn, onConfirm }: {
   }
 
   const handleRegister = () => {
-    if (!ready) return
+    if (busy) return
+    const missing = [
+      !form.name.trim() && 'your full name',
+      !emailOk && 'a valid email address',
+      !phone && `a valid ${country.name} phone number`,
+      passwordProblem,
+      !confirm && 'confirm your password',
+      !!confirm && mismatch && 'matching passwords',
+      !agreed && 'accept the Terms & Privacy Policy',
+    ].filter((item): item is string => !!item)
+    if (missing.length) {
+      setError(`To create your account, please provide ${missing.join('; ')}.`)
+      return
+    }
     if (backendConfigured) { registerLive(); return }
     const emailTaken = users.some(u => u.email.toLowerCase() === form.email.trim().toLowerCase())
     if (emailTaken) { setError('An account with this email already exists.'); return }
@@ -83,7 +96,7 @@ export function SelfRegisterScreen({ onSignIn, onConfirm }: {
   }
 
   return (
-    <form className="auth-stagger flex flex-col gap-3" onSubmit={e => { e.preventDefault(); handleRegister() }}>
+    <form noValidate className="auth-stagger flex flex-col gap-3" onSubmit={e => { e.preventDefault(); handleRegister() }}>
       <AuthHeading center title="Get started" />
 
       <AuthField label="Full name">
@@ -108,7 +121,7 @@ export function SelfRegisterScreen({ onSignIn, onConfirm }: {
 
       <AuthField label="Password">
         <PasswordInput value={form.password} onChange={v => set('password', v)}
-          placeholder={`${MIN_PASSWORD_LEN}+ characters, Aa and 1`} autoComplete="new-password" />
+          placeholder={`${MIN_PASSWORD_LEN}+ characters, A and 1`} autoComplete="new-password" />
       </AuthField>
       <PasswordMeter value={form.password} />
 
@@ -121,7 +134,7 @@ export function SelfRegisterScreen({ onSignIn, onConfirm }: {
 
       {error && <p role="alert" className="auth-shake text-xs text-red-500 text-center">{error}</p>}
 
-      <AuthButton type="submit" disabled={!ready}>{busy ? 'Creating…' : 'Sign up'}</AuthButton>
+      <AuthButton type="submit" disabled={busy}>{busy ? 'Creating…' : 'Sign up'}</AuthButton>
 
       {/* The quick way: the provider vouches for the email, so there is no code to type. */}
       {socialSignInAvailable && <>

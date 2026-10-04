@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useApp, isActiveAlert } from '@/shared/state/AppContext'
-import { Page, AlertStatusPill, SaveError, useSave } from '@/shared'
+import { Page, AlertStatusPill, AlertTimeline, SaveError, useSave } from '@/shared'
 import { usePatient } from './usePatient'
 import type { AppAlert } from '@/shared/lib/types'
-import { ago } from '@/shared/lib/vitals'
+import { ago, resolvedHowLabel } from '@/shared/lib/vitals'
+import { apptWhen } from '@/shared/lib/schedule'
 import { useAlertView, SELF_CLEAR_NOTE } from './alertKit'
 
 /** How many resolved alerts show before "Show all". */
@@ -83,6 +84,14 @@ function AlertCard({ alert, openVital, onLog, onMessage }: {
           </div>
         )}
 
+        {/* what has happened so far: re-measurements and what the care team said */}
+        {((alert.remeasureIds?.length ?? 0) > 0 || (alert.comments?.length ?? 0) > 0) && (
+          <div className="rounded-xl border border-gray-100 px-3 py-2.5">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-2">What has happened</p>
+            <AlertTimeline alert={alert} />
+          </div>
+        )}
+
         {/* what to do while waiting */}
         <div className="rounded-xl bg-gray-50 px-3 py-2.5">
           <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1.5">What to do now</p>
@@ -126,12 +135,14 @@ export function MyAlertsTab({ openVital, onLog, go }: {
   openVital: (vitalId: string) => void
   /** Opens the log sheet for one vital. */
   onLog: (vitalId: string) => void
-  go: (tab: string) => void
+  go: (tab: string, target?: string) => void
 }) {
   const { alerts } = useApp()
-  const { patient, nameOf, status, error, reload } = usePatient()
+  const { patient, nameOf, appointments, status, error, reload } = usePatient()
   const view = useAlertView()
   const [showAll, setShowAll] = useState(false)
+  /** The resolved alert whose full story is open. */
+  const [openId, setOpenId] = useState<string | null>(null)
 
   const mine = alerts.filter(a => a.patientId === patient.id)
   // Critical first, then newest.
@@ -183,8 +194,24 @@ export function MyAlertsTab({ openVital, onLog, go }: {
                   <p className="text-xs font-semibold text-gray-800 truncate">
                     {v.name}{a.type !== 'sos' && <> · <span className="font-mono">{v.value}</span> {v.unit}</>}
                   </p>
-                  <p className="text-[11px] text-emerald-700 leading-snug">{a.resolutionReason}{a.resolutionNote ? `: ${a.resolutionNote}` : ''}</p>
-                  <p className="text-[10px] text-gray-400">{nameOf(a.resolvedBy, 'You')} · {a.resolvedAt}</p>
+                  <p className="text-[11px] font-semibold text-emerald-700 leading-snug">{resolvedHowLabel(a)}</p>
+                  <p className="text-[11px] text-gray-600 leading-snug">{a.resolutionReason}{a.resolutionNote ? `: ${a.resolutionNote}` : ''}</p>
+                  <p className="text-[10px] text-gray-400">{a.resolvedHow === 'remeasure' ? 'Automatic' : nameOf(a.resolvedBy, 'You')} · {a.resolvedAt}</p>
+                  <button onClick={() => setOpenId(openId === a.id ? null : a.id)} aria-expanded={openId === a.id} className="mt-1 text-[11px] font-bold text-teal-700">
+                    {openId === a.id ? 'Hide what happened' : 'See what happened'}
+                  </button>
+                  {openId === a.id && <AlertTimeline alert={a} className="mt-2" />}
+                  {(() => {
+                    // The visit booked when this alert was resolved.
+                    const visit = appointments.find(x => x.alertId === a.id)
+                    if (!visit) return null
+                    const w = apptWhen(visit)
+                    return (
+                      <button onClick={() => go('appts', visit.id)} className="mt-1 text-[11px] font-bold text-teal-700">
+                        📅 Follow-up visit · {w.date} · {w.time} →
+                      </button>
+                    )
+                  })()}
                 </div>
               </div>
             )

@@ -5,6 +5,7 @@ import {
   SaveError, useSave, levelStyle, TREND_ARROW, type ReadingFilter,
 } from '@/shared'
 import type { PatientUser } from '@/shared/lib/types'
+import { FREQUENCY_LABELS } from '@/shared/lib/types'
 import {
   evaluate, alertIsFor, latestValid, targetRange, effectiveCriticalRange, validateReading, vitalTrend, generateInsights,
   checkInStatus, shortDuration, readingTime, unitView, ago, dateLabel, stamp, parseValue, groupOf, VITAL_GROUPS,
@@ -43,7 +44,7 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
   onLogGroup: (groupId: string) => void
 }) {
   const { currentUser, vitalDefs, alerts, now, canCorrect, correctReading, setUnitPref } = useApp()
-  const { doctor } = usePatient()
+  const { doctor, vitalPlans, nameOf } = usePatient()
   const patient = currentUser as PatientUser
   const [range, setRange] = useState<{ preset: Preset; from: string; to: string }>({ preset: '30d', from: '', to: '' })
   const [correcting, setCorrecting] = useState<{ id: string; value: string } | null>(null)
@@ -84,7 +85,7 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
   const diaTarget = def.id === 'bp' ? { min: def.diaNormalMin ?? 60, max: def.diaNormalMax ?? 90 } : undefined
   const latest = latestValid(patient, def.id)
   const st = levelStyle(latest ? evaluate(patient, def, latest.value) : null)
-  const checkIn = checkInStatus(def.id, latest?.at, now)
+  const checkIn = checkInStatus(def.id, latest?.at, now, patient)
   // Where the latest reading sits against the target, in words. Blood pressure can be out on either number.
   const latestP = latest ? parseValue(def, latest.value) : null
   const latestLvl = latest ? evaluate(patient, def, latest.value) : null
@@ -141,7 +142,9 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
   const vitalAlerts = alerts.filter(al => al.patientId === patient.id && al.type === 'vital' && alertIsFor(al, def))
   const recheck = vitalAlerts.find(al => al.recheckRequestedAt && al.status !== 'resolved')
   const responses = vitalAlerts.filter(al => al.status === 'resolved' && al.resolvedBy && al.resolvedBy !== patient.id).slice(0, 2)
-  const hasGuidance = !!(recheck || patient.doctorNote || patient.thresholds[def.id] || targetChanges.length || responses.length)
+  // What the doctor wrote on this vital's alerts, newest first.
+  const said = vitalAlerts.flatMap(al => al.comments ?? []).sort((a, b) => b.at - a.at).slice(0, 3)
+  const hasGuidance = !!(recheck || patient.doctorNote || patient.thresholds[def.id] || targetChanges.length || responses.length || said.length)
 
   const periodBtn = (on: boolean) =>
     `text-[10px] font-bold px-2 py-1 rounded-lg transition-all ${on ? 'bg-white text-teal-700 shadow-sm' : 'text-gray-400'}`
@@ -224,6 +227,12 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
               + Log reading
             </button>
           </div>
+          {vitalPlans[def.id] && (
+            <p className="mt-2 text-[11px] text-blue-800 bg-blue-50 rounded-lg px-2.5 py-1.5">
+              🩺 {nameOf(vitalPlans[def.id].assignedBy, 'Your doctor')} asked you to measure this {vitalPlans[def.id].frequency ? FREQUENCY_LABELS[vitalPlans[def.id].frequency!].toLowerCase() : 'as usual'}
+              {vitalPlans[def.id].reason ? ` · ${vitalPlans[def.id].reason}` : ''}
+            </p>
+          )}
         </div>
         <SelfClearBanner def={def} onLog={() => onLog(def.id)} />
       </div>
@@ -302,6 +311,10 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
                   sub={`${dateLabel(new Date(c.at))} · marked in blue on the chart`} />
               )
             })}
+            {said.map(c => (
+              <GuidanceRow key={c.id} icon={c.kind === 'instruction' ? '📌' : c.kind === 'action' ? '🩺' : '💬'}
+                title={c.body} sub={`${c.kind === 'instruction' ? 'Instruction' : c.kind === 'action' ? 'Action taken' : 'Comment'} · ${c.createdAt}`} />
+            ))}
             {responses.map(al => (
               <GuidanceRow key={al.id} icon="✅"
                 title={`${al.resolutionReason ?? 'Alert reviewed'}${al.resolutionNote ? ` — ${al.resolutionNote}` : ''}`}

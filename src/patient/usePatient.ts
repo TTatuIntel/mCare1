@@ -17,7 +17,8 @@
  *   const { patient, doctor, status, error, reload, setTrackedVitals } = usePatient()
  */
 import { useApp } from '@/shared/state/AppContext'
-import type { LoadStatus } from '@/shared'
+import { useLoadStatus } from '@/shared/state/useLoadStatus'
+import { partnersOf } from '@/shared/lib/messaging'
 import type {
   AppUser, Appointment, DoctorUser, EmergencyContact, HealthProfile, MealPlan, Outcome, PatientUser, AvatarSpec, PlannedMeal,
 } from '@/shared/lib/types'
@@ -71,9 +72,7 @@ export function usePatient() {
 
   // The record is loaded before the portal opens (the sign-in screen waits for it), so a screen always has data.
   // If the backend then becomes unreachable, the banner at the top of the portal says so; screens keep the last load.
-  const status: LoadStatus = 'ready'
-  const error: string | undefined = undefined
-  const reload = () => { void app.refresh() }
+  const { status, error, reload } = useLoadStatus()
 
   /** Demo mode: PATCH /me — whitelisted fields only. */
   const patchSelf = (patch: SelfPatch) => app.updateUser(patient.id, patch as Partial<AppUser>)
@@ -104,6 +103,15 @@ export function usePatient() {
     doctorById,
     /** GET doctors — approved, active clinicians a patient can ask for. */
     doctors: app.getDoctors().filter(d => d.status === 'active' && d.approvalStatus === 'approved').map(toPublicDoctor),
+    /** GET care_team_members: other doctors who may read this patient's record (they cannot change it). */
+    consultingDoctors: app.careTeam.filter(m => m.patientId === patient.id && !m.endedAt)
+      .flatMap(m => { const d = doctorById(m.doctorId); return d ? [{ ...d, reason: m.reason }] : [] }),
+    /** GET messages: everyone this patient has exchanged a message with (their doctor, and any doctor before). */
+    messagePartners: partnersOf(app.messages, patient.id),
+    /** GET care_plans: the plans the doctor has started for this patient (never a draft), newest first. */
+    carePlans: app.carePlans.filter(p => p.patientId === patient.id && p.status !== 'draft'),
+    /** RPC doctor_availability: the open times of a doctor on a day (YYYY-MM-DD). */
+    availabilityFor: app.availabilityFor,
     /** Display name for anyone the patient's record mentions (prescriber, who resolved an alert…). */
     nameOf: (id: string | undefined, fallback = 'Your care team') => app.users.find(u => u.id === id)?.name ?? fallback,
 
@@ -232,5 +240,16 @@ export function usePatient() {
 
     /** Ends the session on this device. */
     signOut: () => app.setCurrentUser(null),
+
+    /** GET tracked_vitals: how often the treating doctor asked to measure each vital, and why. */
+    vitalPlans: patient.vitalPlans ?? {},
+    /** GET vital_reviews: each time the treating doctor reviewed these readings, newest first. */
+    reviews: app.vitalReviews.filter(r => r.patientId === patient.id).sort((a, b) => b.reviewedThrough - a.reviewedThrough),
+    /** GET record_views: who opened this patient's record, newest first. */
+    recordViews: app.recordViews.filter(v => v.patientId === patient.id).sort((a, b) => b.at - a.at),
+    /** RPC export_my_record: everything mCare holds about this patient, as one document. */
+    exportMyRecord: app.exportMyRecord,
+    /** The conditions catalogue (active ones), with the vitals each calls for. */
+    conditionDefs: app.conditionDefs.filter(c => c.active),
   }
 }

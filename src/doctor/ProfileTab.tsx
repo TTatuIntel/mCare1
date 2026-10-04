@@ -1,12 +1,14 @@
-import { PageTitle, ProfileCard } from '@/shared'
+import { Page, ProfileCard } from '@/shared'
 import { SignatureCard } from '@/shared/profile/SignatureSheet'
+import { useDoctor } from './useDoctor'
+import { AvailabilityCard } from './AvailabilityCard'
 
 /* ─── Profile ───────────────────────────────────────────────────────── */
 export function ProfileTab() {
+  const { status, error, reload } = useDoctor()
   return (
-    <div className="flex flex-col gap-0">
-      <PageTitle title="Profile" />
-      <div className="mt-3"><ProfileCard><SignatureCard /></ProfileCard></div>
-    </div>
+    <Page title="Profile" flow={false} status={status} error={error} onRetry={reload}>
+      <ProfileCard><AvailabilityCard /><SignatureCard /></ProfileCard>
+    </Page>
   )
 }

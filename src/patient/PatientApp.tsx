@@ -34,7 +34,9 @@ export default function PatientApp() {
   const [tab, setTab] = useState('home')
   /** The vital whose page is open, and the screen "back" returns to. */
   const [vital, setVital] = useState<{ id: string; from: string } | null>(null)
-  const go = (t: string) => { setVital(null); setTab(SCREENS.includes(t) ? t : 'home') }
+  /** What a link points at inside the screen it opens: an appointment or a document. */
+  const [target, setTarget] = useState<string | undefined>()
+  const go = (t: string, to?: string) => { setVital(null); setTarget(to); setTab(SCREENS.includes(t) ? t : 'home') }
   // Any tapped vital, on any screen, opens that vital's own page.
   const openVital = (id: string) => { setVital(v => ({ id, from: v?.from ?? tab })); setTab('vitals') }
   const closeVital = () => { setTab(vital?.from ?? 'vitals'); setVital(null) }
@@ -59,9 +61,9 @@ export default function PatientApp() {
       {tab ==='home'     && <HomeTab go={go} openVital={openVital} onLog={log.logOne} />}
       {tab ==='vitals'   && <VitalsTab vitalId={vital?.id ?? null} onOpenVital={openVital} onCloseVital={closeVital} go={go} />}
       {tab ==='medicine' && <MedicineTab />}
-      {tab ==='messages' && <MessagesTab go={go} />}
-      {tab ==='appts'    && <AppointmentsTab />}
-      {tab ==='docs'     && <DocsTab go={go} />}
+      {tab ==='messages' && <MessagesTab go={go} target={target} />}
+      {tab ==='appts'    && <AppointmentsTab target={target} go={go} />}
+      {tab ==='docs'     && <DocsTab go={go} openDoc={target} />}
       {tab ==='profile'  && <ProfileTab go={go} />}
       {tab ==='meals'    && <MealsTab />}
       {tab ==='care'     && <CareTeamTab go={go} />}

@@ -6,8 +6,8 @@ import type { AuthProvider } from '@/shared/lib/types'
 
 /* ─── Password policy ───────────────────────────────────────────────── */
 
-/** Supabase Auth refuses anything shorter than 6; a health record deserves 8. */
-export const MIN_PASSWORD_LEN = 8
+/** mCare allows a short but still usable password: 5 characters minimum, uppercase + number. */
+export const MIN_PASSWORD_LEN = 5
 
 /** Rejected outright — these are the passwords attackers try first. */
 const COMMON_PASSWORDS = [
@@ -32,7 +32,7 @@ export interface PasswordStrength {
 export function passwordIssue(pw: string): string | null {
   if (pw.length < MIN_PASSWORD_LEN) return `Password must be at least ${MIN_PASSWORD_LEN} characters.`
   if (COMMON_PASSWORDS.includes(pw.toLowerCase())) return 'That password is too common. Choose something less guessable.'
-  if (!/[a-z]/.test(pw) || !/[A-Z]/.test(pw)) return 'Use both uppercase and lowercase letters.'
+  if (!/[A-Z]/.test(pw)) return 'Use at least one uppercase letter.'
   if (!/\d/.test(pw)) return 'Include at least one number.'
   return null
 }
@@ -41,7 +41,7 @@ export function passwordIssue(pw: string): string | null {
 export function passwordStrength(pw: string): PasswordStrength {
   const missing: string[] = []
   if (pw.length < MIN_PASSWORD_LEN) missing.push(`${MIN_PASSWORD_LEN}+ characters`)
-  if (!/[a-z]/.test(pw) || !/[A-Z]/.test(pw)) missing.push('Upper & lowercase')
+  if (!/[A-Z]/.test(pw)) missing.push('Uppercase')
   if (!/\d/.test(pw)) missing.push('A number')
   if (!/[^A-Za-z0-9]/.test(pw)) missing.push('A symbol (optional)')
 
@@ -51,8 +51,9 @@ export function passwordStrength(pw: string): PasswordStrength {
 
   // One point per satisfied class, plus a bonus for genuine length.
   let score = 0
-  if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) score++
+  if (/[A-Z]/.test(pw)) score++
   if (/\d/.test(pw)) score++
+  if (/[a-z]/.test(pw)) score++
   if (/[^A-Za-z0-9]/.test(pw)) score++
   if (pw.length >= 12) score++
 

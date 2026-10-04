@@ -22,10 +22,31 @@ create table auth.users (
 );
 
 -- One row per signed-in device. Signing out removes it, which ends that device's access.
+-- aal: 'aal1' after a password or code, 'aal2' once the second step (two-step sign-in) is passed.
 create table auth.sessions (
   id         uuid primary key default gen_random_uuid(),
   user_id    uuid not null references auth.users (id) on delete cascade,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  aal        text not null default 'aal1'
+);
+
+-- Two-step sign-in (Supabase Auth MFA): each person's authenticator apps (TOTP) and the
+-- challenges they answer. The secret is the server's only; the database reads the status.
+create table auth.mfa_factors (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null references auth.users (id) on delete cascade,
+  friendly_name text,
+  factor_type   text not null default 'totp',
+  status        text not null default 'unverified' check (status in ('unverified', 'verified')),
+  secret        text not null,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+create table auth.mfa_challenges (
+  id          uuid primary key default gen_random_uuid(),
+  factor_id   uuid not null references auth.mfa_factors (id) on delete cascade,
+  created_at  timestamptz not null default now(),
+  verified_at timestamptz
 );
 
 create table auth.refresh_tokens (

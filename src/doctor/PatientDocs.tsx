@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
-import { BottomSheet, SheetButton, Field, inputCls, useToast } from '@/shared'
+import { BottomSheet, SheetButton, Field, inputCls, useToast, useSave, SaveError } from '@/shared'
+import { useDoctor } from './useDoctor'
 import type { DocSourceLink, PatientUser, ReportRequest } from '@/shared/lib/types'
 import { isOfficial } from '@/shared/documents/documents'
 import { DocRow, DocList, useDocFilters } from '@/shared/documents/DocKit'
@@ -22,7 +23,9 @@ export function PatientDocs({ patient, openId, setOpenId, onLink, buildOpen, set
   buildOpen: boolean
   setBuildOpen: (open: boolean) => void
 }) {
-  const { users, documentsFor, retryUpload, discardUpload, reportRequests, declineReportRequest } = useApp()
+  const { users, documentsFor, retryUpload, discardUpload } = useApp()
+  const { reportRequests, declineReportRequest } = useDoctor()
+  const declineSave = useSave()
   const [upload, setUpload] = useState(false)
   const [forRequest, setForRequest] = useState<ReportRequest | null>(null)
   const [declining, setDeclining] = useState<string | null>(null)
@@ -37,7 +40,10 @@ export function PatientDocs({ patient, openId, setOpenId, onLink, buildOpen, set
   const builder = (
     <ReportBuilderSheet patient={patient} open={buildOpen} request={forRequest}
       onClose={() => { setBuildOpen(false); setForRequest(null) }}
-      onCreated={id => { toast.show('Draft saved — review, sign and release'); setOpenId(id) }} />
+      onCreated={(id, outcome) => {
+        toast.show(outcome === 'released' ? 'Signed and released to the patient' : outcome === 'signed' ? 'Signed — release it when ready' : 'Draft saved — review, sign and release')
+        setOpenId(id)
+      }} />
   )
 
   if (openId) return <>{toast.node}<DocumentViewer docId={openId} onBack={() => setOpenId(null)} onOpenDoc={setOpenId} onLink={onLink} /></>
@@ -69,7 +75,7 @@ export function PatientDocs({ patient, openId, setOpenId, onLink, buildOpen, set
               <div className="flex gap-2 mt-2">
                 <button onClick={() => { setForRequest(r); setBuildOpen(true) }}
                   className="flex-1 py-2 rounded-xl bg-teal-700 text-white text-[11px] font-bold">Prepare report</button>
-                <button onClick={() => { setDeclining(r.id); setDeclineReason('') }}
+                <button onClick={() => { declineSave.clear(); setDeclining(r.id); setDeclineReason('') }}
                   className="px-4 py-2 rounded-xl bg-gray-100 text-gray-600 text-[11px] font-bold">Decline</button>
               </div>
             </div>
@@ -109,11 +115,14 @@ export function PatientDocs({ patient, openId, setOpenId, onLink, buildOpen, set
       <BottomSheet open={!!declining} onClose={() => setDeclining(null)} title="Decline report request"
         subtitle="The patient is notified with your reason."
         footer={<><SheetButton tone="ghost" onClick={() => setDeclining(null)}>Cancel</SheetButton>
-          <SheetButton tone="danger" disabled={declineReason.trim().length < 5} onClick={async () => { const ok = (await declineReportRequest(declining!, declineReason)).ok; setDeclining(null); if (ok) toast.show('Request declined') }}>Decline</SheetButton></>}>
+          <SheetButton tone="danger" disabled={declineReason.trim().length < 5 || declineSave.busy}
+            onClick={async () => { if (!(await declineSave.run(() => declineReportRequest(declining!, declineReason))).ok) return; setDeclining(null); toast.show('Request declined · patient told') }}>
+            {declineSave.busy ? 'Declining…' : 'Decline'}</SheetButton></>}>
         <Field label="Reason *">
           <textarea rows={3} value={declineReason} onChange={e => setDeclineReason(e.target.value)} className={`${inputCls} resize-none`}
             placeholder="e.g. Not enough readings yet — please log for 7 more days." />
         </Field>
+        <SaveError message={declineSave.error} />
       </BottomSheet>
     </>
   )

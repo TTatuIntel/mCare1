@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import MCareLogo from '@/shared/layout/MCareLogo'
 import { useSplashDone } from '@/shared/layout/splashSignal'
+import { reducedMotion } from '@/shared/layout/motion'
 import { AuthIcon, AuthRights, BrandCluster, type AuthIconName } from './authKit'
 
 /** How long each feature stays on stage before the next one takes over. */
@@ -33,7 +34,7 @@ function VitalsScene() {
   return (
     <div className="w-full px-3">
       <p style={after(0)} className="auth-item-in flex items-center gap-1 text-[9px] font-semibold text-gray-400">
-        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 motion-safe:animate-pulse" /> Heart rate
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Heart rate
       </p>
       <p style={after(120)} className="auth-item-in font-mono text-2xl font-bold text-gray-900 leading-none mt-1">
         72 <span className="font-sans text-[9px] font-medium text-gray-400">bpm</span>
@@ -185,9 +186,9 @@ function FlyingLogo() {
     const from = lastLogoSpot
     lastLogoSpot = undefined
     const to = outer.getBoundingClientRect()
-    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    const still = reducedMotion()
     // to.width is 0 while this size's layout is hidden (mobile and tablet).
-    if (from && to.width && !reducedMotion && performance.now() - from.at < FLY_FROM_MAX_AGE_MS) {
+    if (from && to.width && !still && performance.now() - from.at < FLY_FROM_MAX_AGE_MS) {
       const dx = from.x - to.left, dy = from.y - to.top
       if (Math.abs(dx) + Math.abs(dy) > 2) {
         outer.animate({ translate: [`${dx}px 0`, '0 0'] }, { duration: FLY_MS, easing: 'cubic-bezier(.65,0,.35,1)' })
@@ -227,10 +228,10 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
   const [dir, setDir] = useState<1 | -1>(1)
   // Hovering with a mouse holds the current slide so it can be read.
   const [held, setHeld] = useState(false)
-  const [reducedMotion] = useState(() => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false)
   const drag = useRef<{ x: number; swiped: boolean } | null>(null)
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const auto = playing && !held && !reducedMotion
+  // The tour keeps turning under reduced motion; its slides then fade instead of sliding (see index.css).
+  const auto = playing && !held
 
   const go = (to: number, d: 1 | -1) => {
     const next = (to + SLIDES.length) % SLIDES.length
@@ -259,9 +260,9 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
     const wordsDone = 160 + words.length * 60
     return (
       <div key={`${s.name}-${mode}`} aria-hidden={mode === 'out'}
-        className={`col-start-1 row-start-1 w-full flex flex-col items-center gap-2 @5xl:items-start @5xl:gap-5 ${mode === 'out' ? (dir > 0 ? 'auth-leave-next' : 'auth-leave-prev') : ''}`}>
-        <p className={`${on('auth-item-in')} flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.16em] text-teal-700`}>
-          <span className={`flex ${on(`auth-icon-${s.icon}`)}`}><AuthIcon name={s.icon} className="w-4 h-4" /></span>
+        className={`col-start-1 row-start-1 w-full flex flex-col items-center gap-4 @5xl:items-start @5xl:gap-5 ${mode === 'out' ? (dir > 0 ? 'auth-leave-next' : 'auth-leave-prev') : ''}`}>
+        <p className={`${on('auth-item-in')} flex items-center gap-2 text-sm font-bold uppercase tracking-[0.16em] text-teal-700`}>
+          <span className={`flex ${on(`auth-icon-${s.icon}`)}`}><AuthIcon name={s.icon} className="w-5 h-5" /></span>
           {s.name}
         </p>
 
@@ -278,13 +279,13 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
           </h1>
         ))}
 
-        <div className="w-full flex items-center justify-center gap-4 text-left @5xl:justify-start @5xl:gap-7">
-          {/* The preview sits straight on the page: no tile or card behind it. */}
-          <div aria-hidden className={`relative w-28 h-[4.5rem] shrink-0 flex items-center justify-center @5xl:w-36 @5xl:h-36 ${on('auth-scene-in')}`}>
+        <div className="mt-2 w-full flex items-center justify-center gap-5 text-left @5xl:mt-0 @5xl:justify-start @5xl:gap-7">
+          {/* A soft preview surface adds definition on mobile and tablet. */}
+          <div aria-hidden className={`relative w-28 h-22 shrink-0 flex items-center justify-center rounded-2xl bg-teal-50/70 shadow-sm ring-1 ring-teal-100 @5xl:bg-transparent @5xl:shadow-none @5xl:ring-0 @5xl:w-36 @5xl:h-36 ${on('auth-scene-in')}`}>
             <div className={`relative w-full h-full flex items-center justify-center ${on('auth-float')}`}><s.Scene /></div>
           </div>
           {/* Mobile and tablet: one sentence, so the actions below stay the focus. Web has room for the list. */}
-          {([['flex @5xl:hidden text-[13px]', false], ['hidden @5xl:flex text-[15px] gap-2', true]] as const).map(([size, withPoints]) => (
+          {([['flex @5xl:hidden text-sm leading-relaxed', false], ['hidden @5xl:flex text-[15px] gap-2', true]] as const).map(([size, withPoints]) => (
             <div key={size} className={`${size} min-w-0 max-w-[13rem] flex-col @5xl:max-w-sm`}>
               <p style={after(wordsDone)} className={`${on('auth-item-in')} text-gray-600 leading-snug`}>{s.body}</p>
               {withPoints && (
@@ -311,7 +312,7 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
   return (
     <section aria-label="What you can do with mCare" onFocus={onUse}
       onPointerEnter={e => { if (e.pointerType === 'mouse') onUse() }}
-      className={`${className} flex-col justify-center items-center text-center gap-8 @5xl:items-start @5xl:text-left @5xl:gap-8`}>
+      className={`${className} flex-col justify-center items-center text-center gap-10 @5xl:items-start @5xl:text-left @5xl:gap-8`}>
       {/* Mobile and tablet: the logo stays put with the icons around it. Web: it
           rests here (its place is kept) until the user turns to the welcome card. */}
       <div className={r0.cls} style={r0.style}>

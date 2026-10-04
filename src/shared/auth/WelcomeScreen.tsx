@@ -4,6 +4,7 @@ import MCareLogo from '@/shared/layout/MCareLogo'
 import { AuthDivider, AuthIcon, AuthRights, AuthSwitch, OWNER } from './authKit'
 import { SocialButtons, socialSignInAvailable } from './SocialAuth'
 import { backendConfigured } from '@/shared/api/supabase'
+import { reducedMotion } from '@/shared/layout/motion'
 
 const SUPPORT_EMAIL = 'support@matendocare.com'
 
@@ -103,12 +104,12 @@ function GetStartedButton({ onClick }: { onClick: () => void }) {
     const x = e.clientX - r.left, y = e.clientY - r.top
     wrap.style.setProperty('--mx', `${x}px`)
     wrap.style.setProperty('--my', `${y}px`)
-    if (e.pointerType !== 'mouse' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    if (e.pointerType !== 'mouse' || reducedMotion()) return
     wrap.style.transform = `translate(${((x / r.width - 0.5) * 2 * LEAN_X).toFixed(1)}px, ${((y / r.height - 0.5) * 2 * LEAN_Y).toFixed(1)}px)`
   }
 
   return (
-    <div ref={wrapRef} className="relative mx-auto mt-5 w-fit transition-transform duration-200 ease-out">
+    <div ref={wrapRef} className="relative mx-auto mt-7 w-fit transition-transform duration-200 ease-out">
       <span aria-hidden className="auth-glow absolute inset-x-6 -bottom-1.5 h-8 rounded-full bg-teal-500/60 blur-xl" />
       <span aria-hidden className="auth-cta-ring pointer-events-none absolute inset-0 rounded-full ring-2 ring-teal-500/60" />
       <button type="button" onClick={onClick}
@@ -167,7 +168,7 @@ export function WelcomeScreen({ onGetStarted, onSignIn, onDemo }: {
       <section aria-labelledby="welcome-start" className="flex flex-1 flex-col justify-center text-center">
         {/* A touch larger than the tour above it, so the eye lands on the way in. */}
         <h2 id="welcome-start" className="text-xl font-black text-gray-900 font-display leading-tight">Let’s get you started</h2>
-        <p className="mt-1.5 text-[13px] text-gray-600">New to mCare? Create your account in a minute.</p>
+        <p className="mt-3 text-sm leading-relaxed text-gray-600">New to mCare? Create your account in a minute.</p>
 
         <GetStartedButton onClick={onGetStarted} />
 
@@ -179,17 +180,17 @@ export function WelcomeScreen({ onGetStarted, onSignIn, onDemo }: {
         <SocialButtons />
       </>}
 
-      <div className="flex items-center justify-center gap-3 text-[10px] @2xl:text-xs font-semibold text-teal-700 flex-wrap">
+      <div className="flex items-center justify-center gap-3.5 text-xs @2xl:text-sm font-semibold text-teal-700 flex-wrap">
         {/* Demo accounts exist only in demo mode, where the sample data lives. */}
         {!backendConfigured && <>
           <button type="button" onClick={onDemo} className="underline-offset-4 hover:underline">Try a demo account</button>
-          <span aria-hidden className="h-2 w-px bg-gray-300" />
+          <span aria-hidden className="h-2.5 w-px bg-gray-300" />
         </>}
         <button type="button" onClick={() => setHelpOpen(true)} className="flex items-center gap-1 underline-offset-4 hover:underline">
-          <AuthIcon name="help" className="w-3 h-3 @2xl:w-3.5 @2xl:h-3.5" />
+          <AuthIcon name="help" className="w-3.5 h-3.5 @2xl:w-4 @2xl:h-4" />
           Help &amp; support
         </button>
-        <span aria-hidden className="h-2 w-px bg-gray-300" />
+        <span aria-hidden className="h-2.5 w-px bg-gray-300" />
         <button type="button" onClick={() => setAboutOpen(true)} className="underline-offset-4 hover:underline">About</button>
       </div>
 

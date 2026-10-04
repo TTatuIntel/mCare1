@@ -3,7 +3,7 @@
  * files in the private `documents` storage bucket.
  *
  * Who may open, sign, release, correct, share or delete is decided by the
- * database (supabase/migrations/0002_documents.sql). A file is readable
+ * database (supabase/migrations/0007_documents.sql). A file is readable
  * exactly when its document row is, because the bucket's rule looks the row
  * up as the person asking.
  */
@@ -78,6 +78,10 @@ export const setVisibility = async (docId: string, visibility: DocVisibility) =>
 /** Recoverable for 30 days; the database then removes it for good. */
 export const softDelete = async (docId: string) => { await ok((await db()).from('documents').update({ deleted_at: new Date().toISOString() }).eq('id', docId)) }
 export const restore = async (docId: string) => { await ok((await db()).from('documents').update({ deleted_at: null }).eq('id', docId)) }
+/** Document support brings back someone else's deleted document. The patient is told. */
+export const staffRestore = async (docId: string) => { await ok((await db()).rpc('staff_restore_document', { doc: docId })) }
+/** Removes for good what was deleted more than 30 days ago. Resolves with how many. */
+export const purgeExpired = async () => ok<number>((await db()).rpc('purge_expired_documents'))
 export const markSeen = async (docIds: string[]) => {
   if (docIds.length) await ok((await db()).from('documents').update({ seen_by_patient: true }).in('id', docIds))
 }

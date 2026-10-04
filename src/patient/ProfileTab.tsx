@@ -4,6 +4,8 @@ import { ProfileCard, Page, Toggle, HealthSummary, BottomSheet, SheetButton, Sav
 import { usePatient } from './usePatient'
 import { healthGaps, type HealthSection } from '@/shared/lib/health'
 import { dateLabel } from '@/shared/lib/vitals'
+import { RECORD_VIEW_LABELS } from '@/shared/lib/types'
+import { downloadBlob } from '@/shared/documents/exporters'
 import { SosSheet } from './SosSheet'
 import { EmergencyContacts } from './EmergencyContacts'
 import { HealthEditSheet } from './HealthEditSheet'
@@ -11,7 +13,15 @@ import { HealthEditSheet } from './HealthEditSheet'
 /* ─── Profile ───────────────────────────────────────────────────────── */
 export function ProfileTab({ go }: { go?: (tab: string) => void }) {
   const { vitalDefs } = useApp()
-  const { patient, doctor, live, setTrackedVitals, canStopTracking, signOutOtherDevices, status, error, reload } = usePatient()
+  const { patient, doctor, consultingDoctors, live, setTrackedVitals, canStopTracking, signOutOtherDevices, recordViews, exportMyRecord, nameOf, status, error, reload } = usePatient()
+  const [showViews, setShowViews] = useState(false)
+  const download = useSave()
+  const downloadRecord = async () => {
+    const r = await download.run(exportMyRecord)
+    if (!r.ok) return
+    downloadBlob(new Blob([JSON.stringify(r.value, null, 2)], { type: 'application/json' }), `mcare-my-record-${new Date().toISOString().slice(0, 10)}.json`)
+    toast.show('Your record was downloaded')
+  }
   const activeVitals = vitalDefs.filter(v => v.active)
   const [showVitalsSheet, setShowVitalsSheet] = useState(false)
   const [sos, setSos] = useState(false)
@@ -82,7 +92,9 @@ export function ProfileTab({ go }: { go?: (tab: string) => void }) {
             <ul className="flex flex-col gap-2.5 text-xs text-gray-600">
               <li className="flex gap-2.5">
                 <span aria-hidden="true">🩺</span>
-                <span><b className="text-gray-900">{doctor ? doctor.name : 'No doctor yet'}</b>{doctor ? ' can see your health record and the documents you share with your care team. Nobody else on mCare can.' : ': your record is visible to you only until a doctor is assigned.'}</span>
+                <span><b className="text-gray-900">{doctor ? doctor.name : 'No doctor yet'}</b>{doctor ? ' can see your health record and the documents you share with your care team.' : ': no doctor sees your record until one is assigned.'}
+                  {consultingDoctors.length > 0 && <> {consultingDoctors.map(d => d.name).join(', ')} can read it as {consultingDoctors.length === 1 ? 'a consulting doctor' : 'consulting doctors'} (not your documents or private notes).</>}
+                  {' '}mCare staff who monitor alerts can see your readings and alerts. Every opening is logged below.</span>
               </li>
               <li className="flex gap-2.5">
                 <span aria-hidden="true">📄</span>
@@ -93,6 +105,13 @@ export function ProfileTab({ go }: { go?: (tab: string) => void }) {
                 <span aria-hidden="true">🛡️</span>
                 <span>mCare support staff can see that a document exists, never what it says, unless an administrator opens one for 15 minutes with a stated reason. You are told each time.</span>
               </li>
+              <li className="flex gap-2.5">
+                <span aria-hidden="true">👁️</span>
+                <span>
+                  {recordViews.length ? <>{nameOf(recordViews[0].viewerId, 'Someone at mCare')} opened your record {dateLabel(new Date(recordViews[0].at))}.</> : 'Nobody else has opened your record yet.'}{' '}
+                  <button onClick={() => setShowViews(true)} className="font-bold text-teal-700">Who opened my record</button>
+                </span>
+              </li>
               {patient.termsAcceptedAt && (
                 <li className="flex gap-2.5">
                   <span aria-hidden="true">✅</span>
@@ -100,6 +119,14 @@ export function ProfileTab({ go }: { go?: (tab: string) => void }) {
                 </li>
               )}
             </ul>
+            <div className="mt-3 pt-3 border-t border-gray-100">
+              <button onClick={downloadRecord} disabled={download.busy}
+                className="w-full rounded-xl border border-gray-200 py-2.5 text-xs font-bold text-gray-700 disabled:opacity-50">
+                {download.busy ? 'Preparing…' : 'Download my record'}
+              </button>
+              <p className="text-[10px] text-gray-400 mt-1.5">Everything mCare holds about you, as one file you can keep or take to another clinic.</p>
+              <SaveError message={download.error} className="mt-2" />
+            </div>
             {live && (
               <div className="mt-3 pt-3 border-t border-gray-100">
                 <button onClick={endOtherSessions} disabled={session.busy}
@@ -116,6 +143,22 @@ export function ProfileTab({ go }: { go?: (tab: string) => void }) {
       </div>
 
       <SosSheet open={sos} onClose={() => setSos(false)} />
+      <BottomSheet open={showViews} onClose={() => setShowViews(false)} title="Who opened my record"
+        subtitle="Each time someone other than you opened your record on mCare, at most once every 30 minutes per person.">
+        {recordViews.length === 0 ? <p className="text-xs text-gray-500">Nobody else has opened your record yet.</p> : (
+          <ul className="divide-y divide-gray-100">
+            {recordViews.slice(0, 100).map(v => (
+              <li key={v.id} className="py-2 flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-800 truncate">{nameOf(v.viewerId, 'Someone at mCare')}</p>
+                  <p className="text-[11px] text-gray-400">{v.viewerRole === 'doctor' ? 'Doctor' : v.viewerRole === 'admin' ? 'mCare administrator' : v.viewerRole === 'assistant' ? 'mCare assistant' : 'mCare'} · {RECORD_VIEW_LABELS[v.context]}</p>
+                </div>
+                <span className="text-[11px] text-gray-500 flex-shrink-0">{v.createdAt}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </BottomSheet>
       {editHealth && <HealthEditSheet key={editHealth} section={editHealth} onClose={() => setEditHealth(null)} />}
 
       {/* Vitals I track */}

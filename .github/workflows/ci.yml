@@ -1,0 +1,62 @@
+# Checks every push and pull request: types, the database rules and the API workflows.
+# The browser journeys (all four portals at three widths) run on pull requests to main and nightly.
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Kept out of package.json on purpose (see AGENTS.md §2).
+      - run: npm i --no-save @electric-sql/pglite
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  browser:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'main')
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: npm i --no-save @electric-sql/pglite playwright
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:ui
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screens
+          path: supabase/.data/screens/
+          retention-days: 7

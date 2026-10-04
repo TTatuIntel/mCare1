@@ -379,10 +379,15 @@ function VitalsSummary({ body: b }: { body: Extract<DocBody, { type: 'vitals' }>
             <div className="mt-3">
               <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Alerts in period</p>
               {b.alerts.map(a => (
-                <div key={a.id} className="flex items-center gap-2 py-1 text-[11px]">
-                  <span className="flex-1 text-gray-600 truncate">{a.label}</span>
-                  <span className={`font-semibold ${a.status === 'resolved' ? 'text-emerald-600' : 'text-red-600'}`}>{a.status}</span>
-                  <span className="text-[10px] text-gray-400">{a.at}</span>
+                <div key={a.id} className="py-1 text-[11px]">
+                  <div className="flex items-center gap-2">
+                    <span className="flex-1 text-gray-600 truncate">{a.label}</span>
+                    <span className={`font-semibold ${a.status === 'resolved' ? 'text-emerald-600' : 'text-red-600'}`}>{a.status === 'resolved' ? 'Resolved' : 'Unresolved'}</span>
+                    <span className="text-[10px] text-gray-400">{a.at}</span>
+                  </div>
+                  {a.steps?.map((st, i) => (
+                    <p key={i} className="pl-2 text-[10px] text-gray-500 leading-snug">↳ {st.text} <span className="text-gray-400">· {st.when}</span></p>
+                  ))}
                 </div>
               ))}
             </div>

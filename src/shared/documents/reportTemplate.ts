@@ -203,6 +203,10 @@ function vitalsSections(doc: MedicalDocument, b: VitalsBody): { main: string; cl
   const status = critical ? ['crit', 'Urgent review'] : outOf || openAlerts ? ['warn', 'Needs review'] : ['ok', 'Stable']
   const withData = b.rows.filter(r => r.total > 0).length
   const findings = b.findings?.length ? b.findings : [b.summary]
+  const notes = b.notes?.length ? `<section class="block">
+  <h2>Clinical notes</h2>
+  ${b.notes.map(n => `<div class="cnote"><div class="cmeta">${esc(n.at)} · ${esc(n.author)}</div>${n.content.split('\n').map(l => `<p>${esc(l)}</p>`).join('')}</div>`).join('')}
+</section>` : ''
   const closing = `<section class="block">
   <h2>Clinician's interpretation &amp; plan</h2>
   ${b.interpretation
@@ -230,7 +234,8 @@ ${inc.findings ? `<section class="block">
 ${inc.alerts && b.alerts.length ? `<section class="block">
   <h2>Alerts &amp; events</h2>
   <table class="grid"><thead><tr><th>Date &amp; time</th><th>Event</th><th>Severity</th><th>Status / outcome</th></tr></thead><tbody>
-  ${b.alerts.map(a => `<tr><td class="nowrap">${esc(a.at)}</td><td>${esc(a.label)}</td><td><span class="flag ${a.severity === 'danger' ? 'crit' : 'warn'}">${a.severity === 'danger' ? 'Critical' : 'Warning'}</span></td><td>${esc(a.status)}${a.resolution ? ` — ${esc(a.resolution)}` : ''}</td></tr>`).join('')}
+  ${b.alerts.map(a => `<tr><td class="nowrap">${esc(a.at)}</td><td>${esc(a.label)}</td><td><span class="flag ${a.severity === 'danger' ? 'crit' : 'warn'}">${a.severity === 'danger' ? 'Critical' : 'Warning'}</span></td><td><span class="flag ${a.status === 'resolved' ? 'ok' : 'crit'}">${a.status === 'resolved' ? 'Resolved' : 'Unresolved'}</span> ${esc(a.status === 'resolved' ? a.outcome ?? '' : a.status)}${a.resolution ? ` — ${esc(a.resolution)}` : ''}${a.steps?.length
+    ? `<ol class="steps">${a.steps.map(st => `<li><span class="when">${esc(st.when)}</span> ${esc(st.text)}${st.by ? ` <span class="when">· ${esc(st.by)}</span>` : ''}</li>`).join('')}</ol>` : ''}</td></tr>`).join('')}
   </tbody></table>
 </section>` : ''}
 
@@ -239,7 +244,8 @@ ${inc.medications && b.medications?.length ? `<section class="block">
   <table class="grid"><thead><tr><th>Medication</th><th>Dose</th><th>Frequency</th><th>Indication</th></tr></thead><tbody>
   ${b.medications.map(m => `<tr><td><b>${esc(m.name)}</b></td><td>${esc(m.dose)}</td><td>${esc(m.frequency)}</td><td>${esc(m.purpose || '—')}</td></tr>`).join('')}
   </tbody></table>
-</section>` : ''}`
+</section>` : ''}
+${notes}`
   return { main, closing, appendix: inc.readingsLog ? readingsLog(b) : '' }
 }
 
@@ -413,6 +419,7 @@ dl{margin:0}.row{display:flex;gap:8px;padding:2px 0}dt{width:92px;flex-shrink:0;
 .nochart{font-size:11px;color:#8a9aa3;background:#f7f9f9;border-radius:6px;padding:14px;text-align:center}
 .tnote{margin:6px 0 0;font-size:11px;color:#445;border-top:1px dashed #e3eceb;padding-top:5px}
 .flag{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.04em;padding:2px 7px;border-radius:99px;white-space:nowrap}
+.steps{margin:5px 0 0;padding-left:16px;font-size:10px;color:#374151}.steps li{margin:1px 0}.steps .when{color:#6b7280}
 .flag.ok{background:#d1fae5;color:#065f46}.flag.warn{background:#fef3c7;color:#92400e}.flag.crit{background:#fee2e2;color:#991b1b}.flag.na{background:#f3f4f6;color:#6b7280}.flag.info{background:#dbeafe;color:#1e40af}
 table.grid{width:100%;border-collapse:collapse;font-size:12px}
 table.grid th{background:#f1f7f6;color:#44565f;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;text-align:left;padding:6px 8px;border-bottom:1.5px solid #d6e7e5}
@@ -428,6 +435,9 @@ table.grid.tight{font-size:10.5px}table.grid.tight th{font-size:9px;padding:4px 
 .kvgrid th{width:140px;text-transform:none;font-size:12px;letter-spacing:0}
 .rx{font:700 18px Georgia,serif;color:#0a6e6e;margin-right:4px}
 .interp{border-left:3px solid #0a6e6e;background:#f6fbfa;padding:8px 12px;border-radius:0 8px 8px 0}.interp p{margin:3px 0}
+.interp p:empty{height:6px}
+.cnote{border:1px solid #dfe8e7;border-radius:8px;padding:7px 11px;margin-bottom:6px;break-inside:avoid;page-break-inside:avoid}.cnote p{margin:2px 0}
+.cmeta{font-size:10px;color:#6b7c85;font-weight:700;letter-spacing:.04em}
 .interp.empty{color:#8a9aa3;font-style:italic;border-color:#cbd5d4;background:#fafbfb}
 .signoff{display:grid;grid-template-columns:1.4fr 1fr;gap:16px;margin-top:12px;padding-top:12px;border-top:1.5px solid #d6e7e5;break-inside:avoid;page-break-inside:avoid}
 .sig .h{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#6b7c85;font-weight:700}

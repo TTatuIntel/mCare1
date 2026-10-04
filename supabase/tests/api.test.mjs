@@ -10,9 +10,9 @@
  * not theirs. Nothing is kept: the database lives in memory for the run.
  */
 import { createClient } from '@supabase/supabase-js'
-import { startBackend } from '../dev/server.mjs'
+import { startBackend, totpCode } from '../dev/server.mjs'
 
-const backend = await startBackend({ port: 0, dataDir: 'memory', quiet: true, jobs: false })
+const backend = await startBackend({ port: 0, dataDir: 'memory', quiet: true, jobs: false, exposeTestAuth: true })
 const client = (key = backend.anonKey) => createClient(backend.url, key, { auth: { persistSession: false, autoRefreshToken: false } })
 
 let pass = 0, fail = 0
@@ -33,13 +33,20 @@ const me = await pat.from('profiles').select('*').eq('id', patId).single()
 check('the database made the profile, as a patient whatever the browser asked for', me.data?.role === 'patient' && me.data?.full_name === 'Test Patient One', me.error?.message ?? me.data?.role)
 check('a new patient tracks blood pressure and heart rate', (await pat.from('tracked_vitals').select('vital_id')).data?.length === 2)
 check('the same email cannot register twice', (await client().auth.signUp({ email: 'test.patient@mcare.test', password: PW })).error?.message === 'User already registered')
-check('a short password is refused', !!(await client().auth.signUp({ email: 'short@mcare.test', password: 'Ab1' })).error)
+check('a 5-character password with uppercase and a number is accepted', !!(await client().auth.signUp({ email: 'short@mcare.test', password: 'A1b23' })).data.session)
+check('a shorter password is refused', !!(await client().auth.signUp({ email: 'too-short@mcare.test', password: 'Ab1' })).error)
+check('a password without uppercase is refused', !!(await client().auth.signUp({ email: 'no-upper@mcare.test', password: '1b23x' })).error)
+check('a password without a number is refused', !!(await client().auth.signUp({ email: 'no-number@mcare.test', password: 'Abcde' })).error)
 const bad = await client().auth.signInWithPassword({ email: 'test.patient@mcare.test', password: 'wrong-password' })
 check('wrong password: one message, no hint which part was wrong', bad.error?.code === 'invalid_credentials')
 check('unknown email gets the same answer', (await client().auth.signInWithPassword({ email: 'nobody@mcare.test', password: PW })).error?.code === 'invalid_credentials')
 
 const p2 = await pat2.auth.signUp({ email: 'test.patient2@mcare.test', password: PW, options: { data: { full_name: 'Test Patient Two' } } })
 const pat2Id = p2.data.user.id
+const passwordUpdate = await admin.auth.admin.updateUserById(pat2Id, { password: 'A1b23' })
+check('service role can set an exactly 5-character password', !passwordUpdate.error
+  && !!(await client().auth.signInWithPassword({ email: 'test.patient2@mcare.test', password: 'A1b23' })).data.session, passwordUpdate.error?.message)
+check('service role cannot set a password below the minimum', !!(await admin.auth.admin.updateUserById(pat2Id, { password: 'Ab1' })).error)
 const mkDoctor = async (c, email, name) => {
   const r = await c.auth.signUp({ email, password: PW, options: { data: { full_name: name, role: 'doctor' } } })
   await admin.from('doctors').update({ approval_status: 'approved', specialty: 'Cardiology', hospital: 'mCare Test Clinic', license_no: 'TEST-1' }).eq('id', r.data.user.id)
@@ -226,10 +233,236 @@ check('the patient deletes and restores their upload', !(await pat.from('documen
   && (await pat.from('documents').select('deleted_at').eq('id', row.data.id).single()).data?.deleted_at === null)
 check('the patient cannot forge an official report', !!(await pat.from('documents').insert({ patient_id: patId, title: 'Fake', category: 'vitals_report', origin: 'system_generated', status: 'released' })).error)
 
+/* ── Care integration: one record, seen from every role ── */
+console.log('\nCare integration')
+const audited = async action => (await staff.from('audit_log').select('action, detail').eq('action', action)).data ?? []
+const planMeals = [
+  { id: 'breakfast', name: 'Breakfast', at: 450, foods: 'Porridge, fruit', kcal: 350, icon: '🌅' },
+  { id: 'supper', name: 'Supper', at: 1140, foods: 'Ugali, greens, fish', kcal: 600, icon: '🌙' },
+]
+const mp = await doc.from('meal_plans').upsert({ patient_id: patId, meals: planMeals, target_kcal: 1900, water_goal: 10, dietary_note: 'Low salt' }).select().single()
+check('the doctor saves a full meal plan; it is attributed to them', mp.data?.set_by === docId && mp.data?.meals?.length === 2, mp.error?.message)
+const seen = await pat.from('meal_plans').select('meals, target_kcal, water_goal').single()
+check('the patient reads that same plan and is told it changed', seen.data?.meals?.[1]?.name === 'Supper' && seen.data?.water_goal === 10
+  && (await pat.from('notifications').select('id').eq('title', 'Your meal plan was updated')).data?.length >= 1)
+check('the change is in the audit trail the admin reads', (await audited('Set meal plan')).some(a => a.detail.startsWith('Test Patient One')))
+const badPlan = await doc.from('meal_plans').update({ meals: [{ ...planMeals[0], kcal: 9000 }] }).eq('patient_id', patId)
+check('an impossible plan is refused with a readable reason', /between 0 and 3000/.test(badPlan.error?.message ?? ''), badPlan.error?.message)
+check('the doctor sees what the patient ate and drank; another doctor does not', (await doc.from('meal_logs').select('note').eq('patient_id', patId)).data?.[0]?.note === 'Ugali and sukuma wiki'
+  && (await doc.from('hydration_logs').select('glasses').eq('patient_id', patId)).data?.[0]?.glasses === 5
+  && (await doc2.from('meal_logs').select('meal_id')).data?.length === 0 && (await doc2.from('meal_plans').select('patient_id')).data?.length === 0)
+check('another doctor cannot change the plan', (await doc2.from('meal_plans').update({ target_kcal: 900 }).eq('patient_id', patId).select()).data?.length === 0)
+
+check('a reading the doctor recorded was announced to the patient and audited', (await pat.from('notifications').select('body').eq('title', 'A reading was added to your record')).data?.[0]?.body?.includes('Dr. Test Achieng')
+  && (await audited('Recorded reading for patient')).length === 1)
+
+const c2 = await log(pat, 'spo2', '85')
+const openAlert = (await doc.from('alerts').select('id').eq('reading_id', c2.data.id).single()).data
+const countAppts = async () => (await pat.from('appointments').select('id')).data?.length
+const apptsBefore = await countAppts()
+check('only the treating doctor books a follow-up', !!(await doc2.rpc('schedule_follow_up', { patient: patId, visit_date: inDays(3) })).error
+  && !!(await pat.rpc('schedule_follow_up', { patient: patId, visit_date: inDays(3) })).error && await countAppts() === apptsBefore)
+const fu = await doc.rpc('schedule_follow_up', { patient: patId, visit_date: inDays(3), visit_time: '10:00', visit_note: 'Review oxygen', alert: openAlert.id })
+const fuAppt = (await pat.from('appointments').select('status, title, preferred_date').eq('id', fu.data).single()).data
+check('the follow-up is booked and the alert resolved in one request', fuAppt?.status === 'approved' && fuAppt?.preferred_date === inDays(3)
+  && (await pat.from('alerts').select('status, resolution_reason').eq('id', openAlert.id).single()).data?.resolution_reason === 'Appointment scheduled', fu.error?.message)
+check('the patient is told of both', (await pat.from('notifications').select('id').eq('title', 'Appointment booked')).data?.length === 1
+  && (await pat.from('notifications').select('body').eq('title', 'Alert resolved')).data?.some(n => n.body.includes('Appointment scheduled')))
+check('asked again for a resolved alert, nothing is booked', !!(await doc.rpc('schedule_follow_up', { patient: patId, visit_date: inDays(4), alert: openAlert.id })).error
+  && await countAppts() === apptsBefore + 1)
+
+// Registering people in advance.
+check('a patient or a doctor cannot register users', !!(await pat.rpc('invite_account', { invite_email: 'x@mcare.test', invite_name: 'X', invite_role: 'admin' })).error
+  && !!(await doc.rpc('invite_account', { invite_email: 'x@mcare.test', invite_name: 'X', invite_role: 'patient' })).error)
+const invStaff = await staff.rpc('invite_account', { invite_email: 'Test.Nurse@mcare.test', invite_name: 'Test Nurse', invite_role: 'assistant', invite_phone: '+254 700 000 300' })
+const invPat = await staff.rpc('invite_account', { invite_email: 'test.patient3@mcare.test', invite_name: 'Test Patient Three', invite_role: 'patient' })
+check('the admin registers an assistant and a patient in advance', typeof invStaff.data === 'string' && typeof invPat.data === 'string'
+  && (await staff.from('account_invitations').select('email').is('accepted_at', null).is('revoked_at', null)).data?.length === 2, invStaff.error?.message ?? invPat.error?.message)
+check('an address already registered or already invited is refused', /already registered/.test((await staff.rpc('invite_account', { invite_email: 'test.patient@mcare.test', invite_name: 'Dup', invite_role: 'patient' })).error?.message ?? '')
+  && /already been invited/.test((await staff.rpc('invite_account', { invite_email: 'test.nurse@mcare.test', invite_name: 'Dup', invite_role: 'patient' })).error?.message ?? ''))
+check('nobody else can read the invitations', (await pat.from('account_invitations').select('id')).data?.length === 0 && (await doc.from('account_invitations').select('id')).data?.length === 0
+  && (await client().from('account_invitations').select('id')).data?.length === 0)
+const nurse = client()
+const nurseUp = await nurse.auth.signUp({ email: 'test.nurse@mcare.test', password: PW, options: { data: {} } })
+const nurseProfile = (await nurse.from('profiles').select('role, status, full_name, phone').eq('id', nurseUp.data.user.id).single()).data
+check('the invited assistant signs up and has that role, with no permissions until granted', nurseProfile?.role === 'assistant' && nurseProfile?.full_name === 'Test Nurse'
+  && (await nurse.from('staff').select('is_assistant, permissions').eq('id', nurseUp.data.user.id).single()).data?.permissions?.length === 0
+  && (await nurse.from('patients').select('id')).data?.length === 0, nurseUp.error?.message ?? nurseProfile?.role)
+const pat3 = client()
+const pat3Up = await pat3.auth.signUp({ email: 'test.patient3@mcare.test', password: PW })
+check('the invited patient signs up as a patient, under the name they were registered with', (await pat3.from('profiles').select('role, full_name').eq('id', pat3Up.data.user.id).single()).data?.full_name === 'Test Patient Three'
+  && (await pat3.from('patients').select('id')).data?.length === 1)
+check('the admin is told, and nobody is left waiting', (await staff.from('notifications').select('id').eq('title', 'Invitation accepted')).data?.length === 2
+  && (await staff.from('account_invitations').select('id').is('accepted_at', null).is('revoked_at', null)).data?.length === 0)
+const invGone = await staff.rpc('invite_account', { invite_email: 'test.gone@mcare.test', invite_name: 'Test Gone', invite_role: 'admin' })
+check('a withdrawn registration gives nothing', !(await staff.rpc('revoke_invitation', { invitation: invGone.data })).error && await (async () => {
+  const c = client(); const r = await c.auth.signUp({ email: 'test.gone@mcare.test', password: PW })
+  return (await c.from('profiles').select('role').eq('id', r.data.user.id).single()).data?.role === 'patient'
+})())
+
+// Vital definitions and the document registry.
+const rrDef = (await staff.from('vital_defs').select('*').eq('id', 'rr').single()).data
+check('the admin switches a vital on; it is audited', !(await staff.from('vital_defs').upsert({ ...rrDef, active: true })).error
+  && (await pat.from('vital_defs').select('active').eq('id', 'rr').single()).data?.active === true && (await audited('Activated vital type')).length === 1)
+check('nobody else edits definitions, and an impossible range is refused', (await doc.from('vital_defs').update({ normal_max: 999 }).eq('id', 'rr').select()).data?.length === 0
+  && !!(await staff.from('vital_defs').update({ normal_min: 50, normal_max: 10 }).eq('id', 'rr')).error)
+const registry = await staff.rpc('document_registry')
+check('staff see that documents exist, never their titles or content', registry.data?.length >= 2 && registry.data.every(r => !('title' in r) && !('body' in r) && !('file_name' in r)), registry.error?.message)
+check('the registry is refused to everyone else', !!(await pat.rpc('document_registry')).error && !!(await doc.rpc('document_registry')).error && !!(await nurse.rpc('document_registry')).error)
+await pat.from('documents').update({ deleted_at: new Date().toISOString() }).eq('id', row.data.id)
+check('only document support restores for a patient', !!(await doc.rpc('staff_restore_document', { doc: row.data.id })).error && !!(await nurse.rpc('staff_restore_document', { doc: row.data.id })).error)
+check('support restores a deleted upload; the patient is told', !(await staff.rpc('staff_restore_document', { doc: row.data.id })).error
+  && (await pat.from('documents').select('deleted_at').eq('id', row.data.id).single()).data?.deleted_at === null
+  && (await pat.from('notifications').select('id').eq('title', 'A document was restored')).data?.length === 1)
+check('purging is for a full admin', (await staff.rpc('purge_expired_documents')).data === 0 && !!(await nurse.rpc('purge_expired_documents')).error && !!(await pat.rpc('purge_expired_documents')).error)
+
+/* ── Doctor and admin modules: the same records, through the API each portal uses ── */
+console.log('\nDoctor and admin modules')
+const ref = '7f3c2a10-5b1e-4c7a-9d21-0a1b2c3d4e5f'
+const firstSend = await pat.from('readings').insert({ patient_id: patId, vital_id: 'wt', value: '80', client_ref: ref }).select('id').single()
+const secondSend = await pat.from('readings').insert({ patient_id: patId, vital_id: 'wt', value: '80', client_ref: ref }).select('id').single()
+check('a form sent twice saves once, and the second answer says which rule refused it', !!firstSend.data?.id && secondSend.error?.code === '23505' && /client_ref/.test(secondSend.error.message)
+  && (await pat.from('readings').select('id').eq('client_ref', ref)).data?.length === 1, secondSend.error?.message)
+check('the audit trail cannot be written through the API', !!(await pat.from('audit_log').insert({ actor_id: patId, action: 'Forged', detail: 'x' })).error
+  && !!(await staff.from('audit_log').insert({ actor_id: staffId, action: 'Forged', detail: 'x' })).error
+  && (await audited('Forged')).length === 0)
+
+const rxFull = await doc.from('prescriptions').insert({ patient_id: patId, doctor_id: docId, medication: 'TEST Enalapril', dosage: '5mg', frequency: 'Once daily', route: 'oral', instructions: 'With breakfast', end_date: inDays(13) }).select().single()
+check('a prescription carries route, instructions and dates; the patient reads its history', rxFull.data?.status === 'active' && rxFull.data?.start_date === today
+  && (await pat.from('prescription_events').select('action').eq('prescription_id', rxFull.data.id)).data?.[0]?.action === 'prescribed', rxFull.error?.message)
+const stop = await doc.from('prescriptions').update({ status: 'discontinued', stop_reason: 'Dry cough' }).eq('id', rxFull.data.id).select().single()
+check('stopping it with a reason reaches the patient; deleting it is not possible', stop.data?.active === false && stop.data?.stopped_by === docId
+  && (await pat.from('notifications').select('body').eq('title', 'Medication stopped')).data?.some(n => n.body.includes('Dry cough'))
+  && (await doc.from('prescriptions').delete().eq('id', rxFull.data.id).select()).data?.length === 0, stop.error?.message)
+
+const internal = await doc.from('clinical_notes').insert({ patient_id: patId, author_id: docId, content: 'TEST internal working note', visibility: 'internal', note_type: 'assessment' }).select().single()
+check('an internal note is saved for the doctor and never reaches the patient or staff', !!internal.data?.id
+  && (await pat.from('clinical_notes').select('id').eq('id', internal.data.id)).data?.length === 0
+  && (await staff.from('clinical_notes').select('id').eq('id', internal.data.id)).data?.length === 0, internal.error?.message)
+
+const draft = await doc.rpc('save_care_plan', { plan: { patient_id: patId, title: 'TEST Blood pressure control', summary: 'Three months',
+  items: [{ kind: 'goal', text: 'Morning BP under 135/85', vital_id: 'bp' }, { kind: 'intervention', text: 'Walk 30 minutes a day' }] } })
+check('the doctor drafts a care plan in one request; the patient does not see a draft', typeof draft.data === 'string'
+  && (await doc.from('care_plan_items').select('id').eq('plan_id', draft.data)).data?.length === 2
+  && (await pat.from('care_plans').select('id')).data?.length === 0, draft.error?.message)
+check('only the treating doctor writes or starts it', !!(await doc2.rpc('save_care_plan', { plan: { patient_id: patId, title: 'x', items: [] } })).error
+  && !!(await pat.rpc('set_care_plan_status', { plan: draft.data, new_status: 'active' })).error)
+const started = await doc.rpc('set_care_plan_status', { plan: draft.data, new_status: 'active' })
+check('once started, the patient reads the plan and its goals, and is told', !started.error
+  && (await pat.from('care_plans').select('status, title').single()).data?.status === 'active'
+  && (await pat.from('care_plan_items').select('id')).data?.length === 2
+  && (await pat.from('notifications').select('id').eq('kind', 'care_plan')).data?.length === 1, started.error?.message)
+
+const weekday = new Date(`${inDays(7)}T00:00:00Z`).getUTCDay()
+const setHours = await doc.rpc('set_doctor_hours', { hours: [{ weekday, start: '09:00', end: '12:00' }], visit_minutes: 30 })
+const open = await pat.rpc('doctor_availability', { doctor: docId, day: inDays(7) })
+check('the doctor sets working hours; a patient is offered that day\'s open times', !setHours.error && open.data?.managed === true
+  && open.data.slots.join() === '09:00,09:30,10:00,10:30,11:00,11:30', setHours.error?.message ?? open.error?.message)
+const outside = await pat.from('appointments').insert({ patient_id: patId, doctor_id: docId, title: 'TEST outside hours', preferred_date: inDays(7), preferred_time: '15:00' })
+const inside = await pat.from('appointments').insert({ patient_id: patId, doctor_id: docId, title: 'TEST in hours', preferred_date: inDays(7), preferred_time: '09:30' }).select().single()
+check('a request outside those hours is refused with a readable reason; inside them it is taken', /outside the hours/.test(outside.error?.message ?? '') && inside.data?.status === 'requested', outside.error?.message)
+
+check('only support staff move an appointment for someone, and with a reason', !!(await pat.rpc('admin_update_appointment', { appt: inside.data.id, action: 'move', new_date: inDays(7), new_time: '11:00', reason: 'I prefer it' })).error
+  && !!(await nurse.rpc('admin_update_appointment', { appt: inside.data.id, action: 'move', new_date: inDays(7), new_time: '11:00', reason: 'Asked by phone' })).error
+  && !!(await staff.rpc('admin_update_appointment', { appt: inside.data.id, action: 'move', new_date: inDays(7), new_time: '11:00', reason: '' })).error)
+const moved = await staff.rpc('admin_update_appointment', { appt: inside.data.id, action: 'move', new_date: inDays(7), new_time: '11:00', reason: 'Patient asked by phone' })
+check('the admin moves the same appointment; patient and doctor are told and it is in the history', !moved.error
+  && (await pat.from('appointments').select('preferred_time').eq('id', inside.data.id).single()).data?.preferred_time?.startsWith('11:00')
+  && (await pat.from('appointment_events').select('action').eq('appointment_id', inside.data.id).eq('action', 'moved')).data?.length === 1
+  && (await pat.from('notifications').select('id').eq('title', 'Appointment moved by mCare support')).data?.length === 1
+  && (await doc.from('notifications').select('id').eq('title', 'Appointment moved by mCare support')).data?.length === 1
+  && (await audited('Moved appointment')).length === 1, moved.error?.message)
+
+const assigned = await staff.rpc('assign_doctor', { patient: pat2Id, doctor: doc2Id, reason: 'Nearest clinic' })
+check('the admin assigns a doctor; the assignment is kept as history both can read', !assigned.error
+  && (await pat2.from('care_assignments').select('doctor_id, reason, ended_at')).data?.[0]?.reason === 'Nearest clinic'
+  && (await doc2.from('patients').select('id')).data?.length === 1 && (await doc.from('care_assignments').select('id').eq('patient_id', pat2Id)).data?.length === 0, assigned.error?.message)
+check('removing the doctor needs a reason', /Say why/.test((await staff.rpc('assign_doctor', { patient: pat2Id, doctor: null })).error?.message ?? '')
+  && !!(await staff.from('patients').update({ assigned_doctor_id: null }).eq('id', pat2Id)).error)
+const removed = await staff.rpc('assign_doctor', { patient: pat2Id, doctor: null, reason: 'Patient left the programme' })
+const pastList = await doc2.rpc('my_past_patients')
+check('with a reason it ends; the doctor keeps a name and dates, not the record', !removed.error && pastList.data?.length === 1 && pastList.data[0].full_name === 'Test Patient Two'
+  && pastList.data[0].end_reason === 'Patient left the programme' && (await doc2.from('patients').select('id')).data?.length === 0, removed.error?.message ?? pastList.error?.message)
+
+check('stopping an account needs an administrator and a reason', !!(await nurse.rpc('set_account_status', { person: doc2Id, new_status: 'suspended', reason: 'Testing' })).error
+  && /Give a reason/.test((await staff.rpc('set_account_status', { person: doc2Id, new_status: 'suspended' })).error?.message ?? '')
+  && /still has patients/.test((await staff.rpc('set_account_status', { person: docId, new_status: 'suspended', reason: 'Licence under review' })).error?.message ?? ''))
+const susp = await staff.rpc('set_account_status', { person: doc2Id, new_status: 'suspended', reason: 'Licence under review' })
+check('a suspended doctor is refused at once, on the session they already hold; reactivating restores it', !susp.error
+  && (await doc2.from('doctor_hours').select('id')).data?.length === 0 && !!(await doc2.rpc('my_change_token')).error
+  && (await staff.from('profiles').select('status, status_reason').eq('id', doc2Id).single()).data?.status_reason === 'Licence under review'
+  && !(await staff.rpc('set_account_status', { person: doc2Id, new_status: 'active' })).error && !(await doc2.rpc('my_change_token')).error, susp.error?.message)
+
+const reportData = await staff.rpc('admin_report', { from_day: inDays(-30), to_day: today })
+check('the operational report is counted by the database, for staff who may see it', reportData.data?.accounts?.patient >= 2 && Array.isArray(reportData.data?.doctors)
+  && reportData.data.activity.readings >= 1 && !!(await pat.rpc('admin_report', { from_day: inDays(-30), to_day: today })).error
+  && !!(await doc.rpc('admin_report', { from_day: inDays(-30), to_day: today })).error, reportData.error?.message)
+
+const tokenBefore = (await pat.rpc('my_change_token')).data
+await doc.from('thresholds').upsert({ patient_id: patId, vital_id: 'wt', target_min: 60, target_max: 85 })
+const tokenAfter = (await pat.rpc('my_change_token')).data
+check('the change token moves when the doctor changes the patient\'s record', typeof tokenBefore === 'string' && tokenBefore.length === 32 && tokenAfter !== tokenBefore
+  && !!(await client().rpc('my_change_token')).error)
+
+/* ── Care team, email queue, audit search ── */
+console.log('\nCare team, email, audit search')
+const addMember = await doc.rpc('add_consulting_doctor', { patient: patId, doctor: doc2Id, reason: 'Second opinion' })
+check('the treating doctor adds a consulting doctor, who then reads the record and cannot change it', typeof addMember.data === 'string'
+  && (await doc2.from('readings').select('id').eq('patient_id', patId)).data?.length > 0
+  && !!(await doc2.from('clinical_notes').insert({ patient_id: patId, author_id: doc2Id, content: 'x' })).error
+  && (await doc2.from('clinical_notes').select('id').eq('visibility', 'internal')).data?.length === 0, addMember.error?.message)
+const consultMessage = await pat.from('messages').insert({ from_id: patId, to_id: doc2Id, content: 'A private question for my consultant' }).select().single()
+const consultReply = await doc2.from('messages').insert({ from_id: doc2Id, to_id: patId, content: 'A private reply from my consultant' }).select().single()
+const patientToConsultant = await pat.from('messages').select('id').eq('from_id', patId).eq('to_id', doc2Id)
+const consultantToPatient = await pat.from('messages').select('id').eq('from_id', doc2Id).eq('to_id', patId)
+const consultantConsultThread = await doc2.from('messages').select('id').eq('from_id', patId).eq('to_id', doc2Id)
+const treatingConsultThread = await doc.from('messages').select('id').in('content', ['A private question for my consultant', 'A private reply from my consultant'])
+check('patient and consulting doctor share a private one-to-one thread', !!consultMessage.data?.id && !!consultReply.data?.id
+  && patientToConsultant.data?.length === 1 && consultantToPatient.data?.length === 1
+  && consultantConsultThread.data?.length === 1 && treatingConsultThread.data?.length === 0,
+  JSON.stringify({ patientInsert: consultMessage.error?.message, consultantInsert: consultReply.error?.message,
+    patientSent: patientToConsultant.data?.length, patientReceived: consultantToPatient.data?.length,
+    consultantRows: consultantConsultThread.data?.length, treatingRows: treatingConsultThread.data?.length,
+    readError: patientToConsultant.error?.message ?? consultantToPatient.error?.message ?? consultantConsultThread.error?.message ?? treatingConsultThread.error?.message }))
+check('the patient sees who is on their care team', (await pat.from('care_team_members').select('doctor_id').is('ended_at', null)).data?.[0]?.doctor_id === doc2Id)
+check('the consulting doctor can leave; access ends', !(await doc2.rpc('remove_consulting_doctor', { member: addMember.data })).error
+  && (await doc2.from('readings').select('id').eq('patient_id', patId)).data?.length === 0
+  && !!(await pat.from('messages').insert({ from_id: patId, to_id: doc2Id, content: 'No longer authorized' })).error
+  && (await pat.from('messages').select('id').eq('to_id', doc2Id)).data?.length === 1)
+
+const sentNow = await backend.deliver()
+check('queued notification emails are sent by the sender and marked sent', sentNow > 0 && backend.outbox.some(m => m.kind === 'notification')
+  && (await admin.from('notification_deliveries').select('id').in('status', ['queued', 'sending'])).data?.length === 0
+  && (await staff.from('notification_deliveries').select('id')).data?.length === 0)
+
+const device = await pat.from('push_subscriptions').insert({ endpoint: 'https://push.example/api-test', p256dh: 'key', auth: 'secret', user_agent: 'API test' }).select().single()
+check('a patient registers a device for push, sees only their own, and switches text messages off', !!device.data?.id
+  && (await doc.from('push_subscriptions').select('id')).data?.length === 0
+  && !(await pat.from('profiles').update({ notify_sms: false }).eq('id', patId)).error
+  && (await pat.from('profiles').select('notify_sms').eq('id', patId).single()).data?.notify_sms === false, device.error?.message)
+await pat.from('profiles').update({ notify_sms: true }).eq('id', patId)
+await doc.from('messages').insert({ from_id: docId, to_id: patId, content: 'Push me' })
+const channelsSent = await backend.deliver()
+check('the sender delivers to the device too', channelsSent > 0 && backend.outbox.some(m => m.channel === 'push'))
+const dlv = await staff.rpc('delivery_report', { from_day: inDays(-30), to_day: today })
+check('the admin reads how delivery went; a patient cannot', dlv.data?.channels?.email?.sent > 0 && dlv.data?.channels?.push?.sent > 0
+  && !!(await pat.rpc('delivery_report', { from_day: inDays(-30), to_day: today })).error, dlv.error?.message)
+
+const hits = await staff.rpc('search_audit', { q: 'consulting', who: 'all', before: null, page_size: 50 })
+check('the audit trail is searched in the database, for whoever may read it only', hits.data?.length >= 2 && hits.data.every(r => /consulting/i.test(r.action + r.detail))
+  && (await pat.rpc('search_audit', { q: null })).data?.length === 0, hits.error?.message)
+
 /* ── Sessions end ── */
 console.log('\nPassword and sign-out')
 await client().auth.resetPasswordForEmail('test.patient2@mcare.test')
 const code = backend.outbox.find(m => m.to === 'test.patient2@mcare.test' && m.kind === 'recovery')?.code
+const localCodeUrl = new URL('/__dev/auth-codes', backend.url)
+localCodeUrl.search = new URLSearchParams({ email: 'test.patient2@mcare.test', kind: 'recovery' }).toString()
+const localCode = await fetch(localCodeUrl).then(r => r.json())
+check('local testing can retrieve the requested email code', localCode.code === code)
+localCodeUrl.searchParams.set('email', 'nobody@mcare.test')
+const otherCode = await fetch(localCodeUrl).then(r => r.json())
+check('local code preview does not expose codes for a different email', otherCode.code === null)
 const rec = client()
 check('a wrong reset code is refused', !!(await client().auth.verifyOtp({ email: 'test.patient2@mcare.test', token: '000000', type: 'recovery' })).error)
 const verified = await rec.auth.verifyOtp({ email: 'test.patient2@mcare.test', token: code, type: 'recovery' })
@@ -248,8 +481,92 @@ check('deactivating an account locks it out', await (async () => {
   const c = client(); await c.auth.signInWithPassword({ email: 'test.patient@mcare.test', password: PW })
   await c.rpc('deactivate_my_account')
   return (await c.from('readings').select('id')).data?.length === 0 && !!(await c.rpc('raise_sos', { message: 'x' })).error
-    && (await staff.from('profiles').select('status').eq('id', patId).single()).data?.status === 'suspended'
+    && (await staff.from('profiles').select('status').eq('id', patId).single()).data?.status === 'deactivated'
 })())
+
+/* ── Two-step sign-in, the audit's request context, instant change notices, the directory, the patient's copy ── */
+console.log('\nTwo-step sign-in and security upgrades')
+const mfa = client()
+const mup = await mfa.auth.signUp({ email: 'mfa.patient@mcare.test', password: PW, options: { data: { full_name: 'Two Step' } } })
+const mfaId = mup.data.user.id
+await mfa.from('readings').insert({ patient_id: mfaId, vital_id: 'hr', value: '72' })
+let level = (await mfa.auth.mfa.getAuthenticatorAssuranceLevel()).data
+check('a new session is aal1 with no second step owed', level.currentLevel === 'aal1' && level.nextLevel === 'aal1', level)
+const enrolled = await mfa.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Phone' })
+check('turning it on gives a setup key and an otpauth link for the authenticator app', !!enrolled.data?.totp?.secret && enrolled.data.totp.uri.startsWith('otpauth://totp/mCare:'), enrolled.error?.message)
+const factorId = enrolled.data.id, setupKey = enrolled.data.totp.secret
+const wrongCode = totpCode(setupKey) === '000000' ? '111111' : '000000'
+check('a wrong code is refused', !!(await mfa.auth.mfa.challengeAndVerify({ factorId, code: wrongCode })).error)
+const secondStep = await mfa.auth.mfa.challengeAndVerify({ factorId, code: totpCode(setupKey) })
+check("the authenticator app's code verifies it and raises this session to aal2", !secondStep.error && (await mfa.auth.mfa.getAuthenticatorAssuranceLevel()).data.currentLevel === 'aal2', secondStep.error?.message)
+check('with the second step passed the record is there', (await mfa.from('readings').select('id')).data?.length === 1)
+check('the factor is listed as verified', (await mfa.auth.mfa.listFactors()).data?.totp?.[0]?.status === 'verified')
+
+const elsewhere = client()
+await elsewhere.auth.signInWithPassword({ email: 'mfa.patient@mcare.test', password: PW })
+level = (await elsewhere.auth.mfa.getAuthenticatorAssuranceLevel()).data
+check('signing in on another device with the password alone owes the second step', level.currentLevel === 'aal1' && level.nextLevel === 'aal2', level)
+check('…and until it is passed the database gives that session nothing', (await elsewhere.from('readings').select('id')).data?.length === 0
+  && (await elsewhere.rpc('my_security')).data?.has_factor === true && !!(await elsewhere.rpc('raise_sos', { message: 'x' })).error)
+check('…nor can that session remove the factor or add another', !!(await elsewhere.auth.mfa.unenroll({ factorId })).error && !!(await elsewhere.auth.mfa.enroll({ factorType: 'totp' })).error)
+await elsewhere.auth.mfa.challengeAndVerify({ factorId, code: totpCode(setupKey) })
+check('passing it there opens the record', (await elsewhere.from('readings').select('id')).data?.length === 1)
+const refreshedAal2 = await elsewhere.auth.refreshSession()
+check('refreshing the session keeps the second step', !refreshedAal2.error && (await elsewhere.auth.mfa.getAuthenticatorAssuranceLevel()).data.currentLevel === 'aal2')
+check('the person can turn it off from a session that passed it', !(await mfa.auth.mfa.unenroll({ factorId })).error
+  && (await admin.from('profiles').select('id').eq('id', mfaId)).data?.length === 1 && (await backend.sql(`select count(*)::int n from auth.mfa_factors where user_id = $1`, [mfaId])).rows[0].n === 0)
+
+await staff.rpc('save_settings', { area: 'security', new_value: { mfa_required_roles: ['doctor'] } })
+check('when an admin requires it for doctors, a doctor without it reaches no patient and is told why', (await doc.from('patients').select('id')).data?.length === 0
+  && (await doc.rpc('my_security')).data?.mfa_required === true)
+await staff.rpc('save_settings', { area: 'security', new_value: { mfa_required_roles: [] } })
+check('…and when it is no longer required, works as before', (await doc.rpc('my_security')).data?.mfa_required === false)
+
+// The audit trail records the phoneClient and the session a change came from.
+const phoneClient = createClient(backend.url, backend.anonKey, { global: { headers: { 'User-Agent': 'mCare-Test-Phone/2.0' } }, auth: { persistSession: false, autoRefreshToken: false } })
+await phoneClient.auth.signInWithPassword({ email: 'mfa.patient@mcare.test', password: PW })
+await phoneClient.from('profiles').update({ phone: '+254 700 999 000' }).eq('id', mfaId)
+const stamped = (await backend.sql(`select user_agent, session_id, aal, client_ip from audit_log where action = 'Updated own details' and actor_id = $1 order by id desc limit 1`, [mfaId])).rows[0]
+check('an audited change says which phoneClient, session and address it came from', stamped?.user_agent === 'mCare-Test-Phone/2.0' && !!stamped.session_id && stamped.aal === 'aal1' && !!stamped.client_ip, stamped)
+
+// Instant change notices (the local stand-in for Realtime).
+const accessToken = (await mfa.auth.getSession()).data.session.access_token
+const waitFor = since => fetch(`${backend.url}/__dev/changes?since=${since}`, { headers: { apikey: backend.anonKey, Authorization: `Bearer ${accessToken}` } }).then(r => r.json())
+const firstPulse = await waitFor(-1)
+const startedWaiting = Date.now()
+const waiting = waitFor(firstPulse.pulse)
+await new Promise(r => setTimeout(r, 200))
+await mfa.from('readings').insert({ patient_id: mfaId, vital_id: 'hr', value: '74' })
+const woken = await waiting
+check('an open app waiting for changes is woken the moment something is saved', woken.pulse > firstPulse.pulse && Date.now() - startedWaiting < 5000, { woken, ms: Date.now() - startedWaiting })
+check('a signed-out visitor is not told anything', (await fetch(`${backend.url}/__dev/changes?since=0`, { headers: { apikey: backend.anonKey } })).status === 401)
+
+// The doctor directory and private signatures.
+const directory = (await mfa.rpc('doctor_directory')).data ?? []
+check('a patient finds doctors through the directory, with public details only', directory.some(d => d.id === docId && d.specialty === 'Cardiology') && directory.every(d => !('email' in d) && !('phone' in d)))
+check("…and does not see a doctor's email or phone otherwise", (await mfa.from('profiles').select('id').eq('role', 'doctor')).data?.length === 0)
+check('a doctor saves their signature in their own private row', !(await doc.from('doctor_signatures').upsert({ doctor_id: docId, image: 'data:image/png;base64,SIGN' })).error
+  && (await doc.from('doctor_signatures').select('image').eq('doctor_id', docId).single()).data?.image === 'data:image/png;base64,SIGN'
+  && (await mfa.from('doctor_signatures').select('doctor_id')).data?.length === 0 && (await doc2.from('doctor_signatures').select('doctor_id').eq('doctor_id', docId)).data?.length === 0)
+
+// The patient's own copy, and what the app learns before opening a portal.
+const myCopy = (await mfa.rpc('export_my_record')).data
+check('a patient downloads their own record as one document', myCopy?.profile?.email === 'mfa.patient@mcare.test' && myCopy.readings?.length === 2, myCopy && Object.keys(myCopy))
+check('…which nobody else can', !!(await doc.rpc('export_my_record')).error)
+check('the app learns the idle sign-out time and whether a second step is owed', (await mfa.rpc('my_security')).data?.idle_minutes === 0 && (await staff.rpc('my_security')).data?.idle_minutes === 15)
+
+console.log('\nSeeded accounts')
+Object.assign(process.env, {
+  SUPABASE_URL: backend.url,
+  SUPABASE_SERVICE_ROLE_KEY: backend.serviceKey,
+  SUPABASE_ANON_KEY: backend.anonKey,
+  MCARE_SEED_PASSWORD: 'M7c24',
+})
+await import('../dev/seed.mjs')
+const seededAdmin = client()
+check('reseeding resets an existing account to the exact 5-character password',
+  !!(await seededAdmin.auth.signInWithPassword({ email: 'test.admin@mcare.test', password: 'M7c24' })).data.session
+  && !!(await client().auth.signInWithPassword({ email: 'test.admin@mcare.test', password: PW })).error)
 
 console.log(`\n${pass} passed, ${fail} failed`)
 await backend.close()

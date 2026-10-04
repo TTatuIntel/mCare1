@@ -4,8 +4,9 @@ import { Avatar, Pill } from '@/shared/ui/primitives'
 import { BottomSheet } from '@/shared/ui/BottomSheet'
 import { Loading } from '@/shared/ui/Loader'
 import type { AppUser } from '@/shared/lib/types'
-import { backendConfigured, checkBackend } from '@/shared/api/supabase'
+import { backendConfigured, checkBackend, localBackend } from '@/shared/api/supabase'
 import { mayHaveSession, resumeBackendSession, returningFromProvider, returningToReset, signInWithEmail } from '@/shared/api/authBackend'
+import { isEmail } from '@/shared/state/auth'
 import { AuthShell } from './AuthShell'
 import { AuthButton, AuthDivider, AuthField, AuthHeading, AuthSwitch, IconInput, PasswordInput, authInputCls } from './authKit'
 import { ForgotPassword } from './ForgotPassword'
@@ -23,29 +24,46 @@ type View = 'welcome' | 'signin' | 'register' | 'forgot' | 'confirm'
 export function LoginScreen() {
   const adopt = useAdoptAccount()
   const { entering, enterError, retryEnter } = useApp()
+  const [testActivation] = useState(() => {
+    if (!import.meta.env.DEV || !localBackend) return undefined
+    const params = new URLSearchParams(window.location.search)
+    const email = params.get('email') ?? ''
+    const code = params.get('code') ?? ''
+    return params.get('mcare_test_activation') === 'signup' && isEmail(email) && /^\d{6}$/.test(code)
+      ? { email, code }
+      : undefined
+  })
   /** Live mode: the backend cannot be reached, said before anyone types a password. */
   const [backendDown, setBackendDown] = useState('')
-  const [view, setView] = useState<View>('welcome')
+  const [view, setView] = useState<View>(testActivation ? 'confirm' : 'welcome')
   // Live mode: someone already signed in, or coming back from a provider or an emailed link, is let in here.
-  const [resuming, setResuming] = useState(returningFromProvider || mayHaveSession)
+  const [resuming, setResuming] = useState(!testActivation && (returningFromProvider || mayHaveSession))
   const [notice, setNotice] = useState('')
   /** Arrived by the emailed reset link: proven, but must choose a new password before going in. */
   const [recovered, setRecovered] = useState<AppUser>()
   const [demoOpen, setDemoOpen] = useState(false)
   // Carried between Sign in and Forgot password so the email is typed once.
-  const [email, setEmail] = useState('')
+  const [email, setEmail] = useState(testActivation?.email ?? '')
 
   const signIn = (withDemo = false) => { setDemoOpen(withDemo && !backendConfigured); setView('signin') }
 
   useEffect(() => {
     let cancelled = false
-    resumeBackendSession().then(session => {
-      if (cancelled) return
-      setResuming(false)
-      if (session.ok && returningToReset) { setRecovered(session.user); setView('forgot') }
-      else if (session.ok) adopt(session.user)
-      else if (session.error) { setNotice(session.error); setView('signin') }
-    })
+    if (testActivation) {
+      const url = new URL(window.location.href)
+      url.searchParams.delete('mcare_test_activation')
+      url.searchParams.delete('email')
+      url.searchParams.delete('code')
+      window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+    } else {
+      resumeBackendSession().then(session => {
+        if (cancelled) return
+        setResuming(false)
+        if (session.ok && returningToReset) { setRecovered(session.user); setView('forgot') }
+        else if (session.ok) adopt(session.user)
+        else if (session.error) { setNotice(session.error); setView('signin') }
+      })
+    }
     checkBackend().then(health => { if (!cancelled && health.mode === 'live' && !health.ok) setBackendDown(health.error) })
     return () => { cancelled = true }
     // Runs once: it reads the session this page loaded with.
@@ -82,7 +100,7 @@ export function LoginScreen() {
           ? <LiveRecovery initialEmail={email} recovered={recovered} onBack={() => signIn()} />
           : <ForgotPassword initialEmail={email} onBack={() => signIn()} onDone={found => { setEmail(found); signIn() }} />
         )}
-        {view === 'confirm' && <ConfirmEmail email={email} onBack={() => signIn()} />}
+        {view === 'confirm' && <ConfirmEmail email={email} initialCode={testActivation?.code} onBack={() => signIn()} />}
       </div>
     </AuthShell>
   )

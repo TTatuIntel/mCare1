@@ -1,28 +1,29 @@
 import { useState } from 'react'
-import { useApp } from '@/shared/state/AppContext'
-import { Avatar, Pill, PageTitle, BottomSheet, SheetButton, Field, inputCls, useToast } from '@/shared'
-import type { AdminUser, PatientUser, VitalDef } from '@/shared/lib/types'
-import { can, isFullAdmin } from '@/assistant/permissions'
+import { Avatar, Pill, Page, EmptyState, Chevron, Segmented, BottomSheet, SheetButton, Field, inputCls, useSave, SaveError, useAct, Toggle } from '@/shared'
+import type { VitalDef } from '@/shared/lib/types'
 import PatientThresholdView from './PatientThresholdView'
+import { useAdmin } from './useAdmin'
 
-/* ─── Vitals Tab (Definitions + Patient Ranges) ─────────────────────── */
+/* ─── Vitals (definitions + each patient's readings) ────────────────── */
 type DefForm = { name: string; unit: string; normalMin: string; normalMax: string; criticalMin: string; criticalMax: string; hardMin: string; hardMax: string; icon: string }
 const EMPTY_DEF: DefForm = { name: '', unit: '', normalMin: '', normalMax: '', criticalMin: '', criticalMax: '', hardMin: '', hardMax: '', icon: '📊' }
+type View = 'defs' | 'patients'
+const n = (v: string) => (v.trim() === '' ? NaN : Number(v))
 
-export default function VitalsTab({ admin }: { admin: AdminUser }) {
-  const { vitalDefs, setVitalDefs, getPatients, logAudit } = useApp()
-  const canManageDefs = isFullAdmin(admin)
-  const canManagePatients = can(admin, 'monitor_patients')
+export default function VitalsTab() {
+  const { full, can, vitalDefs, patients: all, patient, saveVitalDef, status, error, reload } = useAdmin()
+  const canManageDefs = full
+  const canSeePatients = can('monitor_patients')
 
-  const [subView, setSubView] = useState<'defs' | 'patients'>(canManageDefs ? 'defs' : 'patients')
-  const [selectedPatient, setSelectedPatient] = useState<PatientUser | null>(null)
+  const [view, setView] = useState<View>(canManageDefs ? 'defs' : 'patients')
+  const [openId, setOpenId] = useState<string | null>(null)
   const [sheet, setSheet] = useState<{ mode: 'add' | 'edit'; id?: string } | null>(null)
   const [form, setForm] = useState<DefForm>(EMPTY_DEF)
-  const toast = useToast()
+  const act = useAct()
+  const saving = useSave()
 
-  const patients = getPatients().filter(p => p.status === 'active')
-  const n = (v: string) => (v.trim() === '' ? NaN : Number(v))
-  const err = (() => {
+  const patients = all.filter(p => p.status === 'active')
+  const issue = (() => {
     if (!form.name.trim() || !form.unit.trim()) return 'Name and unit are required.'
     const [a, b, c, d] = [n(form.normalMin), n(form.normalMax), n(form.criticalMin), n(form.criticalMax)]
     if (isNaN(a) || isNaN(b)) return 'Enter normal min and max.'
@@ -32,12 +33,6 @@ export default function VitalsTab({ admin }: { admin: AdminUser }) {
     return null
   })()
 
-  const toggleActive = (id: string) => {
-    const v = vitalDefs.find(x => x.id === id)
-    setVitalDefs(prev => prev.map(x => x.id === id ? { ...x, active: !x.active } : x))
-    logAudit(v?.active ? 'Deactivated vital type' : 'Activated vital type', v?.name ?? id)
-  }
-
   const openEdit = (v: VitalDef) => {
     setForm({
       name: v.name, unit: v.unit, icon: v.icon,
@@ -45,11 +40,12 @@ export default function VitalsTab({ admin }: { admin: AdminUser }) {
       criticalMin: v.criticalMin !== undefined ? String(v.criticalMin) : '', criticalMax: v.criticalMax !== undefined ? String(v.criticalMax) : '',
       hardMin: String(v.hardMin), hardMax: String(v.hardMax),
     })
+    saving.clear()
     setSheet({ mode: 'edit', id: v.id })
   }
 
-  const save = () => {
-    if (err || !sheet) return
+  const save = async () => {
+    if (issue || !sheet) return
     const a = n(form.normalMin), b = n(form.normalMax)
     const base = {
       name: form.name.trim(), unit: form.unit.trim(), icon: form.icon || '📊',
@@ -59,46 +55,38 @@ export default function VitalsTab({ admin }: { admin: AdminUser }) {
       hardMin: isNaN(n(form.hardMin)) ? Math.min(0, a) : n(form.hardMin),
       hardMax: isNaN(n(form.hardMax)) ? b * 3 : n(form.hardMax),
     }
-    if (sheet.mode === 'edit') {
-      setVitalDefs(prev => prev.map(v => v.id === sheet.id ? { ...v, ...base } : v))
-      logAudit('Updated vital definition', `${base.name}: normal ${a}–${b}`)
-      toast.show(`${base.name} updated`)
-    } else {
-      setVitalDefs(prev => [...prev, { ...base, id: base.name.toLowerCase().replace(/\s+/g, '_') + '_' + Date.now(), active: true }])
-      logAudit('Added vital type', base.name)
-      toast.show(`${base.name} added`)
-    }
+    const current = vitalDefs.find(v => v.id === sheet.id)
+    const def: VitalDef = sheet.mode === 'edit' && current
+      ? { ...current, ...base }
+      : { ...base, id: `${base.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_${Date.now().toString(36)}`, active: true }
+    // The sheet stays open, with the reason, until the definition is really saved.
+    if (!(await saving.run(() => saveVitalDef(def))).ok) return
+    act.say(`${base.name} ${sheet.mode === 'edit' ? 'updated' : 'added'}`)
     setSheet(null)
   }
 
-  if (selectedPatient) {
-    const liveP = (patients.find(p => p.id === selectedPatient.id) ?? selectedPatient)
-    return <PatientThresholdView patient={liveP} onBack={() => setSelectedPatient(null)} />
-  }
+  const opened = patient(openId)
+  if (opened) return <PatientThresholdView patient={opened} onBack={() => setOpenId(null)} />
+
+  const views = [
+    ...(canManageDefs ? [{ id: 'defs' as const, label: 'Definitions' }] : []),
+    ...(canSeePatients ? [{ id: 'patients' as const, label: 'Patient Vitals' }] : []),
+  ]
 
   return (
-    <div className="flex flex-col gap-4 card-flow">
-      <PageTitle title="Vitals" action={subView === 'defs' && canManageDefs ? '+ Add type' : undefined}
-        onAction={() => { setForm(EMPTY_DEF); setSheet({ mode: 'add' }) }} />
-      {toast.node}
+    <Page title="Vitals" status={status} error={error} onRetry={reload}
+      actions={view === 'defs' && canManageDefs ? (
+        <button onClick={() => { setForm(EMPTY_DEF); saving.clear(); setSheet({ mode: 'add' }) }}
+          className="text-xs font-semibold text-teal-700 border border-teal-200 px-3 py-1.5 rounded-full">+ Add type</button>
+      ) : undefined}>
+      {act.node && <div className="span-all">{act.node}</div>}
+      {views.length > 1 && <div className="span-all"><Segmented label="Which view" options={views} value={view} onChange={setView} /></div>}
 
-      <div className="flex bg-gray-100 rounded-xl p-[3px] gap-[2px]">
-        {[
-          { id: 'defs', label: 'Definitions', show: canManageDefs },
-          { id: 'patients', label: 'Patient Vitals', show: canManagePatients },
-        ].filter(t => t.show).map(({ id, label }) => (
-          <button key={id} onClick={() => setSubView(id as typeof subView)}
-            className={`flex-1 text-[11px] px-3 py-1.5 rounded-lg font-semibold transition-all ${subView === id ? 'bg-white text-teal-700 shadow-sm' : 'text-gray-400'}`}>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {subView === 'defs' && (
+      {view === 'defs' && (
         <>
-          <div className="bg-teal-50 border border-teal-100 rounded-xl p-3">
+          <div className="bg-teal-50 border border-teal-100 rounded-xl p-3 span-all">
             <p className="text-xs text-teal-800 leading-relaxed">
-              Defaults apply when a doctor has not set a personal target. Critical limits always raise an immediate alert, whatever the doctor's target.
+              These ranges apply when a doctor has not set a personal target or critical range for a patient. A reading at or beyond a critical limit raises an alert at once.
             </p>
           </div>
           {vitalDefs.map(v => (
@@ -116,11 +104,8 @@ export default function VitalsTab({ admin }: { admin: AdminUser }) {
                   </p>
                 </div>
                 <div className="flex flex-col items-end gap-2 flex-shrink-0">
-                  <button onClick={() => canManageDefs && toggleActive(v.id)} disabled={!canManageDefs} aria-label={`Toggle ${v.name}`}
-                    className={`relative flex-shrink-0 rounded-full transition-colors ${v.active ? 'bg-teal-600' : 'bg-gray-200'} ${!canManageDefs ? 'opacity-40 cursor-not-allowed' : ''}`}
-                    style={{ width: 40, height: 22 }}>
-                    <span className="absolute top-0.5 bg-white rounded-full shadow transition-all" style={{ width: 18, height: 18, left: v.active ? 20 : 2 }} />
-                  </button>
+                  <Toggle on={v.active} disabled={!canManageDefs || act.busy} label={`Collect ${v.name}`}
+                    onChange={() => canManageDefs && act.run(() => saveVitalDef({ ...v, active: !v.active }), `${v.name} ${v.active ? 'switched off' : 'switched on'}`)} />
                   {canManageDefs && (
                     <button onClick={() => openEdit(v)} className="text-[10px] text-teal-600 font-semibold bg-teal-50 px-2 py-0.5 rounded-full">Edit</button>
                   )}
@@ -131,35 +116,30 @@ export default function VitalsTab({ admin }: { admin: AdminUser }) {
         </>
       )}
 
-      {subView === 'patients' && (
+      {view === 'patients' && (
         <>
-          <div className="bg-blue-50 border border-blue-100 rounded-xl p-3">
-            <p className="text-xs text-blue-800 leading-relaxed">View each patient's latest readings and the targets their doctor has set.</p>
-          </div>
-          {patients.length === 0 ? (
-            <div className="bg-white rounded-2xl p-6 shadow-sm text-center"><p className="text-sm text-gray-400">No active patients found.</p></div>
-          ) : patients.map(p => (
-            <button key={p.id} onClick={() => setSelectedPatient(p)}
+          <p className="text-xs text-gray-500 -mt-2 span-all">Each patient's latest readings and the targets their doctor set. Opening a patient is recorded in the audit log.</p>
+          {patients.length === 0 && <div className="span-all"><EmptyState icon="📊" title="No active patients" text="Patients appear here once they have signed up." /></div>}
+          {patients.map(p => (
+            <button key={p.id} onClick={() => setOpenId(p.id)}
               className="bg-white rounded-2xl px-4 py-4 flex items-center gap-3 shadow-sm text-left active:bg-gray-50 transition-colors">
               <Avatar name={p.name} avatar={p.avatar} size="sm" />
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-bold text-gray-900">{p.name}</p>
+                <p className="text-sm font-bold text-gray-900 truncate">{p.name}</p>
                 <p className="text-xs text-gray-400 truncate">{p.email}</p>
                 <div className="flex gap-1.5 mt-1 flex-wrap">
-                  <span className="text-[10px] bg-teal-50 text-teal-700 px-1.5 py-0.5 rounded-full font-semibold">{p.trackedVitalIds.length} vitals</span>
-                  {Object.keys(p.thresholds).length > 0 && (
-                    <span className="text-[10px] bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded-full font-semibold">{Object.keys(p.thresholds).length} doctor targets</span>
-                  )}
+                  <Pill color="teal">{p.trackedVitalIds.length} vital{p.trackedVitalIds.length === 1 ? '' : 's'}</Pill>
+                  {Object.keys(p.thresholds).length > 0 && <Pill color="purple">{Object.keys(p.thresholds).length} doctor target{Object.keys(p.thresholds).length === 1 ? '' : 's'}</Pill>}
                 </div>
               </div>
-              <span className="text-gray-300">›</span>
+              <Chevron />
             </button>
           ))}
         </>
       )}
 
       <BottomSheet open={!!sheet} onClose={() => setSheet(null)} title={sheet?.mode === 'edit' ? 'Edit Vital Type' : 'Add New Vital Type'}
-        footer={<><SheetButton tone="ghost" onClick={() => setSheet(null)}>Cancel</SheetButton><SheetButton disabled={!!err} onClick={save}>{sheet?.mode === 'edit' ? 'Save' : 'Add Vital'}</SheetButton></>}>
+        footer={<><SheetButton tone="ghost" onClick={() => setSheet(null)}>Cancel</SheetButton><SheetButton disabled={!!issue || saving.busy} onClick={save}>{saving.busy ? 'Saving…' : sheet?.mode === 'edit' ? 'Save' : 'Add Vital'}</SheetButton></>}>
         <div className="grid grid-cols-2 gap-x-3">
           {([
             ['Name *', 'name', 'e.g. Respiratory Rate'], ['Unit *', 'unit', 'e.g. /min'],
@@ -174,8 +154,9 @@ export default function VitalsTab({ admin }: { admin: AdminUser }) {
             </Field>
           ))}
         </div>
-        {err && <p className="text-xs text-red-500">{err}</p>}
+        {issue && <p className="text-xs text-red-500">{issue}</p>}
+        <SaveError message={saving.error} className="mt-2" />
       </BottomSheet>
-    </div>
+    </Page>
   )
 }

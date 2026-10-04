@@ -1,6 +1,7 @@
 import type { PatientUser } from '@/shared/lib/types'
 import { calcAge } from '@/shared/lib/vitals'
 import { COMMON_CONDITIONS, healthOf, sexLabel, type HealthSection } from '@/shared/lib/health'
+import { useApp } from '@/shared/state/AppContext'
 
 const SEVERITY_CLS = {
   severe: 'bg-red-100 text-red-700',
@@ -30,6 +31,7 @@ const NotRecorded = ({ what }: { what: string }) => <p className="text-xs text-g
  * per-section Edit links for the patient.
  */
 export function HealthSummary({ patient, onEdit }: { patient: PatientUser; onEdit?: (s: HealthSection) => void }) {
+  const { conditionDefs } = useApp()
   const h = healthOf(patient)
   const age = patient.dob ? calcAge(patient.dob) : null
   const severe = h.allergies.some(a => a.severity === 'severe')
@@ -64,7 +66,7 @@ export function HealthSummary({ patient, onEdit }: { patient: PatientUser; onEdi
           <div className="flex flex-wrap gap-1.5">
             {h.conditions.map(c => (
               <span key={c} className="text-[11px] font-semibold text-gray-700 bg-gray-100 rounded-full px-2.5 py-1">
-                {COMMON_CONDITIONS.find(x => x.name === c)?.icon ?? '🩺'} {c}
+                {(conditionDefs.length ? conditionDefs : COMMON_CONDITIONS).find(x => x.name.toLowerCase() === c.toLowerCase())?.icon ?? '🩺'} {c}
               </span>
             ))}
           </div>

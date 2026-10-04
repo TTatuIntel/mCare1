@@ -17,9 +17,14 @@ const TAB_PERMS: Partial<Record<ATab, AssistantPerm[]>> = {
   users:     ['create_users', 'assign_healthworkers'],
   audit:     ['view_logs'],
   documents: ['document_support'],
+  appointments: ['monitor_patients', 'handle_support'],
+  support:   ['handle_support'],
+  reports:   ['view_logs'],
 }
 
 export const canOpenTab = (user: AdminUser, tab: ATab) => {
+  // Security and retention settings are never delegated.
+  if (tab === 'settings') return isFullAdmin(user)
   const need = TAB_PERMS[tab]
   return !need || can(user, ...need)
 }

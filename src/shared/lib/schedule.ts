@@ -56,9 +56,29 @@ export const minuteOfDay = (now: number) => { const d = new Date(now); return d.
 export const apptWhen = (a: Appointment) => {
   const date = a.status === 'rescheduled' ? a.rescheduledTo ?? a.preferredDate : a.preferredDate
   const time = a.status === 'rescheduled' ? a.rescheduledTime ?? a.preferredTime : a.preferredTime
-  const clockTime = /^d{1,2}:d{2}s*(AM|PM)$/i.test(time?.trim() ?? '') ? time.trim() : '9:00 AM'
+  const clockTime = /^\d{1,2}:\d{2}\s*(AM|PM)$/i.test(time?.trim() ?? '') ? time.trim() : '9:00 AM'
   const at = new Date(`${date} ${clockTime}`).getTime()
   return { date, time, at: Number.isNaN(at) ? null : at }
+}
+
+/** Still ahead: waiting, confirmed or being rearranged. Everything else is history. */
+export const isOpenAppt = (a: Appointment) => a.status === 'requested' || a.status === 'approved' || a.status === 'rescheduled'
+
+/** A date input's day and a time input's clock, as the labels an appointment carries ("Oct 4, 2026", "2:30 PM"). */
+export const apptDateLabel = (iso: string) => new Date(`${iso}T00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+export const apptTimeLabel = (hm?: string) => {
+  if (!hm) return 'Any time'
+  const [h, m] = hm.split(':').map(Number)
+  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`
+}
+
+/** Upcoming first (soonest on top), then history (latest on top). */
+export function splitAppts(appts: Appointment[]) {
+  const whenOf = (a: Appointment) => apptWhen(a).at ?? 0
+  return {
+    upcoming: appts.filter(isOpenAppt).sort((a, b) => whenOf(a) - whenOf(b)),
+    history: appts.filter(a => !isOpenAppt(a)).sort((a, b) => whenOf(b) - whenOf(a)),
+  }
 }
 
 export type ScheduleItem = {
@@ -118,7 +138,7 @@ export function buildDaySchedule(patient: PatientUser, doses: MedDose[], mealsDo
   // weekly…): it is due when the first tracked vital is, so it agrees with every vital's page.
   const lastAt = patient.readings.reduce((t, r) => Math.max(t, r.at ?? 0), 0)
   const checks = patient.trackedVitalIds.map(id => {
-    const dueAt = checkInStatus(id, latestValid(patient, id)?.at, now).dueAt
+    const dueAt = checkInStatus(id, latestValid(patient, id)?.at, now, patient).dueAt
     return dueAt === undefined ? 0 : Math.round((dueAt - now) / 60_000)
   })
   const dueIn = checks.length ? Math.min(...checks) : 0

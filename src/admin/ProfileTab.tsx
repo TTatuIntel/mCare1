@@ -1,13 +1,12 @@
-import { PageTitle, ProfileCard } from '@/shared'
+import { Page, ProfileCard } from '@/shared'
+import { useAdmin } from './useAdmin'
 
-/* ─── Profile Tab ───────────────────────────────────────────────────── */
+/* ─── Profile ───────────────────────────────────────────────────────── */
 export default function ProfileTab() {
+  const { status, error, reload } = useAdmin()
   return (
-    <div className="flex flex-col gap-0">
-      <PageTitle title="Profile" />
-      <div className="mt-3">
-        <ProfileCard />
-      </div>
-    </div>
+    <Page title="Profile" flow={false} status={status} error={error} onRetry={reload}>
+      <ProfileCard />
+    </Page>
   )
 }

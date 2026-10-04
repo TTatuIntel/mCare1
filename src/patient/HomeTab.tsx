@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useApp, isActiveAlert } from '@/shared/state/AppContext'
 import {
-  Pill, SectionHead, PATIENT_QUICK_REPLIES, useToast,
+  Pill, SectionHead, useToast,
   PortalHeader, HeroCard, QuickGrid, NoticeCard, HERO_GRADIENT, levelStyle,
 } from '@/shared'
 import { usePatient } from './usePatient'
@@ -66,7 +66,7 @@ function UpNext({ items, go, onOpen }: { items: UpNextItem[]; go: (t: string) =>
 
 /* ─── Home ──────────────────────────────────────────────────────────── */
 export function HomeTab({ go, openVital, onLog }: {
-  go: (t: string) => void
+  go: (t: string, target?: string) => void
   openVital: (vitalId: string) => void
   /** Opens the log sheet for one vital. */
   onLog: (vitalId: string) => void
@@ -95,7 +95,7 @@ export function HomeTab({ go, openVital, onLog }: {
 
   return (
     <div className="flex flex-col gap-4 card-flow">
-      <PortalHeader onNavigate={go} onProfile={() => go('profile')} />
+      <PortalHeader onNavigate={(t, about) => go(t, about?.type === 'conversation' ? about.id : undefined)} onProfile={() => go('profile')} />
 
       {/* the health-profile setup was skipped: one tap goes back to it */}
       {patient.profileSetup === 'skipped' && (
@@ -220,16 +220,6 @@ export function HomeTab({ go, openVital, onLog }: {
 
       <ReminderSheet item={openItem} onClose={() => setOpenItem(null)} go={go} onDone={toast.show} />
 
-      {/* upgrade */}
-      <div className="rounded-2xl overflow-hidden" style={{ background: HERO_GRADIENT }}>
-        <div className="p-4 flex gap-3">
-          <span className="text-2xl flex-shrink-0">⭐</span>
-          <div>
-            <p className="text-white font-bold text-sm">mCare Premium</p>
-            <p className="text-teal-200 text-xs mt-0.5 leading-relaxed">AI health coach, unlimited records, priority consultations. From KES 499/mo.</p>
-          </div>
-        </div>
-      </div>
     </div>
   )
 }

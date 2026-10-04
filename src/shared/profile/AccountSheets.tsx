@@ -8,6 +8,7 @@ import { Avatar, Pill, AVATAR_GRADIENTS, AVATAR_EMOJIS } from '@/shared/ui/primi
 import { BottomSheet, SheetButton, Field, inputCls, useToast, SaveError, useSave } from '@/shared/ui/BottomSheet'
 import { MailboxSheet } from '@/shared/email/Mailbox'
 import { passwordIssue } from '@/shared/state/auth'
+import { useMotionPref, type MotionPref } from '@/shared/layout/motion'
 import * as api from '@/shared/api/actions'
 
 /* ─── Edit Profile sheet ────────────────────────────────────────────── */
@@ -353,8 +354,14 @@ const FONT_OPTIONS: { id: FontSizePref; label: string }[] = [
   { id: 'md', label: 'Medium' },
   { id: 'lg', label: 'Large' },
 ]
+const MOTION_OPTIONS: { id: MotionPref; label: string }[] = [
+  { id: 'device', label: 'Like device' },
+  { id: 'full', label: 'Full' },
+  { id: 'reduced', label: 'Reduced' },
+]
 export function ThemeFontSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { currentUser, updateUser } = useApp()
+  const motion = useMotionPref()
   if (!currentUser) return null
   const theme = currentUser.theme ?? 'light'
   const fontSize = currentUser.fontSize ?? 'md'
@@ -382,6 +389,23 @@ export function ThemeFontSheet({ open, onClose }: { open: boolean; onClose: () =
             </button>
           ))}
         </div>
+      </Field>
+      <Field label="Animations">
+        <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Animations">
+          {MOTION_OPTIONS.map(m => (
+            <button key={m.id} role="radio" aria-checked={motion.pref === m.id} onClick={() => motion.setPref(m.id)}
+              className={`py-3 rounded-xl border-2 text-[11px] font-semibold text-gray-700 ${motion.pref === m.id ? 'border-teal-500 bg-teal-50' : 'border-gray-100 bg-gray-50'}`}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[11px] text-gray-500 mt-1.5">
+          {motion.pref === 'device'
+            ? motion.deviceReduces
+              ? 'This device asks apps to reduce motion (often a battery saver does this), so mCare keeps still and fades instead. Choose Full to see every animation.'
+              : 'mCare moves as this device allows. Applies to this device only.'
+            : 'Applies to this device only.'}
+        </p>
       </Field>
       <Field label="Preview">
         <div className="rounded-xl border border-gray-100 bg-gray-50 p-3">
@@ -463,13 +487,13 @@ export function DeactivateAccountSheet({ open, onClose }: { open: boolean; onClo
   if (!currentUser) return null
 
   const confirmDeactivate = async () => {
-    if (!(await saving.run(() => setUserStatus(currentUser.id, 'suspended'))).ok) return
+    if (!(await saving.run(() => setUserStatus(currentUser.id, 'deactivated'))).ok) return
     setCurrentUser(null)
   }
 
   return (
     <BottomSheet open={open} onClose={onClose} title="Deactivate Account"
-      subtitle="This will sign you out and suspend your account until an administrator reactivates it."
+      subtitle="This signs you out and closes your account. Your record is kept, and an administrator can make the account active again."
       footer={
         <>
           <SheetButton tone="ghost" onClick={onClose}>Cancel</SheetButton>

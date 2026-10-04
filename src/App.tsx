@@ -1,5 +1,6 @@
 import { lazy, Suspense, useDeferredValue, useEffect, type ComponentType } from 'react'
 import { AppProvider, useApp } from '@/shared/state/AppContext'
+import { isStopped } from '@/shared/lib/types'
 import type { AdminUser, AppUser, DoctorUser, PatientUser } from '@/shared/lib/types'
 import { PhoneShell } from '@/shared/layout/PhoneShell'
 import { Loading } from '@/shared/ui/Loader'
@@ -7,6 +8,7 @@ import { LoginScreen } from '@/shared/auth/LoginScreen'
 import { VerificationScreen } from '@/shared/auth/VerificationScreen'
 import { DoctorStatusScreen } from '@/shared/auth/DoctorStatusScreen'
 import { SuspendedScreen } from '@/shared/auth/SuspendedScreen'
+import { MfaScreen } from '@/shared/auth/MfaScreen'
 
 /** Set when the page was opened from a patient's share link: the visitor sees those documents, not the sign-in page. */
 const SHARE_TOKEN = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('share')
@@ -43,6 +45,7 @@ function usePrefetchPortals() {
 
 const SCREENS = {
   login: LoginScreen,
+  mfa: MfaScreen,
   verify: VerificationScreen,
   suspended: SuspendedScreen,
   doctorStatus: DoctorStatusScreen,
@@ -60,10 +63,10 @@ const FULL_FRAME = new Set<string>(['patient', 'doctor', 'admin', 'assistant', '
 function screenFor(user: AppUser | null): keyof typeof SCREENS {
   if (!user) return 'login'
   if (user.status === 'unverified') return 'verify'
-  if (user.status === 'suspended' && user.role !== 'doctor') return 'suspended'
+  if (isStopped(user.status) && user.role !== 'doctor') return 'suspended'
   if (user.role === 'doctor') {
     if ((user as DoctorUser).approvalStatus !== 'approved') return 'doctorStatus'
-    if (user.status === 'suspended') return 'suspended'
+    if (isStopped(user.status)) return 'suspended'
     return 'doctor'
   }
   if (user.role === 'admin' || user.role === 'assistant') return (user as AdminUser).isAssistant ? 'assistant' : 'admin'
@@ -73,9 +76,10 @@ function screenFor(user: AppUser | null): keyof typeof SCREENS {
 }
 
 function Router() {
-  const { currentUser } = useApp()
+  const { currentUser, mfa } = useApp()
   usePrefetchPortals()
-  const target = screenFor(currentUser)
+  // Signed in, but the second step of two-step sign-in is still owed: nothing opens until it is given.
+  const target = !currentUser && mfa ? 'mfa' : screenFor(currentUser)
   // React renders the next screen in the background; if its code is still
   // loading, `shown` keeps the current screen until it is ready.
   const deferred = useDeferredValue(target)
