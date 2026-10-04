@@ -33,7 +33,8 @@ const statusLabel = (s: string) => s.replace(/_/g, ' ')
    have not signed up yet. One person is one account: a role is a property
    of the account, not a second identity. */
 export default function UsersTab() {
-  const { admin, full, can, people, invitations, staff, patient: patientById, invite, withdrawInvitation, setPermissions, setStatus, now, status, error, reload } = useAdmin()
+  const { admin, full, can, people, invitations, staff, patient: patientById, invite, withdrawInvitation, setPermissions, setStatus, updateDetails, resetTwoStep, now, status, error, reload } = useAdmin()
+  const canSupport = can('handle_support')
   const canCreate = can('create_users')
   const canAssign = can('assign_healthworkers', 'approve_patient_requests')
   const act = useAct()
@@ -79,6 +80,24 @@ export default function UsersTab() {
     act.say(`${user.name} ${STOP[to].done}`)
   }
   const askStatus = (user: AppUser, to: 'suspended' | 'deactivated' | 'active') => { statusSave.clear(); setWhy(''); setConfirm({ user, to }) }
+
+  /* support acting for someone: their details, or their two-step sign-in, always with the reason */
+  const [details, setDetails] = useState<{ user: AppUser; name: string; phone: string; dob: string; why: string } | null>(null)
+  const [reset, setReset] = useState<{ user: AppUser; why: string } | null>(null)
+  const supportSave = useSave()
+  const saveDetails = async () => {
+    if (!details) return
+    const { user, name, phone, dob } = details
+    if (!(await supportSave.run(() => updateDetails(user.id, { name, phone, dob }, details.why))).ok) return
+    setDetails(null); setOpenId(null)
+    act.say(`${name.trim()}'s details updated; they have been told`)
+  }
+  const doReset = async () => {
+    if (!reset) return
+    if (!(await supportSave.run(() => resetTwoStep(reset.user.id, reset.why))).ok) return
+    act.say(`Two-step sign-in reset for ${reset.user.name}; they have been told`)
+    setReset(null); setOpenId(null)
+  }
 
   // Care assignment for one patient
   const assigning = patientById(assignFor)
@@ -254,7 +273,7 @@ export default function UsersTab() {
       </BottomSheet>
 
       {/* one person: who they are, and what this member of staff may do with the account */}
-      <BottomSheet open={!!selected && !confirm} onClose={() => setOpenId(null)} title={selected?.name}
+      <BottomSheet open={!!selected && !confirm && !details && !reset} onClose={() => setOpenId(null)} title={selected?.name}
         subtitle={selected ? `${ROLE_LABEL[selected.role]} · ${statusLabel(selected.status)}` : ''}
         footer={<SheetButton tone="ghost" onClick={() => setOpenId(null)}>Close</SheetButton>}>
         {selected && (
@@ -279,6 +298,14 @@ export default function UsersTab() {
             {selected.role === 'assistant' && full && (
               <button onClick={() => { act.clear(); setPermsFor(selected.id); setOpenId(null) }}
                 className="text-left px-4 py-3 rounded-xl bg-gray-50 text-sm font-semibold text-gray-800">🛡️ Edit permissions</button>
+            )}
+            {(canSupport && (selected.role === 'patient' || selected.role === 'doctor' || full)) && (
+              <button onClick={() => { supportSave.clear(); setDetails({ user: selected, name: selected.name, phone: selected.phone, dob: selected.dob ?? '', why: '' }) }}
+                className="text-left px-4 py-3 rounded-xl bg-gray-50 text-sm font-semibold text-gray-800">✏️ Correct their details</button>
+            )}
+            {full && (
+              <button onClick={() => { supportSave.clear(); setReset({ user: selected, why: '' }) }}
+                className="text-left px-4 py-3 rounded-xl bg-gray-50 text-sm font-semibold text-gray-800">🔑 Reset two-step sign-in (lost phone)</button>
             )}
             {full && selected.status === 'active' && (
               <>
@@ -307,6 +334,41 @@ export default function UsersTab() {
         )}
         <p className="text-xs text-gray-600 leading-relaxed">{confirm ? STOP[confirm.to].text : ''} {needsWhy ? 'The account can be reactivated later.' : ''}</p>
         <SaveError message={statusSave.error} className="mt-3" />
+      </BottomSheet>
+
+      <BottomSheet open={!!details} onClose={() => setDetails(null)} title="Correct their details"
+        subtitle={details ? `${details.user.name} · recorded as done for them, with your reason; they are told` : ''}
+        footer={<><SheetButton tone="ghost" onClick={() => setDetails(null)}>Cancel</SheetButton>
+          <SheetButton disabled={supportSave.busy || !details?.name.trim() || (details?.why.trim().length ?? 0) < 5} onClick={saveDetails}>{supportSave.busy ? 'Saving…' : 'Save details'}</SheetButton></>}>
+        {details && (
+          <>
+            <Field label="Full name *"><input value={details.name} onChange={e => setDetails({ ...details, name: e.target.value })} className={inputCls} /></Field>
+            <Field label="Phone"><input type="tel" value={details.phone} onChange={e => setDetails({ ...details, phone: e.target.value })} className={inputCls} /></Field>
+            <Field label="Date of birth"><input type="date" value={details.dob} onChange={e => setDetails({ ...details, dob: e.target.value })} className={inputCls} /></Field>
+            <Field label="Reason *">
+              <textarea value={details.why} onChange={e => setDetails({ ...details, why: e.target.value })} rows={2} maxLength={200} className={`${inputCls} resize-none`}
+                placeholder="e.g. Patient called to correct the phone number" />
+            </Field>
+            <p className="text-[11px] text-gray-400">The sign-in email is changed by the person themself, from their account settings.</p>
+            <SaveError message={supportSave.error} className="mt-2" />
+          </>
+        )}
+      </BottomSheet>
+
+      <BottomSheet open={!!reset} onClose={() => setReset(null)} title="Reset two-step sign-in?"
+        subtitle={reset ? `${reset.user.name} · ${reset.user.email}` : ''}
+        footer={<><SheetButton tone="ghost" onClick={() => setReset(null)}>Cancel</SheetButton>
+          <SheetButton tone="danger" disabled={supportSave.busy || (reset?.why.trim().length ?? 0) < 5} onClick={doReset}>{supportSave.busy ? 'Resetting…' : 'Reset'}</SheetButton></>}>
+        {reset && (
+          <>
+            <p className="text-xs text-gray-600 leading-relaxed mb-3">For someone who lost the phone with their authenticator app. It is removed and they are signed out everywhere; they sign in with their password and set up a new one. Confirm who they are before you do this.</p>
+            <Field label="Reason *">
+              <textarea value={reset.why} onChange={e => setReset({ ...reset, why: e.target.value })} rows={2} maxLength={200} className={`${inputCls} resize-none`}
+                placeholder="e.g. Lost phone; identity checked by video call" />
+            </Field>
+            <SaveError message={supportSave.error} className="mt-2" />
+          </>
+        )}
       </BottomSheet>
     </Page>
   )

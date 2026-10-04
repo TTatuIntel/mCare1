@@ -185,5 +185,20 @@ export function useDoctor() {
     /* ── reports ── */
     /** UPDATE report_requests */
     declineReportRequest: app.declineReportRequest,
+
+    /* ── monitoring plan, reviews, access log ── */
+    /** RPC set_vital_plan: how often the patient measures a vital (null: the usual schedule), and why. The patient is told. */
+    setVitalPlan: app.setVitalPlan,
+    /** GET vital_reviews: each review of a patient's readings, newest first. */
+    reviewsOf: (patientId: string) => app.vitalReviews.filter(r => r.patientId === patientId).sort((a, b) => b.reviewedThrough - a.reviewedThrough),
+    /** Valid readings a patient logged since the last review (all of them before the first). */
+    unreviewedOf: (patientId: string) => {
+      const last = app.vitalReviews.filter(r => r.patientId === patientId).reduce((m, r) => Math.max(m, r.reviewedThrough), 0)
+      return (patients.find(p => p.id === patientId)?.readings ?? []).filter(r => !r.invalid && (r.at ?? 0) > last)
+    },
+    /** RPC review_vitals: marks a patient's readings reviewed up to now, with an optional note the patient reads. */
+    reviewVitals: app.reviewVitals,
+    /** RPC log_record_view: opening a patient's record is in that patient's access log. */
+    logRecordView: app.logRecordView,
   }
 }

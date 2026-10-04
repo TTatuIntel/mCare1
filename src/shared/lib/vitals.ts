@@ -3,6 +3,7 @@
  * Used by the alert engine (AppContext) and every screen that colours a value.
  */
 import type { AppAlert, PatientUser, VitalDef, VitalReading } from './types'
+import { FREQUENCY_HOURS } from './types'
 
 export type VitalLevel = 'normal' | 'warning' | 'critical'
 
@@ -560,8 +561,15 @@ export interface CheckIn {
 /** Past this share of the interval a reading counts as "due soon". */
 const DUE_SOON_AT = 0.8
 
-export function checkInStatus(vitalId: string, lastAt: number | undefined, now = Date.now()): CheckIn {
-  const intervalHours = CHECKIN_HOURS[vitalId] ?? 24
+/** Hours between readings the treating doctor asked for (Monitoring plan), when they set a rhythm. */
+export function planHours(patient: PatientUser | undefined, vitalId: string): number | undefined {
+  const f = patient?.vitalPlans?.[vitalId]?.frequency
+  return f ? FREQUENCY_HOURS[f] ?? undefined : undefined
+}
+
+/** Pass the patient to follow the frequency their doctor set for this vital; otherwise the usual cadence applies. */
+export function checkInStatus(vitalId: string, lastAt: number | undefined, now = Date.now(), patient?: PatientUser): CheckIn {
+  const intervalHours = planHours(patient, vitalId) ?? CHECKIN_HOURS[vitalId] ?? 24
   if (lastAt === undefined) return { state: 'none', elapsed: 1, intervalHours }
   const span = intervalHours * 3600_000
   const ratio = (now - lastAt) / span

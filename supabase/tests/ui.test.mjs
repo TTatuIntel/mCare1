@@ -24,13 +24,13 @@ import { startBackend } from '../dev/server.mjs'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..', '..')
 const SHOTS = join(HERE, '..', '.data', 'screens')
-const PW = 'A1b23'
+const PW = 'M7c24'
 const SIZES = { phone: { width: 390, height: 844 }, tablet: { width: 834, height: 1112 }, laptop: { width: 1366, height: 768 } }
 
 async function loadPlaywright() {
   const base = process.env.PLAYWRIGHT_PATH ? pathToFileURL(join(resolve(process.env.PLAYWRIGHT_PATH), 'package.json')) : import.meta.url
   try { return createRequire(base)('playwright') }
-  catch { console.error('Playwright is not installed. Run:  npm i --no-save playwright && npx playwright install chromium\n(or set PLAYWRIGHT_PATH to a project that has it)'); process.exit(2) }
+  catch { console.error('Playwright is not installed. Run:  npm i --no-save @electric-sql/pglite playwright && npx playwright install chromium\n(or set PLAYWRIGHT_PATH to a project that has it)'); process.exit(2) }
 }
 const { chromium } = await loadPlaywright()
 
@@ -39,7 +39,7 @@ const backend = await startBackend({ port: 0, dataDir: 'memory', quiet: true, jo
 // The test accounts are made by the same script a developer runs. It must not block this process: the backend it talks to lives here.
 const seeded = await new Promise(done => {
   const child = spawn(process.execPath, [join(HERE, '..', 'dev', 'seed.mjs')], {
-    env: { ...process.env, SUPABASE_URL: backend.url, SUPABASE_SERVICE_ROLE_KEY: backend.serviceKey, SUPABASE_ANON_KEY: backend.anonKey, MCARE_SEED_PASSWORD: PW },
+    env: { ...process.env, SUPABASE_URL: backend.url, SUPABASE_SERVICE_ROLE_KEY: backend.serviceKey, SUPABASE_ANON_KEY: backend.anonKey, MCARE_SEED_PASSWORD: PW, MCARE_SEED_BASIC: '1' },
   })
   let output = ''
   child.stdout.on('data', d => { output += d }); child.stderr.on('data', d => { output += d })
@@ -61,13 +61,21 @@ const check = (name, ok, extra = '') => { ok ? pass++ : fail++; console.log(`${o
 fs.mkdirSync(SHOTS, { recursive: true })
 
 const browser = await chromium.launch()
+/** Every console warning and error in every portal, at every size (the app runs as a dev build, so React's own warnings show too). */
+const consoleNotes = []
 async function session(size = 'phone') {
   const context = await browser.newContext({ viewport: SIZES[size] })
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', e => errors.push(e.message))
+  page.on('console', m => {
+    if (m.type() !== 'warning' && m.type() !== 'error') return
+    // The one step that cuts the backend off on purpose: its failed requests are the point of it.
+    if (s.offline && /ERR_INTERNET_DISCONNECTED|Failed to fetch|Failed to load resource|NetworkError|cannot be reached/i.test(m.text())) return
+    consoleNotes.push(`${m.type()}: ${m.text().slice(0, 240)}${m.location()?.url ? ` (${m.location().url.replace(/^https?:\/\/[^/]+/, '')})` : ''}`)
+  })
   const s = {
-    context, page, errors, size,
+    context, page, errors, size, offline: false,
     text: async () => (await page.locator('body').innerText()).replace(/\n+/g, ' | '),
     shot: name => page.screenshot({ path: join(SHOTS, `${size}-${name}.png`) }),
     nav: label => page.getByRole('navigation').getByRole('button', { name: new RegExp(label + '$') }).first().click(),
@@ -157,6 +165,21 @@ try {
     await s.nav('Meds'); await page.getByText('No active prescriptions').waitFor({ timeout: 10000 })
     await s.nav('Appts'); await page.getByText('No appointments yet').waitFor({ timeout: 10000 })
     await s.nav('Chat'); await page.getByText('No doctor on your care team yet').waitFor({ timeout: 10000 })
+  })
+  await step(s, 'a phone that asks for less motion can choose full animations', async () => {
+    // The app follows the device through a change event, which lands a moment after the switch: wait for it.
+    const motionIs = want => page.waitForFunction(w => document.documentElement.dataset.motion === w, want, { timeout: 3000 }).then(() => true, () => false)
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    if (!(await motionIs('reduce'))) throw new Error('the device setting should reduce motion by default')
+    await s.home(); await page.getByRole('button', { name: 'Profile' }).click()
+    await page.getByText('Theme & Font').click()
+    await page.getByText(/This device asks apps to reduce motion/).waitFor({ timeout: 10000 })
+    await page.getByRole('radio', { name: 'Full' }).click()
+    if (!(await motionIs('full'))) throw new Error('choosing Full should turn every animation back on')
+    await page.getByRole('radio', { name: 'Like device' }).click()
+    if (!(await motionIs('reduce'))) throw new Error('Like device should follow the device again')
+    await page.getByRole('button', { name: 'Done', exact: true }).click()
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
   })
   await step(s, 'sign out and local password recovery display the test OTP', async () => {
     await s.home(); await page.getByRole('button', { name: 'Profile' }).click()
@@ -285,6 +308,7 @@ try {
 
   /* ── when the backend cannot be reached ── */
   console.log('\nWhen mCare cannot be reached')
+  p.offline = true
   await p.context.route(/\/(rest|auth|storage)\/v1\//, route => route.abort('internetdisconnected'))
   await step(p, 'a reading that cannot be saved says so and keeps what was typed', async () => {
     await p.openLog()
@@ -297,6 +321,7 @@ try {
     await p.page.getByText(/Showing what was loaded at/).waitFor({ timeout: 20000 })
   })
   await p.context.unroute(/\/(rest|auth|storage)\/v1\//)
+  p.offline = false
   check('nothing was saved while it was unreachable', (await row(service.from('readings').select('value').eq('patient_id', patId))).every(r => r.value !== '74'))
   check('no script errors', p.errors.length === 0, p.errors.join(' | '))
   await p.context.close()
@@ -307,6 +332,21 @@ try {
   await service.from('patients').update({ assigned_doctor_id: docId }).eq('id', newId)
   const d = await session('laptop')
   await d.signIn('test.doctor@mcare.test')
+  await step(d, 'notifications filter unread items and mark all read', async () => {
+    const bell = d.page.getByRole('button', { name: /Notifications/ })
+    const bellBox = await bell.boundingBox()
+    await bell.click()
+    const sheet = d.page.getByRole('dialog')
+    const panelBox = await sheet.boundingBox()
+    if (!bellBox || !panelBox || panelBox.y < bellBox.y + bellBox.height) throw new Error('notification panel should open below the bell')
+    const filter = sheet.getByRole('tablist', { name: 'Notification filter' })
+    await filter.getByRole('tab', { name: /Unread/ }).click()
+    await sheet.getByRole('button', { name: /unread/ }).first().waitFor({ timeout: 10000 })
+    await sheet.getByRole('button', { name: 'Mark all read' }).click()
+    await filter.getByRole('tab', { name: /Unread/ }).click()
+    await sheet.getByRole('status').getByText('You are all caught up').waitFor({ timeout: 10000 })
+    await sheet.getByRole('button', { name: 'Close', exact: true }).last().click()
+  })
   await step(d, 'the doctor opens the patient and sees what the patient logged', async () => {
     await d.nav('Patients')
     await d.page.getByRole('button', { name: /Test Patient One/ }).first().click()
@@ -570,6 +610,16 @@ try {
     await a.page.getByText('Messages sent outside the app').waitFor({ timeout: 10000 })
     await a.page.getByRole('row', { name: /Dr\. Test Achieng/ }).waitFor({ timeout: 5000 })
   })
+  await step(a, 'the admin decides how long audit entries are kept; the database keeps the choice and audits it', async () => {
+    await a.nav('Settings')
+    await a.page.getByLabel('Audit entries days').fill('2555')
+    await a.page.getByRole('button', { name: 'Save retention' }).click()
+    await a.page.getByText('Retention settings saved').waitFor({ timeout: 15000 })
+    const saved = await row(service.from('app_settings').select('value').eq('key', 'retention').single())
+    if (saved.value.audit_days !== 2555) throw new Error(JSON.stringify(saved.value))
+    const entry = await row(service.from('audit_log').select('action').eq('action', 'Changed settings').limit(1))
+    if (!entry?.length) throw new Error('the change was not audited')
+  })
   await step(a, 'the admin approves a doctor after checking the licence; the doctor can then work', async () => {
     await a.nav('Approvals')
     await a.page.getByText('Dr. Test Pending').waitFor({ timeout: 15000 })
@@ -681,6 +731,7 @@ try {
         ['support', async x => { await x.home2('Patients on mCare'); await x.page.getByRole('button', { name: /Support$/ }).first().click(); await x.page.getByText(/waiting ·/).waitFor() }],
         ['reports', async x => { await x.home2('Patients on mCare'); await x.page.getByRole('button', { name: /Reports$/ }).first().click(); await x.page.getByText('Doctor workload').waitFor({ timeout: 20000 }) }],
         ['audit', async x => { await x.home2('Patients on mCare'); await x.page.getByRole('button', { name: /Audit Log$/ }).first().click(); await x.page.getByPlaceholder(/Search the whole trail/).waitFor() }],
+        ['settings', async x => { await x.home2('Patients on mCare'); await x.page.getByRole('button', { name: /Settings$/ }).first().click(); await x.page.getByRole('heading', { name: 'Two-step sign-in' }).waitFor() }],
       ]],
     ]
     for (const [portal, email, marker, list] of portals) {
@@ -710,6 +761,9 @@ try {
       await x.context.close()
     }
   }
+  const notes = [...new Set(consoleNotes)]
+  check('no console warnings or errors in any portal, at any size', notes.length === 0, notes.slice(0, 8).join(' | '))
+  if (notes.length) console.log(notes.map(n => `    ${n}`).join('\n'))
 } finally {
   await browser.close()
   await vite.close()

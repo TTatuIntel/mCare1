@@ -4,6 +4,7 @@ import { BottomSheet, SheetButton, Field, Pill, Toggle, inputCls, useSave, SaveE
 import type { ShareLink } from '@/shared/lib/types'
 import { canShare, SHARE_TTL_HOURS, DOC_CATEGORIES } from './documents'
 import { ago } from '@/shared/lib/vitals'
+import { copyText } from '@/shared/lib/clipboard'
 
 function linkState(s: ShareLink, now: number): { label: string; color: string; live: boolean } {
   if (s.revokedAt) return { label: 'Revoked', color: 'gray', live: false }
@@ -32,10 +33,11 @@ export function ShareSheet({ open, onClose, patientId, preselect }: {
   const [created, setCreated] = useState<ShareLink | null>(null)
   const [preview, setPreview] = useState<string>('')
   const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
 
   useEffect(() => {
     if (!open) return
-    setPicked(preselect ?? []); setRecipient(''); setTtl(24); setOneTime(true); setCreated(null); setPreview(''); setCopied(false)
+    setPicked(preselect ?? []); setRecipient(''); setTtl(24); setOneTime(true); setCreated(null); setPreview(''); setCopied(false); setCopyFailed(false)
   }, [open])
 
   const ctx = docPolicyCtx()
@@ -54,8 +56,10 @@ export function ShareSheet({ open, onClose, patientId, preselect }: {
     if (link) setCreated(link)
     else setFailed(true)
   }
-  const copy = (s: ShareLink) => {
-    navigator.clipboard?.writeText(shareLinkUrl(s)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }).catch(() => {})
+  const copy = async (s: ShareLink) => {
+    const ok = await copyText(shareLinkUrl(s))
+    setCopyFailed(!ok)
+    if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500) }
   }
   const tryOpen = (s: ShareLink) => {
     const res = openShareLink(s.token)
@@ -79,6 +83,7 @@ export function ShareSheet({ open, onClose, patientId, preselect }: {
             <button onClick={() => copy(created)} className="text-[11px] font-bold text-white bg-teal-700 px-3 py-1 rounded-full">{copied ? '✓ Copied' : 'Copy link'}</button>
             {!live && <button onClick={() => tryOpen(created)} className="text-[11px] font-bold text-teal-700 bg-white border border-teal-200 px-3 py-1 rounded-full">Open as recipient (demo)</button>}
           </div>
+          {copyFailed && <p className="text-[10px] text-red-600 font-semibold mt-2">This browser would not copy it. Press and hold the link above, then choose Copy.</p>}
           {preview && <p className="text-[10px] text-gray-600 mt-2">{preview}</p>}
         </div>
       ) : (

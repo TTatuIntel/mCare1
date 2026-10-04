@@ -5,6 +5,7 @@ import {
   SaveError, useSave, levelStyle, TREND_ARROW, type ReadingFilter,
 } from '@/shared'
 import type { PatientUser } from '@/shared/lib/types'
+import { FREQUENCY_LABELS } from '@/shared/lib/types'
 import {
   evaluate, alertIsFor, latestValid, targetRange, effectiveCriticalRange, validateReading, vitalTrend, generateInsights,
   checkInStatus, shortDuration, readingTime, unitView, ago, dateLabel, stamp, parseValue, groupOf, VITAL_GROUPS,
@@ -43,7 +44,7 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
   onLogGroup: (groupId: string) => void
 }) {
   const { currentUser, vitalDefs, alerts, now, canCorrect, correctReading, setUnitPref } = useApp()
-  const { doctor } = usePatient()
+  const { doctor, vitalPlans, nameOf } = usePatient()
   const patient = currentUser as PatientUser
   const [range, setRange] = useState<{ preset: Preset; from: string; to: string }>({ preset: '30d', from: '', to: '' })
   const [correcting, setCorrecting] = useState<{ id: string; value: string } | null>(null)
@@ -84,7 +85,7 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
   const diaTarget = def.id === 'bp' ? { min: def.diaNormalMin ?? 60, max: def.diaNormalMax ?? 90 } : undefined
   const latest = latestValid(patient, def.id)
   const st = levelStyle(latest ? evaluate(patient, def, latest.value) : null)
-  const checkIn = checkInStatus(def.id, latest?.at, now)
+  const checkIn = checkInStatus(def.id, latest?.at, now, patient)
   // Where the latest reading sits against the target, in words. Blood pressure can be out on either number.
   const latestP = latest ? parseValue(def, latest.value) : null
   const latestLvl = latest ? evaluate(patient, def, latest.value) : null
@@ -226,6 +227,12 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
               + Log reading
             </button>
           </div>
+          {vitalPlans[def.id] && (
+            <p className="mt-2 text-[11px] text-blue-800 bg-blue-50 rounded-lg px-2.5 py-1.5">
+              🩺 {nameOf(vitalPlans[def.id].assignedBy, 'Your doctor')} asked you to measure this {vitalPlans[def.id].frequency ? FREQUENCY_LABELS[vitalPlans[def.id].frequency!].toLowerCase() : 'as usual'}
+              {vitalPlans[def.id].reason ? ` · ${vitalPlans[def.id].reason}` : ''}
+            </p>
+          )}
         </div>
         <SelfClearBanner def={def} onLog={() => onLog(def.id)} />
       </div>

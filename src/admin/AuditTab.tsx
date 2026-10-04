@@ -56,8 +56,9 @@ export default function AuditTab({ onBack }: { onBack: () => void }) {
   /** What is listed, as a spreadsheet: for a review or an incident report. */
   const exportCsv = () => {
     const cell = (v: string) => `"${v.replace(/"/g, '""')}"`
-    const lines = [['When', 'Action', 'Detail', 'By', 'Role', 'About', 'Record'].map(cell).join(','),
-      ...rows.map(a => [new Date(a.at).toISOString(), a.action, a.detail, who(a), a.actorRole ?? 'system', a.resourceType ?? '', a.resourceId ?? ''].map(cell).join(','))]
+    const lines = [['When', 'Action', 'Detail', 'By', 'Role', 'For', 'About', 'Record', 'Two-step', 'Address', 'Device', 'Session'].map(cell).join(','),
+      ...rows.map(a => [new Date(a.at).toISOString(), a.action, a.detail, who(a), a.actorRole ?? 'system', a.onBehalfOf ? nameOf(a.onBehalfOf, 'Someone') : '',
+        a.resourceType ?? '', a.resourceId ?? '', a.aal === 'aal2' ? 'yes' : a.aal ? 'no' : '', a.clientIp ?? '', a.userAgent ?? '', a.sessionId ?? ''].map(cell).join(','))]
     downloadBlob(new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }), `mcare-audit-${new Date().toISOString().slice(0, 10)}.csv`)
   }
   const searching = !!q.trim() || by !== 'all'
@@ -88,6 +89,12 @@ export default function AuditTab({ onBack }: { onBack: () => void }) {
               <p role="cell" className="text-[11px] text-gray-600 col-span-2 @2xl:col-span-1">{a.detail}</p>
               <p role="cell" className="text-[10px] text-gray-400 col-span-2 @2xl:col-span-1 @2xl:truncate">
                 <span className="@2xl:hidden">by </span>{who(a)}{a.actorRole ? ` · ${a.actorRole}` : ''}<span className="@2xl:hidden"> · {a.createdAt}</span>
+                {a.onBehalfOf && <span className="block text-purple-600">for {nameOf(a.onBehalfOf, 'someone')}</span>}
+                {(a.clientIp || a.userAgent) && (
+                  <span className="block truncate" title={[a.userAgent, a.clientIp, a.sessionId && `session ${a.sessionId}`].filter(Boolean).join(' · ')}>
+                    {a.aal === 'aal2' ? '🛡️ two-step · ' : ''}{deviceOf(a.userAgent)}{a.clientIp ? ` · ${a.clientIp}` : ''}
+                  </span>
+                )}
               </p>
             </div>
           ))}
@@ -99,4 +106,12 @@ export default function AuditTab({ onBack }: { onBack: () => void }) {
         : <p className="text-[11px] text-gray-400 text-center">{searching ? 'That is every match.' : 'That is the whole trail.'}</p>)}
     </div>
   )
+}
+
+/** A short name for the device an entry came from, from its user agent. */
+function deviceOf(ua?: string) {
+  if (!ua) return 'Unknown device'
+  const os = /iPhone|iPad/.test(ua) ? 'iPhone/iPad' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Mac OS/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : ''
+  const app = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : ua.split(/[ /]/)[0]
+  return [app, os].filter(Boolean).join(' on ') || ua.slice(0, 40)
 }

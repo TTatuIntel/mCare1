@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Avatar, Pill, BackHeader, BottomSheet, SheetButton, Field, inputCls, useSave, SaveError, useToast, CareTeamCard } from '@/shared'
 import type { DoctorUser, PatientUser } from '@/shared/lib/types'
 import DoctorPicker from './DoctorPicker'
@@ -10,7 +10,8 @@ import { useAdmin } from './useAdmin'
    own request for one ("Approve patient requests"). The database checks
    the same permission on the save. */
 export default function PatientAssignmentView({ patient, onBack }: { patient: PatientUser; onBack: () => void }) {
-  const { can, doctor, assignDoctor, answerDoctorRequest, assignmentsOf, nameOf } = useAdmin()
+  const { can, doctor, assignDoctor, answerDoctorRequest, assignmentsOf, nameOf, logRecordView } = useAdmin()
+  useEffect(() => { logRecordView(patient.id, 'assignment') }, [patient.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const history = assignmentsOf(patient.id)
   const date = (ms?: number) => (ms ? new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '')
   /** Why the doctor is changing: kept in the assignment history. Required to leave a patient with no doctor. */

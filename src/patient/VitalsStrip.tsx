@@ -247,7 +247,7 @@ export function VitalsStrip({ patient, defs, ids, now, onOpen }: {
           const unit = displayUnitFor(def, patient)
           const r = latestValid(patient, id)
           const l = r ? evaluate(patient, def, r.value) : null
-          const c = checkInStatus(id, r?.at, now)
+          const c = checkInStatus(id, r?.at, now, patient)
           const tone = CHECKIN_TONE[c.state]
           const pts = seriesFor(patient, def, unit, span, now)
           const dir = trendDir(pts, patient, def, unit)
@@ -339,7 +339,7 @@ function TrendPopover({ open, patient, def, span, onSpan, now, pos, popRef, onOp
   const unit = displayUnitFor(def, patient)
   const pts = seriesFor(patient, def, unit, span, now)
   const last = latestValid(patient, def.id)
-  const c = checkInStatus(def.id, last?.at, now)
+  const c = checkInStatus(def.id, last?.at, now, patient)
   const t = targetRange(patient, def)
   const band = { min: toDisplayUnit(t.min, def.unit, unit), max: toDisplayUnit(t.max, def.unit, unit) }
   const diaBand = def.id === 'bp' ? { min: def.diaNormalMin ?? 60, max: def.diaNormalMax ?? 90 } : undefined

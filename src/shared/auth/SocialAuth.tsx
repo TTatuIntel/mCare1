@@ -3,6 +3,7 @@ import { useApp } from '@/shared/state/AppContext'
 import { SOCIAL_PROVIDERS, isEmail, type ProviderStyle } from '@/shared/state/auth'
 import { BottomSheet } from '@/shared/ui/BottomSheet'
 import { backendConfigured } from '@/shared/api/supabase'
+import { reducedMotion } from '@/shared/layout/motion'
 import { providerAvailable, rememberConsent, startProviderSignIn } from '@/shared/api/authBackend'
 import { appBaseUrl } from '@/shared/email/emailTemplate'
 import { AuthButton, AuthField, authInputCls } from './authKit'
@@ -34,11 +35,12 @@ const DOCK_REACH = 1.6
  * Demo mode: there is no real provider to go to, so a sheet stands in for it
  * and asks for the name and email it would hand back.
  */
-const PROVIDERS = SOCIAL_PROVIDERS.filter(p => providerAvailable(p.id))
+/** mCare launches with Google and Apple (Supabase has no Yahoo provider; one can be added later as custom OpenID Connect). */
+const LAUNCH_PROVIDERS: string[] = ['google', 'apple']
+const PROVIDERS = SOCIAL_PROVIDERS.filter(p => LAUNCH_PROVIDERS.includes(p.id) && providerAvailable(p.id))
 /** False when no provider can be used (the local backend): the "Or continue with" row is then left out. */
 export const socialSignInAvailable = PROVIDERS.length > 0
-/** Six fit one row in demo mode; live mode shows the connected ones only. */
-const GRID = PROVIDERS.length === SOCIAL_PROVIDERS.length ? 'grid-cols-6' : 'grid-cols-4'
+const GRID = PROVIDERS.length > 1 ? 'grid-cols-2' : 'grid-cols-1'
 
 export function SocialButtons() {
   const { socialAuth, setCurrentUser, updateUser } = useApp()
@@ -69,7 +71,7 @@ export function SocialButtons() {
   const dock = (x: number | null) => {
     cancelAnimationFrame(frame.current)
     frame.current = requestAnimationFrame(() => {
-      const still = x === null || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+      const still = x === null || reducedMotion()
       buttons.current.forEach(el => {
         if (!el) return
         if (still) { el.style.transform = ''; el.style.zIndex = ''; return }
@@ -100,7 +102,7 @@ export function SocialButtons() {
           <button key={p.id} ref={el => { buttons.current[i] = el }} type="button" aria-label={`Continue with ${p.label}`}
             onClick={() => { if (backendConfigured) leave(p); else { setProvider(p); setError('') } }}
             aria-busy={leaving?.id === p.id || undefined} style={{ animationDelay: `${i * 60}ms` }}
-            className={`${leaving?.id === p.id ? 'motion-safe:animate-pulse' : leaving ? 'opacity-50' : ''} social-btn auth-tile-in group relative h-11 rounded-2xl border flex items-center justify-center shadow-sm transition-all duration-200 ease-out hover:shadow-lg focus-visible:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 active:scale-[.92] ${p.bg} ${p.border} ${p.text} ${p.glow}`}>
+            className={`${leaving?.id === p.id ? 'animate-pulse' : leaving ? 'opacity-50' : ''} social-btn auth-tile-in group relative h-11 rounded-2xl border flex items-center justify-center shadow-sm transition-all duration-200 ease-out hover:shadow-lg focus-visible:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 active:scale-[.92] ${p.bg} ${p.border} ${p.text} ${p.glow}`}>
             {/* Clipped to the button, so the sheen never spills past its corners. */}
             <span aria-hidden className="absolute inset-0 overflow-hidden rounded-[inherit]">
               <span className="social-sheen absolute inset-y-0 left-0 w-1/2 bg-gradient-to-r from-transparent via-white/40 to-transparent" />
@@ -108,6 +110,7 @@ export function SocialButtons() {
             <span className="social-mark relative flex">
               <ProviderMark mark={p.mark} outline={p.outline} colors={p.colors} className="w-[18px] h-[18px] @2xl:w-5 @2xl:h-5" />
             </span>
+            <span className="relative ml-2 text-xs font-semibold">{p.label}</span>
             {/* The platform's name, for pointers that can hover. */}
             <span aria-hidden className="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 translate-y-1 whitespace-nowrap rounded-md bg-gray-900 px-1.5 py-0.5 text-[10px] font-semibold text-white opacity-0 transition-all duration-200 group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100">
               {p.label}

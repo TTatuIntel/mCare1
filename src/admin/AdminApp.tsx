@@ -12,10 +12,11 @@ import DocumentsTab from './DocumentsTab'
 import AppointmentsTab from './AppointmentsTab'
 import SupportTab from './SupportTab'
 import ReportsTab from './ReportsTab'
+import SettingsTab from './SettingsTab'
 import { useAdmin } from './useAdmin'
 
 /* ─── Types ─────────────────────────────────────────────────────────── */
-export const ADMIN_TABS = ['dashboard', 'approvals', 'alerts', 'assign', 'vitals', 'users', 'profile', 'audit', 'documents', 'appointments', 'support', 'reports'] as const
+export const ADMIN_TABS = ['dashboard', 'approvals', 'alerts', 'assign', 'vitals', 'users', 'profile', 'audit', 'documents', 'appointments', 'support', 'reports', 'settings'] as const
 export type ATab = typeof ADMIN_TABS[number]
 
 /* ─── Nav ───────────────────────────────────────────────────────────── */
@@ -33,9 +34,10 @@ const NAV_ITEMS: { id: ATab; label: string; icon: string; group?: string; webOnl
   { id: 'documents', label: 'Documents', icon: '🗂️', group: 'System', webOnly: true },
   { id: 'audit',     label: 'Audit Log', icon: '🧾', group: 'System', webOnly: true },
   { id: 'reports',   label: 'Reports',   icon: '📈', group: 'System', webOnly: true },
+  { id: 'settings',  label: 'Settings',  icon: '⚙️', group: 'System', webOnly: true },
 ]
 /** Off-nav screens that draw their own BackHeader. */
-const OWN_BACK: ATab[] = ['audit', 'documents', 'appointments', 'support', 'reports']
+const OWN_BACK: ATab[] = ['audit', 'documents', 'appointments', 'support', 'reports', 'settings']
 
 /* ─── Staff portal (shared by admins and assistants) ─────────────────── */
 export function AdminPortal({ allowed }: { allowed: (tab: ATab) => boolean }) {
@@ -68,6 +70,7 @@ export function AdminPortal({ allowed }: { allowed: (tab: ATab) => boolean }) {
       {current === 'appointments' && <AppointmentsTab onBack={home} />}
       {current === 'support'   && <SupportTab onBack={home} />}
       {current === 'reports'   && <ReportsTab onBack={home} />}
+      {current === 'settings'  && <SettingsTab onBack={home} />}
     </PortalShell>
   )
 }

@@ -59,11 +59,15 @@ export const SEVERITIES: { id: AllergySeverity; label: string }[] = [
 
 export const RELATIONSHIPS = ['Spouse', 'Partner', 'Parent', 'Child', 'Sibling', 'Guardian', 'Friend', 'Other']
 
+/** A condition as the forms list it: from the live catalogue (condition_defs), or COMMON_CONDITIONS in demo mode. */
+export type CatalogueCondition = { name: string; icon: string; vitals: string[] }
+
 /** Vitals suggested by the patient's conditions, most-called-for first, with the condition that suggested each. */
-export function suggestedVitals(conditions: string[]): Map<string, string> {
+export function suggestedVitals(conditions: string[], catalogue: CatalogueCondition[] = COMMON_CONDITIONS): Map<string, string> {
   const out = new Map<string, string>()
-  for (const c of COMMON_CONDITIONS) {
-    if (!conditions.includes(c.name)) continue
+  const chosen = new Set(conditions.map(c => c.toLowerCase()))
+  for (const c of catalogue) {
+    if (!chosen.has(c.name.toLowerCase())) continue
     for (const v of c.vitals) if (!out.has(v)) out.set(v, c.name)
   }
   return out

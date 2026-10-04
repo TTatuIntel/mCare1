@@ -105,12 +105,32 @@ export function useAdmin() {
     /** RPC log_patient_view: opening one patient's vitals is recorded in the audit trail. */
     logPatientView: app.logPatientView,
 
+    /** RPC log_record_view: opening a patient's record (here, their care assignment) is in that patient's access log. */
+    logRecordView: app.logRecordView,
+
     /* ── configuration ── */
     /** UPSERT vital_defs (full admin only) */
     saveVitalDef: app.saveVitalDef,
+    /** GET app_settings: two-step sign-in, idle sign-out and retention, as decided by an admin. */
+    settings: app.settings,
+    /** RPC save_settings (full admin only): checked and audited by the database. */
+    saveSecuritySettings: app.saveSecuritySettings,
+    saveRetentionSettings: app.saveRetentionSettings,
+    /** RPC run_retention_now (full admin only): applies the retention settings now; resolves with what was removed. */
+    runRetentionNow: app.runRetentionNow,
+    /** GET condition_defs, condition_vitals: the conditions catalogue. */
+    conditionDefs: app.conditionDefs,
+    /** RPC save_condition_def (full admin only) */
+    saveConditionDef: app.saveConditionDef,
+    /** GET record_views (staff who view logs): who opened which patient's record. */
+    recordViews: app.recordViews,
 
     /* ── support ── */
     /** UPDATE support_tickets */
     resolveTicket: app.resolveSupportTicket,
+    /** RPC admin_update_profile (admin, or an assistant who handles support): name, phone, date of birth, with the reason. */
+    updateDetails: app.adminUpdateProfile,
+    /** RPC reset_two_step (full admin): removes the authenticator app of someone who lost their phone. */
+    resetTwoStep: app.resetTwoStep,
   }
 }

@@ -10,7 +10,7 @@
  * not theirs. Nothing is kept: the database lives in memory for the run.
  */
 import { createClient } from '@supabase/supabase-js'
-import { startBackend } from '../dev/server.mjs'
+import { startBackend, totpCode } from '../dev/server.mjs'
 
 const backend = await startBackend({ port: 0, dataDir: 'memory', quiet: true, jobs: false, exposeTestAuth: true })
 const client = (key = backend.anonKey) => createClient(backend.url, key, { auth: { persistSession: false, autoRefreshToken: false } })
@@ -484,17 +484,88 @@ check('deactivating an account locks it out', await (async () => {
     && (await staff.from('profiles').select('status').eq('id', patId).single()).data?.status === 'deactivated'
 })())
 
+/* ── Two-step sign-in, the audit's request context, instant change notices, the directory, the patient's copy ── */
+console.log('\nTwo-step sign-in and security upgrades')
+const mfa = client()
+const mup = await mfa.auth.signUp({ email: 'mfa.patient@mcare.test', password: PW, options: { data: { full_name: 'Two Step' } } })
+const mfaId = mup.data.user.id
+await mfa.from('readings').insert({ patient_id: mfaId, vital_id: 'hr', value: '72' })
+let level = (await mfa.auth.mfa.getAuthenticatorAssuranceLevel()).data
+check('a new session is aal1 with no second step owed', level.currentLevel === 'aal1' && level.nextLevel === 'aal1', level)
+const enrolled = await mfa.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Phone' })
+check('turning it on gives a setup key and an otpauth link for the authenticator app', !!enrolled.data?.totp?.secret && enrolled.data.totp.uri.startsWith('otpauth://totp/mCare:'), enrolled.error?.message)
+const factorId = enrolled.data.id, setupKey = enrolled.data.totp.secret
+const wrongCode = totpCode(setupKey) === '000000' ? '111111' : '000000'
+check('a wrong code is refused', !!(await mfa.auth.mfa.challengeAndVerify({ factorId, code: wrongCode })).error)
+const secondStep = await mfa.auth.mfa.challengeAndVerify({ factorId, code: totpCode(setupKey) })
+check("the authenticator app's code verifies it and raises this session to aal2", !secondStep.error && (await mfa.auth.mfa.getAuthenticatorAssuranceLevel()).data.currentLevel === 'aal2', secondStep.error?.message)
+check('with the second step passed the record is there', (await mfa.from('readings').select('id')).data?.length === 1)
+check('the factor is listed as verified', (await mfa.auth.mfa.listFactors()).data?.totp?.[0]?.status === 'verified')
+
+const elsewhere = client()
+await elsewhere.auth.signInWithPassword({ email: 'mfa.patient@mcare.test', password: PW })
+level = (await elsewhere.auth.mfa.getAuthenticatorAssuranceLevel()).data
+check('signing in on another device with the password alone owes the second step', level.currentLevel === 'aal1' && level.nextLevel === 'aal2', level)
+check('…and until it is passed the database gives that session nothing', (await elsewhere.from('readings').select('id')).data?.length === 0
+  && (await elsewhere.rpc('my_security')).data?.has_factor === true && !!(await elsewhere.rpc('raise_sos', { message: 'x' })).error)
+check('…nor can that session remove the factor or add another', !!(await elsewhere.auth.mfa.unenroll({ factorId })).error && !!(await elsewhere.auth.mfa.enroll({ factorType: 'totp' })).error)
+await elsewhere.auth.mfa.challengeAndVerify({ factorId, code: totpCode(setupKey) })
+check('passing it there opens the record', (await elsewhere.from('readings').select('id')).data?.length === 1)
+const refreshedAal2 = await elsewhere.auth.refreshSession()
+check('refreshing the session keeps the second step', !refreshedAal2.error && (await elsewhere.auth.mfa.getAuthenticatorAssuranceLevel()).data.currentLevel === 'aal2')
+check('the person can turn it off from a session that passed it', !(await mfa.auth.mfa.unenroll({ factorId })).error
+  && (await admin.from('profiles').select('id').eq('id', mfaId)).data?.length === 1 && (await backend.sql(`select count(*)::int n from auth.mfa_factors where user_id = $1`, [mfaId])).rows[0].n === 0)
+
+await staff.rpc('save_settings', { area: 'security', new_value: { mfa_required_roles: ['doctor'] } })
+check('when an admin requires it for doctors, a doctor without it reaches no patient and is told why', (await doc.from('patients').select('id')).data?.length === 0
+  && (await doc.rpc('my_security')).data?.mfa_required === true)
+await staff.rpc('save_settings', { area: 'security', new_value: { mfa_required_roles: [] } })
+check('…and when it is no longer required, works as before', (await doc.rpc('my_security')).data?.mfa_required === false)
+
+// The audit trail records the phoneClient and the session a change came from.
+const phoneClient = createClient(backend.url, backend.anonKey, { global: { headers: { 'User-Agent': 'mCare-Test-Phone/2.0' } }, auth: { persistSession: false, autoRefreshToken: false } })
+await phoneClient.auth.signInWithPassword({ email: 'mfa.patient@mcare.test', password: PW })
+await phoneClient.from('profiles').update({ phone: '+254 700 999 000' }).eq('id', mfaId)
+const stamped = (await backend.sql(`select user_agent, session_id, aal, client_ip from audit_log where action = 'Updated own details' and actor_id = $1 order by id desc limit 1`, [mfaId])).rows[0]
+check('an audited change says which phoneClient, session and address it came from', stamped?.user_agent === 'mCare-Test-Phone/2.0' && !!stamped.session_id && stamped.aal === 'aal1' && !!stamped.client_ip, stamped)
+
+// Instant change notices (the local stand-in for Realtime).
+const accessToken = (await mfa.auth.getSession()).data.session.access_token
+const waitFor = since => fetch(`${backend.url}/__dev/changes?since=${since}`, { headers: { apikey: backend.anonKey, Authorization: `Bearer ${accessToken}` } }).then(r => r.json())
+const firstPulse = await waitFor(-1)
+const startedWaiting = Date.now()
+const waiting = waitFor(firstPulse.pulse)
+await new Promise(r => setTimeout(r, 200))
+await mfa.from('readings').insert({ patient_id: mfaId, vital_id: 'hr', value: '74' })
+const woken = await waiting
+check('an open app waiting for changes is woken the moment something is saved', woken.pulse > firstPulse.pulse && Date.now() - startedWaiting < 5000, { woken, ms: Date.now() - startedWaiting })
+check('a signed-out visitor is not told anything', (await fetch(`${backend.url}/__dev/changes?since=0`, { headers: { apikey: backend.anonKey } })).status === 401)
+
+// The doctor directory and private signatures.
+const directory = (await mfa.rpc('doctor_directory')).data ?? []
+check('a patient finds doctors through the directory, with public details only', directory.some(d => d.id === docId && d.specialty === 'Cardiology') && directory.every(d => !('email' in d) && !('phone' in d)))
+check("…and does not see a doctor's email or phone otherwise", (await mfa.from('profiles').select('id').eq('role', 'doctor')).data?.length === 0)
+check('a doctor saves their signature in their own private row', !(await doc.from('doctor_signatures').upsert({ doctor_id: docId, image: 'data:image/png;base64,SIGN' })).error
+  && (await doc.from('doctor_signatures').select('image').eq('doctor_id', docId).single()).data?.image === 'data:image/png;base64,SIGN'
+  && (await mfa.from('doctor_signatures').select('doctor_id')).data?.length === 0 && (await doc2.from('doctor_signatures').select('doctor_id').eq('doctor_id', docId)).data?.length === 0)
+
+// The patient's own copy, and what the app learns before opening a portal.
+const myCopy = (await mfa.rpc('export_my_record')).data
+check('a patient downloads their own record as one document', myCopy?.profile?.email === 'mfa.patient@mcare.test' && myCopy.readings?.length === 2, myCopy && Object.keys(myCopy))
+check('…which nobody else can', !!(await doc.rpc('export_my_record')).error)
+check('the app learns the idle sign-out time and whether a second step is owed', (await mfa.rpc('my_security')).data?.idle_minutes === 0 && (await staff.rpc('my_security')).data?.idle_minutes === 15)
+
 console.log('\nSeeded accounts')
 Object.assign(process.env, {
   SUPABASE_URL: backend.url,
   SUPABASE_SERVICE_ROLE_KEY: backend.serviceKey,
   SUPABASE_ANON_KEY: backend.anonKey,
-  MCARE_SEED_PASSWORD: 'A1b23',
+  MCARE_SEED_PASSWORD: 'M7c24',
 })
 await import('../dev/seed.mjs')
 const seededAdmin = client()
 check('reseeding resets an existing account to the exact 5-character password',
-  !!(await seededAdmin.auth.signInWithPassword({ email: 'test.admin@mcare.test', password: 'A1b23' })).data.session
+  !!(await seededAdmin.auth.signInWithPassword({ email: 'test.admin@mcare.test', password: 'M7c24' })).data.session
   && !!(await client().auth.signInWithPassword({ email: 'test.admin@mcare.test', password: PW })).error)
 
 console.log(`\n${pass} passed, ${fail} failed`)

@@ -11,9 +11,9 @@
  *
  * NOT YET RUN AGAINST A HOSTED PROJECT OR A REAL PROVIDER. The queue it works is
  * tested; the calls to the providers are written to their published APIs and
- * must be tried once the keys exist. Setup: docs/DELIVERY.md.
+ * must be tried once the keys exist. Setup: README.md → Configuring the hosted sender.
  */
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import webpush from 'npm:web-push@3'
 
 const env = (k: string) => Deno.env.get(k)?.trim() ?? ''
@@ -91,16 +91,19 @@ function smsSender(): Sender | null {
 /* ─── Push ────────────────────────────────────────────────────────────
    VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (mailto:… or https://…).
    The same public key goes to the app as VITE_VAPID_PUBLIC_KEY. */
-function pushSender(db: ReturnType<typeof createClient>): Sender | null {
+function pushSender(db: SupabaseClient): Sender | null {
   if (!env('VAPID_PUBLIC_KEY') || !env('VAPID_PRIVATE_KEY') || !env('VAPID_SUBJECT')) return null
   webpush.setVapidDetails(env('VAPID_SUBJECT'), env('VAPID_PUBLIC_KEY'), env('VAPID_PRIVATE_KEY'))
   return async d => {
-    const { data: s } = await db.from('push_subscriptions').select('endpoint, p256dh, auth').eq('id', d.subscription_id).maybeSingle()
+    // A push row always names its device (a constraint in the database); without one there is nowhere to send it.
+    const device = d.subscription_id
+    if (!device) return { problem: 'No device for this notification', gone: false }
+    const { data: s } = await db.from('push_subscriptions').select('endpoint, p256dh, auth').eq('id', device).maybeSingle()
     if (!s) return { problem: 'The device no longer accepts notifications', gone: true }
     try {
       await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
         JSON.stringify({ title: d.subject, body: d.body, link: d.link, urgent: d.urgent }), { TTL: d.urgent ? 3600 : 86400, urgency: d.urgent ? 'high' : 'normal' })
-      await db.from('push_subscriptions').update({ last_used_at: new Date().toISOString() }).eq('id', d.subscription_id)
+      await db.from('push_subscriptions').update({ last_used_at: new Date().toISOString() }).eq('id', device)
       return { problem: null }
     } catch (e) {
       const status = (e as { statusCode?: number }).statusCode

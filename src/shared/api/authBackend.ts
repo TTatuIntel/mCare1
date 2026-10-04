@@ -112,7 +112,7 @@ async function loadAccount(authUser: User): Promise<BackendSession> {
       ...base, role: 'doctor',
       specialty: d?.specialty ?? '', licenseNo: d?.license_no ?? '', hospital: d?.hospital ?? '',
       approvalStatus: (d?.approval_status ?? 'pending') as ApprovalStatus,
-      approvalNote: d?.approval_note ?? undefined, signature: d?.signature ?? undefined,
+      approvalNote: d?.approval_note ?? undefined,
       assignedPatientIds: [],
     }
     return { ok: true, user: doctor }
@@ -275,6 +275,73 @@ export async function setNewPassword(password: string): Promise<string | null> {
     const supabase = await getSupabase()
     const { error } = await supabase.auth.updateUser({ password })
     return error?.message ?? null
+  } catch (e) {
+    return reason(e)
+  }
+}
+
+/* ─── Two-step sign-in (Supabase Auth MFA, authenticator apps) ──────── */
+
+/**
+ * What this session still owes before a portal opens: nothing; the code from the authenticator app
+ * (the account has one set up); or setting one up (an admin requires it for this role). The
+ * database refuses a session that owes it either way, so this only decides which screen to show.
+ */
+export type MfaGate = 'ok' | 'challenge' | 'enrol'
+export async function mfaGate(): Promise<MfaGate> {
+  if (!backendConfigured) return 'ok'
+  const supabase = await getSupabase()
+  const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+  if (error || !data) return 'ok'
+  if (data.currentLevel === 'aal2') return 'ok'
+  if (data.nextLevel === 'aal2') return 'challenge'
+  const sec = await supabase.rpc('my_security')
+  return !sec.error && sec.data?.mfa_required && !sec.data?.has_factor ? 'enrol' : 'ok'
+}
+
+/** The account's authenticator app, once set up. */
+export async function verifiedTotp(): Promise<{ id: string; createdAt?: string } | null> {
+  const supabase = await getSupabase()
+  const { data } = await supabase.auth.mfa.listFactors()
+  const f = data?.totp?.find(x => x.status === 'verified')
+  return f ? { id: f.id, createdAt: f.created_at } : null
+}
+
+export interface TotpSetup { factorId: string; secret: string; uri: string; qr?: string }
+/** Starts setting up an authenticator app: the key (and, on a hosted project, a QR code) to add to it. */
+export async function startTotpSetup(): Promise<TotpSetup | { error: string }> {
+  try {
+    const supabase = await getSupabase()
+    // A setup left unfinished earlier is replaced.
+    const { data: listed } = await supabase.auth.mfa.listFactors()
+    for (const f of listed?.all ?? []) if (f.status !== 'verified') await supabase.auth.mfa.unenroll({ factorId: f.id })
+    const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp', issuer: 'mCare', friendlyName: `mCare ${new Date().toISOString().slice(0, 16)}` })
+    if (error || !data) return { error: error?.message ?? UNREACHABLE }
+    return { factorId: data.id, secret: data.totp.secret, uri: data.totp.uri, qr: data.totp.qr_code || undefined }
+  } catch (e) {
+    return { error: reason(e) }
+  }
+}
+
+/** Checks a 6-digit code from the authenticator app. On success this session has passed the second step. Resolves with an error sentence, or null. */
+export async function verifyTotp(factorId: string, code: string): Promise<string | null> {
+  try {
+    const supabase = await getSupabase()
+    const { error } = await supabase.auth.mfa.challengeAndVerify({ factorId, code: code.trim() })
+    if (!error) return null
+    if (/rate|too many/i.test(error.message)) return 'Too many attempts. Wait a few minutes and try again.'
+    return 'That code is not right. Check the time on your phone and enter the newest code.'
+  } catch (e) {
+    return reason(e)
+  }
+}
+
+/** Turns two-step sign-in off for this account. Only a session that passed the second step can. */
+export async function removeTotp(factorId: string): Promise<string | null> {
+  try {
+    const supabase = await getSupabase()
+    const { error } = await supabase.auth.mfa.unenroll({ factorId })
+    return error ? (/aal2|insufficient/i.test(error.message) ? 'Sign in again with your code first.' : error.message) : null
   } catch (e) {
     return reason(e)
   }
