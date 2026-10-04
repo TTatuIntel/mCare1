@@ -597,6 +597,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       while (!stopped) {
         try {
           const token = (await (await getSupabase()).auth.getSession()).data.session?.access_token
+          if (stopped) return
           if (!token) { await pause(5000); continue }
           const res = await fetch(`${backendUrl}/__dev/changes?since=${pulse}`, {
             headers: { apikey: backendAnonKey, Authorization: `Bearer ${token}` }, cache: 'no-store', signal: listening.signal })
