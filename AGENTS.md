@@ -218,6 +218,7 @@ Test accounts (password `M7c24`): `test.patient@mcare.test` (Patient One: two we
 - **Migrations.** Add a new numbered file (next: `0017_…`); never edit one that has been applied. New functions must have their default grants revoked ([§8 Database → Adding a change](#adding-a-change)).
 - **Sending.** Never send email, SMS or push from a screen: the database queues every channel ([§10](#10-notifications-and-delivery)).
 - **Errors** shown to people are sentences: every `api/actions.ts` request goes through `ok(…)`, which throws an `ApiError` whose message (`explain()`) can be shown as it is; `run()` in `AppContext` turns it into `{ ok: false, error }`.
+- **No warnings.** `npm run typecheck` treats unused variables, imports and parameters as errors (app and Edge Function); `npm run build` must print no warning (keep every file under 500 kB: split with `codeSplitting` in `vite.config.ts` or a dynamic `import()`); `npm run test:ui` fails on any console warning or error. Fix a warning where it starts; never silence it.
 
 ---
 
@@ -311,9 +312,9 @@ Every source file, one line each. Sizes are lines (≈). `ui/`, `layout/` and `p
 | File | Holds |
 | --- | --- |
 | `index.html` | HTML shell, metadata, the inline script that sets `data-motion` before paint, the plain-HTML boot splash `#boot-splash`. |
-| `vite.config.ts` | React + Tailwind plugins, `@` → `src/`, proxy of `/auth/v1` `/rest/v1` `/storage/v1` `/__dev` to the local backend (with `X-Forwarded-For`), `__APP_VERSION__`, `securityHeaders()` writing `dist/_headers` on build. |
+| `vite.config.ts` | React + Tailwind plugins, `@` → `src/`, proxy of `/auth/v1` `/rest/v1` `/storage/v1` `/__dev` to the local backend (with `X-Forwarded-For`), `__APP_VERSION__`, React split into its own chunk (`codeSplitting`, keeps the build under the 500 kB warning), `securityHeaders()` writing `dist/_headers` on build. |
 | `.env.example` · `.github/workflows/ci.yml` | Every environment variable, no values · CI: typecheck, `npm test`, build on every push; browser suite on PRs to `main` and nightly. |
-| `package.json` · `tsconfig.json` · `.mise.toml` | Scripts · strict TS with `@/*` paths · Node 22 + pnpm 10. |
+| `package.json` · `tsconfig.json` · `.mise.toml` | Scripts (`typecheck` covers the app and the Edge Function) · strict TS with `@/*` paths, `noUnusedLocals`, `noUnusedParameters` · Node 22 + pnpm 10. |
 | `public/` | `brand/mcare-logo.png` (also used in emails), `sw.js` (push service worker). Search engines are kept out by `<meta name="robots">` in `index.html` and the `X-Robots-Tag` header. |
 | `src/main.tsx` | Entry: imports `index.css`, mounts `App`. |
 | `src/App.tsx` | Role router: share link → `SharedDocuments`; signed out → auth; else the portal for the role. |
@@ -453,14 +454,14 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `SecuritySheet.tsx` | Two-step sign-in: set up an authenticator app, see it is on, turn it off. |
 | `SignatureSheet.tsx` | Doctor's signature. |
 | **auth/** | |
-| `WelcomeScreen.tsx` · `AuthShell.tsx` (440) | Welcome + help · the signed-out frame with the animated feature tour. |
+| `WelcomeScreen.tsx` · `AuthShell.tsx` (440) | Welcome + help ("Get started", the prominent "Sign in" pill) · the signed-out frame with the animated feature tour. |
 | `LoginScreen.tsx` · `SelfRegisterScreen.tsx` | Sign in · patient sign-up (names every missing field). |
 | `LiveAuth.tsx` | Live mode: confirm email, recovery, dev-only test OTP display. |
 | `MfaScreen.tsx` · `TotpSetup.tsx` | The second step at sign-in (code, or setting one up when required) · the authenticator setup panel (key, link, QR on hosted). |
 | `VerificationScreen.tsx` · `ForgotPassword.tsx` | Demo-mode equivalents. |
 | `SocialAuth.tsx` · `Legal.tsx` | Google and Apple sign-in buttons · consent text (placeholder). |
 | `DoctorStatusScreen.tsx` · `SuspendedScreen.tsx` | Doctor awaiting approval · stopped account. |
-| `authKit.tsx` (455) | Signed-out form controls, icons, OTP input. |
+| `authKit.tsx` (470) | Signed-out form controls, icons, OTP input; `AuthSwitch` (`prominent`: the welcome page's large animated "Sign in" pill). |
 | **documents/** | |
 | `useDocumentStore.ts` (737) | The document store both modes use (`DocumentApi`, spread into `AppContext`). |
 | `documents.ts` (483) | Categories, upload validation, demo access policy (`canView`, `canSign`…), `buildVitalsReport`. |
@@ -485,7 +486,8 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `dev/seed.mjs` | Test accounts and the test world, written through the app's own calls by each role (local or hosted), including a monitoring plan and a review for Patient One; `MCARE_SEED_BASIC=1` for accounts and a starter record only. |
 | `dev/fingerprint.mjs` | `npm run db:schema`. |
 | `functions/deliver/index.ts` | Hosted sender: providers per channel. |
-| `tests/rules.test.mjs` (1,280) · `api.test.mjs` (573) · `ui.test.mjs` (760) | [§12 Testing](#12-testing). |
+| `functions/tsconfig.json` · `functions/deno.d.ts` | Editor-only: lets a plain TypeScript editor (and `npm run typecheck`) check the Deno functions without false errors. Deno reads neither. |
+| `tests/rules.test.mjs` (1,290) · `api.test.mjs` (573) · `ui.test.mjs` (775) | [§12 Testing](#12-testing). |
 
 ### Big files by section
 
@@ -1443,6 +1445,8 @@ Check `git status` too: work may have started since this was written.
 | --- | --- |
 | **Security and data-architecture upgrade** (the Security & Data Architecture Implementation Plan; how each item is met: [§11 Security → The plan and the code](#the-plan-and-the-code)). Six additive migrations, nothing existing removed. A patient with a clinical record can no longer be hard-deleted. Two-step sign-in (authenticator app) for every role, each person's choice, required per role when an admin says so, enforced by the database; admin reset for a lost phone. Accounts are `unverified` until the email is confirmed. Audit entries say which session, device and address, and whom a staff member acted for; profile, health-profile, contact, tracked-vital and doctor-credential changes audited; the profile email follows the sign-in email; an approved doctor's licence changes only through an approver. Doctors' signatures private; patients see doctors' contact details only for doctors they deal with (directory otherwise). Conditions catalogue; the treating doctor's monitoring plan per vital; reviews of readings; who opened a record; the patient downloads their own record; message read time; write limits; idle sign-out; admin Settings (two-step sign-in, idle minutes, retention, conditions) with retention applied nightly; support corrects someone's details with a reason. The "active accounts only" rule worked out once per query. Local backend: TOTP endpoints, request headers for the audit, instant change notices (`/__dev/changes`). Production security headers (`dist/_headers`), CI workflow, `.env.example`. Sign-in providers: Google and Apple only. | `supabase/migrations/0012`–`0016`, `supabase/dev/{server.mjs,bootstrap.sql,seed.mjs}`, `supabase/tests/*`, `src/shared/{state/AppContext.tsx,api/*,lib/{types,vitals,health,schedule}.ts}`, `src/shared/auth/{MfaScreen,TotpSetup}.tsx` (new), `src/shared/profile/SecuritySheet.tsx` (new), `src/shared/layout/{IdleSignOut.tsx (new),PortalShell.tsx}`, `src/admin/{SettingsTab.tsx (new),AdminApp,DashboardTab,UsersTab,AuditTab,PatientAssignmentView,useAdmin}`, `src/assistant/permissions.ts`, `src/doctor/{PatientVitals,PatientDetail,ConsultView,DashboardTab,useDoctor}`, `src/patient/{ProfileTab,VitalDetail,VitalsStrip,HealthSetup,HealthEditSheet,healthForms,usePatient}`, `src/shared/ui/{ChatThread,HealthSummary}.tsx`, `src/shared/auth/SocialAuth.tsx`, `src/App.tsx`, `vite.config.ts`, `.github/workflows/ci.yml`, `.env.example`, `AGENTS.md`, `README.md` |
 | **Project cleanup.** The eight files in `docs/` merged into this guide (§7–§13) and the README (running, hosting, the notification sender); `docs/` removed. `public/robots.txt` removed (the page's `robots` meta tag and a new `X-Robots-Tag` header keep search engines out). The one-off `supabase/dev/_audit.mjs` removed; its useful check is now a rules test (every patient table has `zz_touch_patient`). Code comments that pointed at `docs/` now point at the README. | `AGENTS.md`, `README.md`, `index.html`, `vite.config.ts`, `src/shared/lib/push.ts`, `src/vite-env.d.ts`, `supabase/functions/deliver/index.ts`, `supabase/tests/rules.test.mjs` |
+| **Welcome page "Sign in"** made prominent: the question on its own line, a large outlined pill (48 px tall) with a person icon, a light passing through the word, a nudging arrow and a ring that pulses after Get Started's; room around it. Reduced motion: the ring fades in place, the arrow stays still. | `src/shared/auth/authKit.tsx` (`AuthSwitch prominent`), `src/shared/auth/WelcomeScreen.tsx` |
+| **No warnings, clean files.** Two unused imports removed; unused code is now a typecheck error; the build's "chunk larger than 500 kB" warning gone (React in its own chunk); the Edge Function type-checks in a plain editor and in `npm run typecheck` (two real type issues in it fixed); the browser suite fails on any console warning or error, which found one (a change check sent after sign-out with the just-ended session: signing out now stops the checks first). `CLAUDE.md` and another tool's `.grok-changes/` removed: two Markdown files only. | `tsconfig.json`, `package.json`, `vite.config.ts`, `src/patient/HomeTab.tsx`, `src/shared/documents/DocumentViewer.tsx`, `src/shared/state/AppContext.tsx`, `supabase/functions/{tsconfig.json,deno.d.ts,deliver/index.ts}`, `supabase/tests/ui.test.mjs`, `AGENTS.md`, `README.md` |
 
 ### Recently finished
 
@@ -1619,3 +1623,4 @@ The project has two documents: this guide (for anyone changing the code) and [RE
 - **Committed** → move the item out of "In progress" in [§13](#13-status) and update the [§1](#1-snapshot) snapshot (date, commit, test counts) and the README's Status.
 - Big-file line numbers in §6 drift: refresh them when a section moves by more than ~50 lines.
 - No other Markdown files: a new topic becomes a section here or in the README.
+- **No warnings** ([§3](#data-and-saving)): typecheck, build and the browser suite stay silent; keep the README's "Keeping the application clean" table true.
