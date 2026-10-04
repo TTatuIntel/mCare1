@@ -30,7 +30,7 @@ const SIZES = { phone: { width: 390, height: 844 }, tablet: { width: 834, height
 async function loadPlaywright() {
   const base = process.env.PLAYWRIGHT_PATH ? pathToFileURL(join(resolve(process.env.PLAYWRIGHT_PATH), 'package.json')) : import.meta.url
   try { return createRequire(base)('playwright') }
-  catch { console.error('Playwright is not installed. Run:  npm i --no-save playwright && npx playwright install chromium\n(or set PLAYWRIGHT_PATH to a project that has it)'); process.exit(2) }
+  catch { console.error('Playwright is not installed. Run:  npm i --no-save @electric-sql/pglite playwright && npx playwright install chromium\n(or set PLAYWRIGHT_PATH to a project that has it)'); process.exit(2) }
 }
 const { chromium } = await loadPlaywright()
 

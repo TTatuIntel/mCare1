@@ -137,7 +137,7 @@ What the person sees or says, and where it lives. Screen titles are the `Page` /
 
 ## 1. Snapshot
 
-*As of 4 October 2026, branch `mcare`, committed features at `2f19d6f` plus the uncommitted security and data-architecture upgrade (migrations `0012`–`0016`). Full detail: [§13 Status](#13-status).*
+*As of 4 October 2026, branch `mcare` (not yet merged into `main`): the security and data-architecture upgrade (migrations `0012`–`0016`), the docs cleanup and the no-warnings work are committed (`7970e04`, `c42b928`). Full detail: [§13 Status](#13-status).*
 
 mCare is remote patient monitoring. Patients log vitals, medicines, meals and water; their doctor follows them, answers alerts, prescribes, writes notes and care plans and issues signed reports; administrators and mCare assistants run assignments, approvals, support and the audit trail.
 
@@ -152,9 +152,11 @@ There is no patient database, doctor database or admin database: `src/patient`, 
 | Local backend | `supabase/dev/server.mjs`: the same migrations on PGlite, served as the Supabase API |
 | Sending | `supabase/functions/deliver`: Edge Function for queued email, SMS, push |
 
-**State.** All four portals are feature-complete against the local backend. Last verified run (4 October, working tree): typecheck clean · `test:db` 410/0 · `test:api` 176/0 · `test:ui` 69/0 · build clean.
+**State.** All four portals are feature-complete against the local backend. Last verified run (4 October): typecheck clean · `test:db` 410/0 · `test:api` 176/0 · `test:ui` 70/0 (no console warning or error) · build without warnings.
 
-**In progress** (uncommitted, tested): the security and data-architecture upgrade (the Security & Data Architecture Implementation Plan; mapping in [§11 Security → The plan and the code](#the-plan-and-the-code)): clinical records cannot be hard-deleted; two-step sign-in for every role (each person's choice, required per role by an admin), enforced in SQL; audit entries with session, device, address and "on behalf of"; private doctor signatures and a doctor directory; conditions catalogue, monitoring plans, reviews of readings; who opened a record; download my record; write limits; idle sign-out; admin Settings and retention; instant change notices on the local backend; production security headers; CI. Controls: [§11 Security](#11-security).
+**Recently finished** (`7970e04`, tested): the security and data-architecture upgrade (the Security & Data Architecture Implementation Plan; mapping in [§11 Security → The plan and the code](#the-plan-and-the-code)): clinical records cannot be hard-deleted; two-step sign-in for every role (each person's choice, required per role by an admin), enforced in SQL; audit entries with session, device, address and "on behalf of"; private doctor signatures and a doctor directory; conditions catalogue, monitoring plans, reviews of readings; who opened a record; download my record; write limits; idle sign-out; admin Settings and retention; instant change notices on the local backend; production security headers; CI. Controls: [§11 Security](#11-security). Also the two-document cleanup and no warnings anywhere (typecheck with unused code as errors, build, browser console).
+
+**In progress** (uncommitted, tested): the sign-in page's reachability check no longer uses a just-ended session (the last console error).
 
 **Pending** (not started): hosted Supabase project and its Auth settings, real email/SMS/push providers, the host (D-3), reviewed legal text, server-side file scanning, files via share links, physical-phone testing. See [§13 Status → Pending](#pending-before-production).
 
@@ -408,7 +410,7 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `demoData.ts` | Demo-mode people and records (`DEMO`, `INITIAL_VITAL_DEFS`). Never used live. |
 | `useLoadStatus.ts` | A screen's loading / ready / error for `Page`. |
 | **api/** | |
-| `supabase.ts` | Connection: `backendConfigured`, `backendUrl`, `backendAnonKey`, `getSupabase`, `checkBackend`, `localBackend`. |
+| `supabase.ts` | Connection: `backendConfigured`, `backendUrl`, `backendAnonKey`, `getSupabase`, `checkBackend` (asks with the public key only, never a session), `localBackend`. |
 | `authBackend.ts` | Supabase Auth: sign-in/up, codes, recovery, social, `getLocalTestAuthCode` (dev only); two-step sign-in: `mfaGate`, `verifiedTotp`, `startTotpSetup`, `verifyTotp`, `removeTotp`. |
 | `records.ts` (545) | `loadRecords(me)`: every table the person may see → app shapes (settings, catalogue, reviews, access log, the doctor directory merged in); `toSettings`, `changeToken`, `searchAudit`. |
 | `actions.ts` (472) | One function per change (sections: account, own record, vitals and alerts, medication and meals, care plans, availability, appointments, messages/notifications/reports, care coordination, settings / monitoring plans / reviews / access log); `ApiError`, `explain`. |
@@ -1382,9 +1384,9 @@ Three suites, all in `supabase/tests/`, all plain Node scripts (no test framewor
 | Database rules | `npm run test:db` (`rules.test.mjs`) | Every access and clinical rule in SQL, as patient, other patient, treating doctor, other doctor, consulting doctor, admin, assistant, suspended account and signed-out visitor. The "Security upgrades" section covers migrations `0012`–`0016`: a record cannot be hard-deleted, the lifecycle, audit context and "on behalf of", the email source, the licence lock, health-profile audit, the conditions catalogue, settings, two-step sign-in (a verified factor, a role required by an admin, the reset), support corrections, private signatures and the doctor directory, monitoring plans, reviews, read time, write limits, the access log, the patient's copy, retention, and that every table has the restrictive rule worked out once per query. | After changing a migration. |
 | API workflows | `npm run test:api` (`api.test.mjs`) | The same workflows over HTTP with the real `supabase-js` client against the local backend: sign-up and sessions, each workflow per role, forged tokens, changed ids, files, the delivery queue; two-step sign-in end to end (enrol, wrong code, verify, another device owing the step, refresh keeps it, turn off, a role required by an admin), the audit's device and session from real requests, instant change notices, the directory, signatures, the patient's copy. | After changing a migration or `server.mjs`. |
 | Both | `npm test` | `test:db` then `test:api`. | After changing a migration. |
-| Browser | `npm run test:ui` (`ui.test.mjs`) | A headless Chromium drives all four portals: a new sign-up (with email confirmation and test OTP) through setup, a patient's day, the care team's answers arriving in the open app, private chats with each care-team doctor, the backend becoming unreachable, the doctor's and admin's workflows (including saving a retention setting), an assistant limited to their screens, and every screen (admin Settings included) at phone (390), tablet (834) and laptop (1366) width (no sideways overflow, no script errors). After each step the database is queried to confirm the change. Screenshots go to `supabase/.data/screens/` (failures as `<size>-fail-<step>.png`). | After changing screens; several minutes. |
+| Browser | `npm run test:ui` (`ui.test.mjs`) | A headless Chromium drives all four portals: a new sign-up (with email confirmation and test OTP) through setup, a patient's day, the care team's answers arriving in the open app, private chats with each care-team doctor, the backend becoming unreachable, the doctor's and admin's workflows (including saving a retention setting), an assistant limited to their screens, and every screen (admin Settings included) at phone (390), tablet (834) and laptop (1366) width (no sideways overflow, no script errors). It fails if any page logs a console warning or error (the expected network errors while the backend is unreachable excepted). After each step the database is queried to confirm the change. Screenshots go to `supabase/.data/screens/` (failures as `<size>-fail-<step>.png`). | After changing screens; several minutes. |
 
-Prerequisites: `npm i --no-save @electric-sql/pglite` for all three; for the browser suite also `npm i --no-save playwright && npx playwright install chromium` (or set `PLAYWRIGHT_PATH` to a project that has it). Every suite builds its own in-memory database from `supabase/migrations`, so none needs `npm run backend` running and none touches `supabase/.data/pg`.
+Prerequisites: `npm i --no-save @electric-sql/pglite` for all three; for the browser suite `npm i --no-save @electric-sql/pglite playwright && npx playwright install chromium` instead (in one command: each `npm i` removes the `--no-save` packages it is not given) (or set `PLAYWRIGHT_PATH` to a project that has it). Every suite builds its own in-memory database from `supabase/migrations`, so none needs `npm run backend` running and none touches `supabase/.data/pg`.
 
 ### Writing a check
 
@@ -1420,19 +1422,19 @@ Covered by rule and API tests only: editing vital definitions, doctor approval, 
 
 What works, what is in progress, and what is still to do. **Update this section whenever you finish, start or discover something** (see [§14](#14-keeping-these-docs-true)).
 
-Last updated: **4 October 2026** · branch `mcare` · committed features at `2f19d6f`, plus the security and data-architecture upgrade below (uncommitted).
+Last updated: **4 October 2026** · branch `mcare` · everything below is committed (latest `2071743`) except the row under In progress.
 
 ### Verified
 
-Run on 4 October 2026 on the working tree (the upgrade included).
+Run on 4 October 2026 on the working tree.
 
 | Check | Result |
 | --- | --- |
 | `npm run typecheck` | clean |
 | `npm run test:db` | 410 passed, 0 failed |
 | `npm run test:api` | 176 passed, 0 failed |
-| `npm run test:ui` | 69 passed, 0 failed (phone, tablet, laptop) |
-| `npm run build` | builds; writes `dist/_headers` |
+| `npm run test:ui` | 70 passed, 0 failed (phone, tablet, laptop; no console warning or error) |
+| `npm run build` | builds with no warning; writes `dist/_headers` |
 | Seed from an empty database | builds the whole test world, including the monitoring plan and a review |
 
 Never verified: a hosted Supabase project, any real email / SMS / push provider, a physical phone, the CI workflow on GitHub.
@@ -1443,15 +1445,16 @@ Check `git status` too: work may have started since this was written.
 
 | Change | Files |
 | --- | --- |
-| **Security and data-architecture upgrade** (the Security & Data Architecture Implementation Plan; how each item is met: [§11 Security → The plan and the code](#the-plan-and-the-code)). Six additive migrations, nothing existing removed. A patient with a clinical record can no longer be hard-deleted. Two-step sign-in (authenticator app) for every role, each person's choice, required per role when an admin says so, enforced by the database; admin reset for a lost phone. Accounts are `unverified` until the email is confirmed. Audit entries say which session, device and address, and whom a staff member acted for; profile, health-profile, contact, tracked-vital and doctor-credential changes audited; the profile email follows the sign-in email; an approved doctor's licence changes only through an approver. Doctors' signatures private; patients see doctors' contact details only for doctors they deal with (directory otherwise). Conditions catalogue; the treating doctor's monitoring plan per vital; reviews of readings; who opened a record; the patient downloads their own record; message read time; write limits; idle sign-out; admin Settings (two-step sign-in, idle minutes, retention, conditions) with retention applied nightly; support corrects someone's details with a reason. The "active accounts only" rule worked out once per query. Local backend: TOTP endpoints, request headers for the audit, instant change notices (`/__dev/changes`). Production security headers (`dist/_headers`), CI workflow, `.env.example`. Sign-in providers: Google and Apple only. | `supabase/migrations/0012`–`0016`, `supabase/dev/{server.mjs,bootstrap.sql,seed.mjs}`, `supabase/tests/*`, `src/shared/{state/AppContext.tsx,api/*,lib/{types,vitals,health,schedule}.ts}`, `src/shared/auth/{MfaScreen,TotpSetup}.tsx` (new), `src/shared/profile/SecuritySheet.tsx` (new), `src/shared/layout/{IdleSignOut.tsx (new),PortalShell.tsx}`, `src/admin/{SettingsTab.tsx (new),AdminApp,DashboardTab,UsersTab,AuditTab,PatientAssignmentView,useAdmin}`, `src/assistant/permissions.ts`, `src/doctor/{PatientVitals,PatientDetail,ConsultView,DashboardTab,useDoctor}`, `src/patient/{ProfileTab,VitalDetail,VitalsStrip,HealthSetup,HealthEditSheet,healthForms,usePatient}`, `src/shared/ui/{ChatThread,HealthSummary}.tsx`, `src/shared/auth/SocialAuth.tsx`, `src/App.tsx`, `vite.config.ts`, `.github/workflows/ci.yml`, `.env.example`, `AGENTS.md`, `README.md` |
-| **Project cleanup.** The eight files in `docs/` merged into this guide (§7–§13) and the README (running, hosting, the notification sender); `docs/` removed. `public/robots.txt` removed (the page's `robots` meta tag and a new `X-Robots-Tag` header keep search engines out). The one-off `supabase/dev/_audit.mjs` removed; its useful check is now a rules test (every patient table has `zz_touch_patient`). Code comments that pointed at `docs/` now point at the README. | `AGENTS.md`, `README.md`, `index.html`, `vite.config.ts`, `src/shared/lib/push.ts`, `src/vite-env.d.ts`, `supabase/functions/deliver/index.ts`, `supabase/tests/rules.test.mjs` |
-| **Welcome page "Sign in"** easier to see: the action word larger than the question, with a larger tap area (commit `7970e04`). | `src/shared/auth/authKit.tsx` (`AuthSwitch`) |
-| **No warnings, clean files.** Two unused imports removed; unused code is now a typecheck error; the build's "chunk larger than 500 kB" warning gone (React in its own chunk); the Edge Function type-checks in a plain editor and in `npm run typecheck` (two real type issues in it fixed); the browser suite fails on any console warning or error, which found one (a change check sent after sign-out with the just-ended session: signing out now stops the checks first). `CLAUDE.md` and another tool's `.grok-changes/` removed: two Markdown files only. | `tsconfig.json`, `package.json`, `vite.config.ts`, `src/patient/HomeTab.tsx`, `src/shared/documents/DocumentViewer.tsx`, `src/shared/state/AppContext.tsx`, `supabase/functions/{tsconfig.json,deno.d.ts,deliver/index.ts}`, `supabase/tests/ui.test.mjs`, `AGENTS.md`, `README.md` |
+| **No console errors after sign-out.** The sign-in page's "is mCare reachable?" check asked with the session that had just ended, so the backend refused it (a 401 in the console) right after "Sign out". It now asks with the public key only, so it never depends on who is signed in. The browser suite's console check passes in all four portals at three widths. | `src/shared/api/supabase.ts` (`checkBackend`), `AGENTS.md`, `README.md` |
 
 ### Recently finished
 
 | Change | Commit |
 | --- | --- |
+| **Security and data-architecture upgrade** (the Security & Data Architecture Implementation Plan; how each item is met: [§11 Security → The plan and the code](#the-plan-and-the-code)). Six additive migrations, nothing existing removed. A patient with a clinical record can no longer be hard-deleted. Two-step sign-in (authenticator app) for every role, each person's choice, required per role when an admin says so, enforced by the database; admin reset for a lost phone. Accounts are `unverified` until the email is confirmed. Audit entries say which session, device and address, and whom a staff member acted for; profile, health-profile, contact, tracked-vital and doctor-credential changes audited; the profile email follows the sign-in email; an approved doctor's licence changes only through an approver. Doctors' signatures private; patients see doctors' contact details only for doctors they deal with (directory otherwise). Conditions catalogue; the treating doctor's monitoring plan per vital; reviews of readings; who opened a record; the patient downloads their own record; message read time; write limits; idle sign-out; admin Settings (two-step sign-in, idle minutes, retention, conditions) with retention applied nightly; support corrects someone's details with a reason. The "active accounts only" rule worked out once per query. Local backend: TOTP endpoints, request headers for the audit, instant change notices (`/__dev/changes`). Production security headers (`dist/_headers`), CI workflow, `.env.example`. Sign-in providers: Google and Apple only. | `7970e04` |
+| **Project cleanup.** The eight files in `docs/` merged into this guide (§7–§13) and the README (running, hosting, the notification sender); `docs/` removed. `public/robots.txt` removed (the page's `robots` meta tag and a new `X-Robots-Tag` header keep search engines out). The one-off `supabase/dev/_audit.mjs` removed; its useful check is now a rules test (every patient table has `zz_touch_patient`). Code comments that pointed at `docs/` now point at the README. | `7970e04` |
+| **Welcome page "Sign in"** easier to see: the action word larger than the question, with a larger tap area. | `7970e04` |
+| **No warnings, clean files.** Two unused imports removed; unused code is now a typecheck error; the build's "chunk larger than 500 kB" warning gone (React in its own chunk); the Edge Function type-checks in a plain editor and in `npm run typecheck` (two real type issues in it fixed); the browser suite fails on any console warning or error, which found one (a change check sent after sign-out with the just-ended session: signing out now stops the checks first; `c42b928`). `CLAUDE.md` and another tool's `.grok-changes/` removed: two Markdown files only. | `7970e04` |
 | **Same experience on a phone over the network** (one motion setting with a per-device override; copying over plain http), **local backend no longer corrupts its database** (folder lock, clean stops, recovery from a copy), **seed builds a test world**, errors found while testing the live app, notification bell unread filter and "Mark all read". | `2f19d6f` |
 | **Patients message consulting doctors** (migration `0011`), sign-up names each missing field, test OTPs only in dev builds, welcome spacing; the docs restructure. | `bcbab19`, `b41b10a` (merged to `main` in `5a123df`) |
 
@@ -1600,7 +1603,7 @@ In rough order. Plan items not yet done are marked "Not yet" or "Hosted" in [§1
 
 | Commit | What |
 | --- | --- |
-| (next) | Security and data-architecture upgrade (migrations `0012`–`0016`); the docs unified into AGENTS.md and README.md; unused files removed |
+| `7970e04`, `c42b928` | Security and data-architecture upgrade (migrations `0012`–`0016`); the docs unified into AGENTS.md and README.md; unused files removed; no warnings (typecheck, build, browser console) |
 | `2f19d6f` | Phone motion setting, local backend durability, seeded test world, live-app fixes |
 | `5a123df` | Merge of `consulting-messages-and-docs` into `main` |
 | `b41b10a` | Docs restructured: AGENTS.md agent guide, `docs/` reference |

@@ -38,21 +38,26 @@ export function getSupabase(): Promise<SupabaseClient> {
 
 export type BackendHealth =
   | { mode: 'demo' }
-  | { mode: 'live'; ok: true; vitals: number }
+  | { mode: 'live'; ok: true }
   | { mode: 'live'; ok: false; error: string }
 
 /**
- * Confirms the project is reachable and the schema is installed. Vital
- * definitions are readable only when signed in, so before sign-in a healthy
- * project answers with zero rows rather than an error.
+ * Confirms the project is reachable and the schema is installed. It asks with
+ * the public key only, never with a session: a session that has just ended
+ * (the sign-in page right after "Sign out") would be refused and look like an
+ * outage. Vital definitions are readable only when signed in, so a healthy
+ * project answers this anonymous question with zero rows rather than an error.
  */
 export async function checkBackend(): Promise<BackendHealth> {
   if (!backendConfigured) return { mode: 'demo' }
   try {
-    const supabase = await getSupabase()
-    const { count, error } = await supabase.from('vital_defs').select('id', { count: 'exact', head: true })
-    if (error) return { mode: 'live', ok: false, error: /does not exist|schema cache/i.test(error.message) ? 'The database tables are missing. Run the migrations in supabase/migrations.' : UNREACHABLE }
-    return { mode: 'live', ok: true, vitals: count ?? 0 }
+    const res = await fetch(`${url}/rest/v1/vital_defs?select=id&limit=1`, {
+      headers: { apikey: anonKey!, Authorization: `Bearer ${anonKey}` }, cache: 'no-store',
+    })
+    if (res.ok) return { mode: 'live', ok: true }
+    const body = await res.json().catch(() => ({})) as { code?: string; message?: string }
+    const missing = body.code === '42P01' || body.code === 'PGRST205' || /does not exist|schema cache/i.test(body.message ?? '')
+    return { mode: 'live', ok: false, error: missing ? 'The database tables are missing. Run the migrations in supabase/migrations.' : UNREACHABLE }
   } catch {
     return { mode: 'live', ok: false, error: UNREACHABLE }
   }

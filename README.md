@@ -15,7 +15,7 @@ Patients log vitals, medicines, meals and water from their phone. Their doctor f
 | | |
 | --- | --- |
 | **Works** | All four portals, end to end, against the bundled local backend (real Postgres) and in demo mode. Phone, tablet and laptop layouts. |
-| **Tested** | Typecheck clean · 410 database-rule checks · 176 API checks · 69 browser checks across all portals at three screen widths: all passing. |
+| **Tested** | Typecheck clean · 410 database-rule checks · 176 API checks · 70 browser checks across all portals at three screen widths, with no console warning or error: all passing. |
 | **Just added** | Security and data-architecture upgrade: two-step sign-in (each person's choice, required per role by an admin, enforced by the database) · clinical records can no longer be hard-deleted · audit trail with device, session and "acted for" · private doctor signatures and contact details · conditions catalogue, monitoring plans and reviews of readings · "who opened my record" and "download my record" · idle sign-out · admin Settings with data retention · write limits · instant updates on the local backend · production security headers · CI. |
 | **Clean** | No warnings anywhere: TypeScript (unused code included), the production build, the browser console in all four portals at three widths, the email/SMS sender in the editor. Two documents only (this README and AGENTS.md); no unused files. |
 | **Not yet done** | Running on a hosted Supabase project (and its Auth settings) · real email, SMS and push providers · choosing the host · reviewed legal text · server-side file scanning · sharing files (not just reports) by link · physical-phone testing. |
@@ -52,22 +52,92 @@ Built for clinical safety: nothing clinical is deleted or rewritten (readings ar
 
 Without backend keys the app runs in **demo mode** on sample data kept in memory. With them it runs in **live mode** against Postgres, either a hosted Supabase project or the bundled local backend.
 
-## Quick start
+## Install and run (from GitHub)
 
-Requires **Node.js 22+**.
+From an empty computer to signed in, with the local database and test accounts. The commands are the same in Windows Command Prompt, PowerShell, macOS Terminal and Linux.
+
+### 1. What you need
+
+| Tool | Get it | Check it (in a terminal) |
+| --- | --- | --- |
+| **Node.js 22 or newer** (npm comes with it) | https://nodejs.org (the LTS installer) | `node -v` shows `v22…` or higher |
+| **Git** | https://git-scm.com/downloads | `git --version` |
+| A browser | Chrome, Edge, Firefox or Safari | |
+
+Open a new terminal after installing either one, so it finds them.
+
+### 2. Download the code
+
+```sh
+git clone https://github.com/TTatuIntel/mCare1.git
+cd mCare1
+git checkout mcare
+```
+
+The newest work is on the `mcare` branch until it is merged into `main`; skip `git checkout mcare` once it has been. Without Git: on the GitHub page, **Code → Download ZIP**, unzip it and open a terminal in the unzipped folder (choose the `mcare` branch before downloading).
+
+### 3. Install
 
 ```sh
 npm install
-npm i --no-save @electric-sql/pglite   # local database engine (kept out of package.json on purpose)
-
-npm run backend                        # terminal 1: local Postgres + Supabase API, writes .env.local
-npm run dev                            # terminal 2: the app at http://localhost:8443
-npm run backend:seed                   # once: test accounts
+npm i --no-save @electric-sql/pglite
 ```
 
-Sign in with `test.patient@mcare.test`, `test.doctor@mcare.test`, `test.admin@mcare.test` or `test.assistant@mcare.test`, password `M7c24`.
+The first line installs the app; the second, the database engine the local backend runs on. `--no-save` is deliberate: it stays out of `package.json`. Because of that, **run the second line again after every `npm install`**, which removes packages `package.json` does not list. Takes a minute or two the first time.
 
-To try it on a phone on the same Wi-Fi, run `npm run phone` and open `http://<laptop IP>:8444`.
+### 4. Start
+
+Two terminals, both in the `mCare1` folder, both left open:
+
+```sh
+npm run backend
+```
+
+```sh
+npm run dev
+```
+
+The first starts the local database and its API (`http://127.0.0.1:54321`); on the first run it builds the database and creates the test accounts and their records, then prints the address to open. The second starts the app. Open **http://localhost:8443** in the browser.
+
+### 5. Sign in
+
+Password for every test account: **`M7c24`**
+
+| Role | Email |
+| --- | --- |
+| Patient (two weeks of readings, an open alert, medicines, messages) | `test.patient@mcare.test` |
+| Doctor (treats Patient One and Two) | `test.doctor@mcare.test` |
+| Doctor (consulting on Patient One) | `test.doctor2@mcare.test` |
+| Admin | `test.admin@mcare.test` |
+| Assistant | `test.assistant@mcare.test` |
+
+Three more (a stable patient, a patient waiting for a doctor, a doctor waiting for approval) and what each one holds: [Test accounts](#test-accounts).
+
+### Every day after that
+
+| To | Run |
+| --- | --- |
+| Start again | `npm run backend` in one terminal, `npm run dev` in another. Everything saved is still there. |
+| Stop | **Ctrl+C** in each terminal (the backend keeps a copy of the database at each clean stop). |
+| Get the latest code | `git pull`, then `npm install`, then `npm i --no-save @electric-sql/pglite`. `npm run backend` adds new database changes by itself. |
+| Put the test accounts' passwords back | `npm run backend:seed` (safe to repeat) |
+| Start over with a fresh database | stop the backend, `npm run backend:reset`, then `npm run backend` |
+| Use it on a phone on the same Wi-Fi | `npm run phone`, then open `http://<laptop address>:8444` on the phone: see [On a phone](#on-a-phone) |
+| Look around without a database | `npm run dev` alone, with no `.env.local` file: **demo mode**, sample people in the browser, nothing saved ("Try a demo account" on the welcome page) |
+
+### If something goes wrong
+
+| You see | Do |
+| --- | --- |
+| `'npm' is not recognized` / `command not found: node` | Install Node.js (step 1) and open a new terminal. |
+| PowerShell: `npm.ps1 cannot be loaded because running scripts is disabled` | Use Command Prompt instead, or run once in PowerShell: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+| `Cannot find package '@electric-sql/pglite'` | `npm i --no-save @electric-sql/pglite` (step 3, second line) |
+| The sign-in page says mCare cannot be reached | The backend is not running: `npm run backend` in another terminal. |
+| `Port 54321 is already in use` / "Another mCare backend is already using…" | A backend is already running in another terminal: use that one, or stop it there with Ctrl+C (or `npm run backend:stop`). |
+| Port 8443 is busy | Another `npm run dev` is running; close it, or start on another port: `npx vite --port 8450` |
+| "Built from the old migration history" | `npm run backend:reset`, then `npm run backend` |
+
+More cases under [Commands](#commands).
 
 ## Running mCare
 
@@ -82,26 +152,11 @@ Setup, every command, test accounts, phones, hosted Supabase and hosting.
 
 Screens never check which mode is running: `AppContext` picks the live or in-memory branch inside each action (see [AGENTS.md §3](AGENTS.md#3-code-rules)).
 
-### First time
+### First time and start
 
-Needs Node.js 22 or newer (`.mise.toml` pins Node 22 and pnpm 10).
+Step by step from a fresh download: [Install and run](#install-and-run-from-github). Needs Node.js 22 or newer (`.mise.toml` pins Node 22 and pnpm 10). PGlite (and Playwright, for the browser tests) are installed with `--no-save`, so they stay out of `package.json` and `pnpm-lock.yaml`; install them in one command when you need both (`npm i --no-save @electric-sql/pglite playwright`), since each `npm install` removes what `package.json` does not list.
 
-```sh
-npm install                               # the app's dependencies
-npm i --no-save @electric-sql/pglite      # the database engine for the local backend and the tests
-```
-
-`--no-save` is deliberate: PGlite (and Playwright, for the browser tests) stay out of `package.json` and `pnpm-lock.yaml`.
-
-### Start
-
-```sh
-npm run backend        # terminal 1: the database and its API (http://127.0.0.1:54321)
-npm run dev            # terminal 2: the app (http://localhost:8443)
-npm run backend:seed   # only after a reset of an older database: a new one is seeded by npm run backend
-```
-
-`npm run backend` applies any migration the database has not had yet, prints the addresses to open and writes `.env.local`, which switches the app to live mode (the dev server restarts by itself). A migration added while it runs is applied the first time the app asks for something it adds.
+`npm run backend` applies any migration the database has not had yet, seeds a new database, prints the addresses to open and writes `.env.local`, which switches the app to live mode (the dev server restarts by itself). A migration added while it runs is applied the first time the app asks for something it adds.
 
 ### Test accounts
 
@@ -241,7 +296,7 @@ For push, the app also needs the **public** key in its build environment: `VITE_
 | --- | --- | --- |
 | `npm run typecheck` | The whole app and the Edge Function (`tsc`, unused code is an error). | After changing `src/` or `supabase/functions/`. |
 | `npm test` | Every access and clinical rule in SQL, as each kind of user (`test:db`), and every workflow over HTTP with the real client (`test:api`). | After changing a migration or the local backend. |
-| `npm run test:ui` | All four portals in headless Chromium at phone, tablet and laptop width; each step confirmed in the database; any console warning or error fails it. Needs `npm i --no-save playwright && npx playwright install chromium`. | After changing screens (several minutes). |
+| `npm run test:ui` | All four portals in headless Chromium at phone, tablet and laptop width; each step confirmed in the database; any console warning or error fails it. Needs `npm i --no-save @electric-sql/pglite playwright && npx playwright install chromium`. | After changing screens (several minutes). |
 
 Each suite builds its own in-memory database from `supabase/migrations`, so none needs a running backend. CI (`.github/workflows/ci.yml`) runs typecheck, `npm test` and a build on every push, and the browser suite on pull requests to `main` and nightly. Writing a check: [AGENTS.md §12](AGENTS.md#12-testing).
 
@@ -294,5 +349,5 @@ Two documents, kept in step with the code:
 
 | Document | For |
 | --- | --- |
-| [README](#) | Anyone running or deploying mCare: what it is, status, setup, test accounts, phones, commands, environment, hosted Supabase, hosting, the notification sender, testing |
+| [README](#) | Anyone running or deploying mCare: what it is, status, installing from GitHub, setup, test accounts, phones, commands, environment, hosted Supabase, hosting, the notification sender, testing |
 | [AGENTS.md](AGENTS.md) | Anyone changing the code (people and coding agents): code rules, a map of every file, where each change goes, recipes, the data model, the database, portals, notifications, security, testing and status |
