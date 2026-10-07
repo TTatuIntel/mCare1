@@ -128,7 +128,7 @@ What the person sees or says, and where it lives. Screen titles are the `Page` /
 
 ## 1. Snapshot
 
-*As of 3 October 2026, branch `consulting-messages-and-docs` (not yet merged into `main`), features at `bcbab19`. Full detail: [docs/STATUS.md](docs/STATUS.md).*
+*As of 7 October 2026, branch `features` (not yet merged into `main`; `consulting-messages-and-docs` is merged). Full detail: [docs/STATUS.md](docs/STATUS.md).*
 
 mCare is remote patient monitoring. Patients log vitals, medicines, meals and water; their doctor follows them, answers alerts, prescribes, writes notes and care plans and issues signed reports; administrators and mCare assistants run assignments, approvals, support and the audit trail.
 
@@ -143,9 +143,9 @@ There is no patient database, doctor database or admin database: `src/patient`, 
 | Local backend | `supabase/dev/server.mjs`: the same migrations on PGlite, served as the Supabase API |
 | Sending | `supabase/functions/deliver`: Edge Function for queued email, SMS, push |
 
-**State.** All four portals are feature-complete against the local backend. Last verified run: typecheck clean · `test:db` 354/0 · `test:api` 153/0 · `test:ui` 66/0.
+**State.** All four portals are feature-complete against the local backend. Last verified run: typecheck clean · `test:db` 356/0 · `test:api` 154/0 · `test:ui` 67/0.
 
-**Recently finished** (`bcbab19`, tested): patients message consulting doctors in private threads (migration `0011`); sign-up names each missing field; test OTPs shown only in dev builds; auth/welcome spacing. The docs restructure is a separate commit.
+**Recently finished** (branch `features`, tested): delete read notifications, one or all read (migration `0012`); live updates every 2 s on the local backend. Before that (merged): patients message consulting doctors in private threads (migration `0011`); clearer sign-up errors.
 
 **Pending** (not started): hosted Supabase project, real email/SMS/push providers, reviewed legal text, server-side file scanning, files via share links, physical-phone testing, CI. See [STATUS.md → Pending](docs/STATUS.md#pending-before-production).
 
@@ -202,7 +202,7 @@ Test accounts (password `A1b23`): `test.patient@mcare.test`, `test.doctor@mcare.
 - **Live and demo.** `AppContext` loads the record from the backend at sign-in (live) or from `demoData` (demo); a new action needs both a live branch (`if (LIVE) return run(() => api.something())`) and the in-memory one, which mirrors the database's rule. Never put sample people or sample numbers in a screen: show an `EmptyState`.
 - **The database decides.** Access rules, clinical rules (grading, alerts), notifications and the audit trail belong to `supabase/migrations`, not to a screen. A screen may hide a button the person cannot use; it must never be the only thing stopping them. The browser cannot write the audit trail: audit inside the trigger or function that makes the change (`audit_event(...)`).
 - **Staying current.** A table that belongs to a patient needs the `zz_touch_patient` trigger, or open screens will not learn of its changes.
-- **Migrations.** Add a new numbered file (next: `0012_…`); never edit one that has been applied. New functions must have their default grants revoked ([DATABASE.md → Adding a change](docs/DATABASE.md#adding-a-change)).
+- **Migrations.** Add a new numbered file (next: `0013_…`); never edit one that has been applied. New functions must have their default grants revoked ([DATABASE.md → Adding a change](docs/DATABASE.md#adding-a-change)).
 - **Sending.** Never send email, SMS or push from a screen: the database queues every channel ([§7](#7-notifications-and-delivery)).
 - **Errors** shown to people are sentences: every `api/actions.ts` request goes through `ok(…)`, which throws an `ApiError` whose message (`explain()`) can be shown as it is; `run()` in `AppContext` turns it into `{ ok: false, error }`.
 
@@ -248,7 +248,7 @@ Grep anchors are given instead of line numbers where code moves. After any recip
 
 Pattern to copy: doctor ratings (`doctor_ratings` → `rateDoctor`).
 
-1. **Migration** `supabase/migrations/0012_<what>.sql`: the table with `patient_id`, constraints, `client_ref uuid` + `create unique index <t>_client_ref_key on <t> (client_ref) where client_ref is not null` if a form creates it; RLS + policies + `<t>_active_only` + `zz_touch_patient` trigger; any multi-row function as `security definer` with `audit_event`/`notify_*` and explicit grants. Exact SQL: [DATABASE.md → Adding a change](docs/DATABASE.md#adding-a-change).
+1. **Migration** `supabase/migrations/0013_<what>.sql`: the table with `patient_id`, constraints, `client_ref uuid` + `create unique index <t>_client_ref_key on <t> (client_ref) where client_ref is not null` if a form creates it; RLS + policies + `<t>_active_only` + `zz_touch_patient` trigger; any multi-row function as `security definer` with `audit_event`/`notify_*` and explicit grants. Exact SQL: [DATABASE.md → Adding a change](docs/DATABASE.md#adding-a-change).
 2. **Tests**: `rules.test.mjs` (allowed + every refused role), `api.test.mjs` if the app calls it. `npm test`.
 3. **Type** in `src/shared/lib/types.ts`.
 4. **Read**: `src/shared/api/records.ts` — add to `interface Records`, query in `loadRecords` (`rows('<table>')` in the `Promise.all`), map snake_case → camelCase in the returned object.
@@ -455,7 +455,7 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 
 | File | Holds |
 | --- | --- |
-| `migrations/0001`–`0011` | The database. One line each: [DATABASE.md → Migrations](docs/DATABASE.md#migrations); which file defines which function: [the index](docs/DATABASE.md#function-and-trigger-index). |
+| `migrations/0001`–`0012` | The database. One line each: [DATABASE.md → Migrations](docs/DATABASE.md#migrations); which file defines which function: [the index](docs/DATABASE.md#function-and-trigger-index). |
 | `dev/server.mjs` (786) | Local backend: PGlite + auth, REST (PostgREST subset, RPC), storage, `/__dev/auth-codes`, local sender and jobs. `startBackend(options)`. |
 | `dev/bootstrap.sql` | Stubs Supabase's `auth` schema and roles. |
 | `dev/seed.mjs` | Test accounts (local or hosted). |

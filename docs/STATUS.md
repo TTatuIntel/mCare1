@@ -2,18 +2,18 @@
 
 What works, what is in progress, and what is still to do. **Update this file whenever you finish, start or discover something** (see [AGENTS.md §8](../AGENTS.md#8-keeping-these-docs-true)).
 
-Last updated: **3 October 2026** · branch `consulting-messages-and-docs` (not yet merged into `main`) · features at commit `bcbab19`.
+Last updated: **7 October 2026** · branch `features` (not yet merged into `main`).
 
 ## Verified
 
-Run on 3 October 2026 on the code committed in `bcbab19`.
+Run on 5 October 2026 on the code committed on branch `features`.
 
 | Check | Result |
 | --- | --- |
 | `npm run typecheck` | clean |
-| `npm run test:db` | 354 passed, 0 failed |
-| `npm run test:api` | 153 passed, 0 failed |
-| `npm run test:ui` | 66 passed, 0 failed (phone, tablet, laptop) |
+| `npm run test:db` | 356 passed, 0 failed |
+| `npm run test:api` | 154 passed, 0 failed |
+| `npm run test:ui` | 67 passed, 0 failed (phone, tablet, laptop) |
 
 Never verified: a hosted Supabase project, any real email / SMS / push provider, a physical phone.
 
@@ -23,7 +23,14 @@ Nothing at the moment. Check `git status` too: work may have started since this 
 
 ## Recently finished
 
-On branch `consulting-messages-and-docs`, tested (see above). Merge into `main` when ready.
+On branch `features` (pushed, not yet merged into `main`), tested (see above).
+
+| Change | Files |
+| --- | --- |
+| **Delete read notifications.** Each read notification has a red delete button; "Clear read (N)" removes them all. Unread ones cannot be deleted. Email/SMS/push delivery records are kept. | `supabase/migrations/0012_clear_read_notifications.sql`, `src/shared/api/actions.ts` (`deleteNotification`, `clearReadNotifications`), `src/shared/state/AppContext.tsx`, `src/shared/ui/NotificationBell.tsx`, `supabase/dev/server.mjs` (outbox label), `rules.test.mjs`, `api.test.mjs`, `ui.test.mjs` |
+| **Faster updates on the local backend.** The change check runs every 2 s locally (no Realtime there); hosted stays 15 s behind Realtime. | `src/shared/state/AppContext.tsx` (`CHECK_EVERY_MS`), `docs/DATA_MODEL.md`, `docs/RUNNING.md` |
+
+Earlier, on `consulting-messages-and-docs` (merged into `main` as PR #1):
 
 | Change | Files |
 | --- | --- |
@@ -78,7 +85,7 @@ On branch `consulting-messages-and-docs`, tested (see above). Merge into `main` 
 | Support moving / cancelling an appointment | Done, no browser test |
 | Doctor working hours, visit length, days away; slot picker | Done; slot picker with a timetable: no browser test |
 | Support tickets | Done |
-| In-app notifications, mark read | Done |
+| In-app notifications, mark read, delete read ones | Done |
 | Delivery queue (email, SMS, push), choices per person, delivery report | Done (queue); provider calls Unverified |
 | Push on the device (service worker, subscription) | Unverified: needs VAPID keys and https |
 
@@ -100,7 +107,7 @@ On branch `consulting-messages-and-docs`, tested (see above). Merge into `main` 
 | --- | --- |
 | Demo mode (in-memory sample data) | Done |
 | Local backend (PGlite + Supabase API subset) | Done |
-| Live updates: change token polling (15 s) | Done |
+| Live updates: change token polling (2 s local, 15 s hosted) | Done |
 | Live updates: Realtime on hosted Supabase | Unverified |
 | Responsive layout: phone, tablet, laptop | Done (emulated) |
 | Phone over Wi-Fi (`npm run phone`) | Done by hand; not in the test suite |

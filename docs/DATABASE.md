@@ -22,7 +22,9 @@ The first ten files are the **baseline**. On 3 October 2026, before any hosted d
 | `0010_reference_data_jobs.sql` | The vital definitions (seed rows), the shared change topics, the storage bucket, scheduled jobs (`pg_cron`) and Realtime publication, each only where the feature exists. |
 | `0011_patient_doctor_messages.sql` | Replaces the `messages_send` policy: a patient may message their treating doctor and each current consulting doctor (and they the patient), each pair private; an ended relationship keeps its thread read-only. |
 
-**Next file number: `0012`.**
+| `0012_clear_read_notifications.sql` | Policy `notifications_clear`: a person may delete their own notifications once read. A delivery row now outlives its notification (`on delete set null`), so what was sent stays on record. |
+
+**Next file number: `0013`.**
 
 ### Function and trigger index
 
@@ -37,10 +39,11 @@ The first ten files are the **baseline**. On 3 October 2026, before any hosted d
 | `0008` | `claim_deliveries` `claim_deliveries_for` `delivery_report` `finish_delivery` `forget_push_subscription` `guard_message` `guard_notification` `message_notify` `queue_notification_delivery` `sms_number` `sms_worthy` | `guard_message` `message_notify` `guard_notification` `zz_queue_delivery` |
 | `0009` | policies only (`<table>_<verb>` names, e.g. `messages_read`, `messages_send`) and grants | |
 | `0011` | policy `messages_send` (replaced) | |
+| `0012` | policy `notifications_clear`; `notification_deliveries.notification_id` foreign key now `on delete set null` | |
 
 ### Adding a change
 
-1. Add a new numbered file (`0012_<what>.sql`) with a two-line `--` header saying what it does. Never edit a file that has been applied to a database you keep: the local backend and every test run apply files in order.
+1. Add a new numbered file (`0013_<what>.sql`) with a two-line `--` header saying what it does. Never edit a file that has been applied to a database you keep: the local backend and every test run apply files in order.
 2. A table that belongs to a patient needs, **in the same migration** (the loops in `0002` and `0009` only covered the tables that existed then, so a new table gets none of this automatically):
    ```sql
    -- patient_id uuid not null references patients(id) on delete cascade

@@ -58,7 +58,7 @@ Use the built app: `npm run phone`, then open `http://<laptop address>:8444` on 
 - **Address**: `ipconfig` gives the Wi-Fi adapter's IPv4 address. A VirtualBox or VPN adapter address (such as `192.168.56.1`) is not reachable from the phone.
 - **Guest or client-isolation Wi-Fi** blocks devices from seeing each other; use a hotspot or home network.
 
-Try: log a reading on the phone and watch it reach the laptop within about 15 seconds; sign in as the test doctor on the laptop, resolve the alert with a note, and watch it arrive on the phone.
+Try: log a reading on the phone and watch it reach the laptop within about 2 seconds; sign in as the test doctor on the laptop, resolve the alert with a note, and watch it arrive on the phone.
 
 ## Commands
 

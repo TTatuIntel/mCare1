@@ -38,8 +38,12 @@ const START = LIVE
       messages: [] as PatientMessage[], clinicalNotes: [] as ClinicalNote[], notifications: [] as AppNotification[], audit: [] as AuditEntry[] }
   : DEMO
 
-/** How often live mode asks "has anything changed for me?" and how often it reloads regardless. */
-const CHECK_EVERY_MS = 15_000
+/**
+ * How often live mode asks "has anything changed for me?" and how often it reloads regardless.
+ * The local backend has no Realtime push, so the check is the only way it learns of a change and runs often;
+ * hosted Supabase pushes changes as they happen, so there the check is only a safety net.
+ */
+const CHECK_EVERY_MS = localBackend ? 2_000 : 15_000
 const RELOAD_EVERY_MS = 120_000
 
 /* ─── Context ───────────────────────────────────────────────────────── */
@@ -219,6 +223,9 @@ interface Ctx extends DocumentApi {
   sendWelcomeEmail: (userId: string) => void
   markNotificationRead: (id: string) => Saved
   markAllNotificationsRead: (userId: string) => Saved
+  /** Read notifications only; an unread one stays until it has been seen. */
+  deleteNotification: (id: string) => Saved
+  clearReadNotifications: (userId: string) => Saved
   audit: AuditEntry[]
   /** Demo mode only. In live mode the database writes the audit trail, with the change it describes. */
   logAudit: (action: string, detail: string) => void
@@ -508,7 +515,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }
 
   // Live mode: keep what is on screen current. The database keeps a counter of every change this person may see;
-  // one short token made from those counters is checked often and cheaply, and a different token means "reload".
+  // one short token made from those counters is checked often and cheaply (every 2 s on the local backend, 15 s hosted),
+  // and a different token means "reload".
   // On hosted Supabase the same counters are also pushed (below), so the check is then only a safety net.
   useEffect(() => {
     if (!LIVE || !currentUserId) return
@@ -1358,6 +1366,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setNotifications(prev => prev.map(n => n.userId === userId ? { ...n, read: true } : n))
     return LIVE ? save(() => api.markAllNotificationsRead(userId)) : done()
   }
+  // Gone from the list at once, read ones only (the database's rule); the save follows.
+  const deleteNotification = (id: string): Saved => {
+    if (!notifications.some(n => n.id === id && n.read)) return refused('Only a read notification can be deleted.')
+    setNotifications(prev => prev.filter(n => !(n.id === id && n.read)))
+    return LIVE ? save(() => api.deleteNotification(id)) : done()
+  }
+  const clearReadNotifications = (userId: string): Saved => {
+    setNotifications(prev => prev.filter(n => !(n.userId === userId && n.read)))
+    return LIVE ? save(() => api.clearReadNotifications(userId)) : done()
+  }
 
   /* ─ account self-service: password recovery (demo mode; live mode uses the sign-in service, see shared/auth/LiveAuth) ───
      Every password change — self-service or forgotten — is gated behind a
@@ -1777,7 +1795,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       appointments, addAppointment, updateAppointment,
       reportRequests, requestReport, fulfillReportRequest, declineReportRequest,
       messages, sendMessage, markMessagesRead,
-      notifications, notify, markNotificationRead, markAllNotificationsRead,
+      notifications, notify, markNotificationRead, markAllNotificationsRead, deleteNotification, clearReadNotifications,
       emails, emailsFor, texts, textsFor, resendVerification, verifyByLink, sendWelcomeEmail,
       audit, logAudit, logPatientView, canCorrect,
       changePassword, requestPasswordReset, verifyResetCode, verifyResetLink,

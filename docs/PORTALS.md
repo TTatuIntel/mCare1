@@ -24,7 +24,7 @@ Tabs: Home (`home`) · Vitals (`vitals`) · Meds (`medicine`) · Chat (`messages
 | Care team | `CareTeamTab`, `DoctorProfileSheet` | Assigned and consulting doctors, care plans, directory, request a doctor (one pending), doctor profile, rating. |
 | Messages | `MessagesTab` (shared `Inbox`, `ChatThread`) | One private thread with the treating doctor and one with each current consulting doctor; former doctors' threads stay read-only; an unsent message stays in the box with the reason. |
 | Documents | `DocsTab`, `ReportRequest`, shared `documents/*` | Official documents once released; upload with type and content checks; view, download, zip; private or shared; delete and restore; access history; share link for report content; ask for a signed vitals report. |
-| Notifications | shared `NotificationBell`, `NotificationsSheet` | Written by the database; mark one or all read; choose email, SMS and push. |
+| Notifications | shared `NotificationBell`, `NotificationsSheet` | Written by the database; mark one or all read; delete a read one (red bin) or "Clear read"; choose email, SMS and push. |
 | Profile, privacy | `ProfileTab`, `HealthEditSheet`, `EmergencyContacts`, shared `profile/*` | Details and photo; health profile; emergency contacts (one next of kin); who can see the record; consent; deactivate account. |
 | Failure states | `PortalShell`, `Page` | Every form shows busy and error states; a banner says when mCare cannot be reached and how old the data is. Nothing claims to be saved before it is. |
 

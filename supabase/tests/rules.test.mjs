@@ -440,6 +440,18 @@ check('the receiver can mark it read but not edit it', (await as(ID.doc, `update
   && (await denied(ID.doc, `update messages set content = 'forged' where id = $1`, [mid.id])).blocked)
 check('a notification can be marked read, not rewritten', (await as(ID.pat2, `update notifications set read = true where id = (select id from notifications limit 1) returning id`)).length === 1
   && (await denied(ID.pat2, `update notifications set title = 'x'`)).blocked)
+{
+  const seen = (await as(ID.pat2, `select id from notifications where read limit 1`))[0].id
+  const unread = (await as(ID.pat2, `select id from notifications where not read limit 1`))[0].id
+  const sent = (await one(`select count(*)::int n from notification_deliveries where notification_id = $1`, [seen])).n
+  check('an unread notification cannot be deleted, nor someone else\'s',
+    (await as(ID.pat2, `delete from notifications where id = $1 returning id`, [unread])).length === 0
+    && (await as(ID.doc, `delete from notifications where id = $1 returning id`, [seen])).length === 0)
+  check('the owner deletes a read notification; what was sent stays on record',
+    (await as(ID.pat2, `delete from notifications where id = $1 returning id`, [seen])).length === 1
+    && (await one(`select count(*)::int n from notifications where id = $1`, [seen])).n === 0
+    && (await one(`select count(*)::int n from notification_deliveries where user_id = $1 and notification_id is null`, [ID.pat2])).n >= sent)
+}
 
 // The patient's own record.
 await as(ID.pat2, `select save_health_profile($1)`, [{ sex: 'female', blood_type: 'A+', no_known_allergies: true, conditions: ['Asthma', 'Asthma', ' '],

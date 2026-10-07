@@ -40,7 +40,7 @@ Account status: `pending_approval` (a doctor not yet approved), `active`, `suspe
 | Availability (`doctor_hours`, `doctor_time_off`) | doctor | doctor | doctor | hours: everyone signed in. Why a doctor is away: the doctor and staff | |
 | Message (`messages`) | one patient–doctor pair | patient, or a current treating or consulting doctor of that patient | receiver marks read | only the two people in that pair | cannot be edited; an ended relationship keeps its thread read-only |
 | Document (`documents`) | patient | patient (upload), treating doctor (official) | owner; doctor signs, releases, corrects | see `can_open_document` | `document_events`; soft delete, versions |
-| Notification (`notifications`) | the recipient | the database only | recipient marks read | recipient | each is queued for delivery |
+| Notification (`notifications`) | the recipient | the database only | recipient marks read | recipient, once read (`notifications_clear`, `0012`); the delivery record stays | each is queued for delivery |
 | Push device (`push_subscriptions`) | the person | the person | the person | the person | |
 | Support request (`support_tickets`) | the person asking | anyone | support staff answer it once | the person, support staff | |
 | Audit entry (`audit_log`) | mCare | the database only | nobody | staff with "View audit logs" | append-only |
@@ -94,7 +94,7 @@ In code: screen → portal hook (`usePatient` / `useDoctor` / `useAdmin`) → `A
 The database counts changes: `patient_changes` has one row per patient, bumped by a trigger on every table that belongs to a patient, and `system_changes` one row per shared list (`people`, `settings`). `my_change_token()` turns the rows a person may see into one short value.
 
 - **Hosted Supabase**: the two tables are published for Realtime; the app subscribes and reloads when told.
-- **Everywhere, including the local backend**: the app asks for the token every 15 seconds, on returning to the tab and on reconnecting, and reloads when it differs.
+- **Everywhere, including the local backend**: the app asks for the token every 2 seconds on the local backend (which has no Realtime) and every 15 seconds hosted, on returning to the tab and on reconnecting, and reloads when it differs.
 
 The counters say only that something changed; what is then loaded is still decided by each table's row rules.
 

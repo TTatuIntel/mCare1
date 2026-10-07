@@ -200,6 +200,15 @@ check('notifications are marked read, one or all', mine.length > 2
   && (await pat.from('notifications').update({ read: true }).eq('id', mine[0].id).select()).data?.length === 1
   && (await pat.from('notifications').update({ read: true }).eq('user_id', patId).eq('read', false).select()).data?.length === mine.length - 1
   && (await pat.from('notifications').update({ read: true }).eq('user_id', docId).select()).data?.length === 0)
+const docNotes = (await doc.from('notifications').select('id').eq('read', false)).data
+check('a read notification can be deleted, one or all read; an unread one cannot', docNotes.length > 2
+  && (await doc.from('notifications').delete().eq('id', docNotes[0].id).select()).data?.length === 0
+  && (await doc.from('notifications').update({ read: true }).eq('id', docNotes[0].id).select()).data?.length === 1
+  && (await pat.from('notifications').delete().eq('id', docNotes[0].id).select()).data?.length === 0
+  && (await doc.from('notifications').delete().eq('id', docNotes[0].id).eq('read', true).select()).data?.length === 1
+  && (await doc.from('notifications').update({ read: true }).eq('id', docNotes[1].id).select()).data?.length === 1
+  && (await doc.from('notifications').delete().eq('user_id', docId).eq('read', true).select()).data?.length === 1
+  && (await doc.from('notifications').select('id')).data?.length === docNotes.length - 2)
 
 const rr = await pat.from('report_requests').insert({ patient_id: patId, doctor_id: docId, period_days: 30, reason: 'Insurance' }).select().single()
 check('the patient asks for a vitals report; the doctor is told', rr.data?.status === 'pending' && (await doc.from('notifications').select('id').like('title', 'Report request:*')).data?.length === 1, rr.error?.message)

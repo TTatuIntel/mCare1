@@ -713,7 +713,7 @@ export async function startBackend(options = {}) {
     for (;;) {
       const { rows } = await q(`select * from public.claim_deliveries(20)`)
       for (const d of rows) {
-        outbox.unshift({ to: d.to_address, kind: d.notification_id ? 'notification' : 'invitation', channel: d.channel, subject: d.subject, body: d.body, at: Date.now() })
+        outbox.unshift({ to: d.to_address, kind: d.notification_id || d.user_id ? 'notification' : 'invitation', channel: d.channel, subject: d.subject, body: d.body, at: Date.now() })
         outbox.length = Math.min(outbox.length, 50)
         const icon = d.channel === 'sms' ? '📱' : d.channel === 'push' ? '🔔' : '✉ '
         say(`  ${icon} ${d.channel} → ${d.channel === 'push' ? 'device' : d.to_address}: ${d.subject}${d.body ? ` · ${d.body}` : ''}  (local backend: nothing is sent)`)

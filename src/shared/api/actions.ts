@@ -358,6 +358,11 @@ export const markNotificationRead = async (id: string) => { await ok((await db()
 export const markAllNotificationsRead = async (userId: string) => {
   await ok((await db()).from('notifications').update({ read: true }).eq('user_id', userId).eq('read', false))
 }
+/** Only a read notification can be deleted (the database refuses an unread one). */
+export const deleteNotification = async (id: string) => { await ok((await db()).from('notifications').delete().eq('id', id).eq('read', true)) }
+export const clearReadNotifications = async (userId: string) => {
+  await ok((await db()).from('notifications').delete().eq('user_id', userId).eq('read', true))
+}
 
 export const requestReport = async (patientId: string, doctorId: string, periodDays: number, reason: string) => {
   await ok((await db()).from('report_requests').insert({ patient_id: patientId, doctor_id: doctorId, period_days: periodDays, reason: reason.trim() }))
