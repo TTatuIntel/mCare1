@@ -137,7 +137,7 @@ What the person sees or says, and where it lives. Screen titles are the `Page` /
 
 ## 1. Snapshot
 
-*As of 4 October 2026, branch `mcare` (not yet merged into `main`): the security and data-architecture upgrade (migrations `0012`–`0016`), the docs cleanup and the no-warnings work are committed (`7970e04`, `c42b928`). Full detail: [§13 Status](#13-status).*
+*As of 7 October 2026, branch `main`: the security and data-architecture upgrade (migrations `0012`–`0016`), the docs cleanup and the no-warnings work are committed (`7970e04`, `c42b928`, merged to `main` in `ff542cc`). Full detail: [§13 Status](#13-status).*
 
 mCare is remote patient monitoring. Patients log vitals, medicines, meals and water; their doctor follows them, answers alerts, prescribes, writes notes and care plans and issues signed reports; administrators and mCare assistants run assignments, approvals, support and the audit trail.
 
@@ -152,7 +152,7 @@ There is no patient database, doctor database or admin database: `src/patient`, 
 | Local backend | `supabase/dev/server.mjs`: the same migrations on PGlite, served as the Supabase API |
 | Sending | `supabase/functions/deliver`: Edge Function for queued email, SMS, push |
 
-**State.** All four portals are feature-complete against the local backend. Last verified run (4 October): typecheck clean · `test:db` 410/0 · `test:api` 176/0 · `test:ui` 70/0 (no console warning or error) · build without warnings.
+**State.** All four portals are feature-complete against the local backend. Last verified run (7 October): typecheck clean · `test:db` 410/0 · `test:api` 176/0 · `test:ui` 70/0 (no console warning or error) · build without warnings.
 
 **Recently finished** (`7970e04`, tested): the security and data-architecture upgrade (the Security & Data Architecture Implementation Plan; mapping in [§11 Security → The plan and the code](#the-plan-and-the-code)): clinical records cannot be hard-deleted; two-step sign-in for every role (each person's choice, required per role by an admin), enforced in SQL; audit entries with session, device, address and "on behalf of"; private doctor signatures and a doctor directory; conditions catalogue, monitoring plans, reviews of readings; who opened a record; download my record; write limits; idle sign-out; admin Settings and retention; instant change notices on the local backend; production security headers; CI. Controls: [§11 Security](#11-security). Also the two-document cleanup and no warnings anywhere (typecheck with unused code as errors, build, browser console).
 
@@ -1422,11 +1422,11 @@ Covered by rule and API tests only: editing vital definitions, doctor approval, 
 
 What works, what is in progress, and what is still to do. **Update this section whenever you finish, start or discover something** (see [§14](#14-keeping-these-docs-true)).
 
-Last updated: **4 October 2026** · branch `mcare` · everything below is committed (latest `2071743`) except the row under In progress.
+Last updated: **7 October 2026** · branch `main` · everything below is committed (latest `ff542cc`) except the row under In progress.
 
 ### Verified
 
-Run on 4 October 2026 on the working tree.
+Run on 7 October 2026 on the working tree.
 
 | Check | Result |
 | --- | --- |
@@ -1445,12 +1445,13 @@ Check `git status` too: work may have started since this was written.
 
 | Change | Files |
 | --- | --- |
-| **No console errors after sign-out.** The sign-in page's "is mCare reachable?" check asked with the session that had just ended, so the backend refused it (a 401 in the console) right after "Sign out". It now asks with the public key only, so it never depends on who is signed in. The browser suite's console check passes in all four portals at three widths. | `src/shared/api/supabase.ts` (`checkBackend`), `AGENTS.md`, `README.md` |
+| **The sign-in pill can be clicked at every width.** `AuthButton` lifts 2px on hover (`hover:-translate-y-0.5`), so a pointer parked within those 2px of its bottom edge makes it move out from under the pointer and back for ever; Playwright reported "element is not stable" and `test:ui` stopped at the doctor's sign-in. The browser test moves the pointer off the pill before clicking. The hover lift itself is unchanged (a real pointer landing in that band would still jitter — a design question, not a test one). | `supabase/tests/ui.test.mjs` (`signIn`) |
 
 ### Recently finished
 
 | Change | Commit |
 | --- | --- |
+| **No console errors after sign-out.** The sign-in page's "is mCare reachable?" check asked with the session that had just ended, so the backend refused it (a 401 in the console) right after "Sign out". It now asks with the public key only (`checkBackend`), so it never depends on who is signed in. | `262241f` (merged to `main` in `ff542cc`) |
 | **Security and data-architecture upgrade** (the Security & Data Architecture Implementation Plan; how each item is met: [§11 Security → The plan and the code](#the-plan-and-the-code)). Six additive migrations, nothing existing removed. A patient with a clinical record can no longer be hard-deleted. Two-step sign-in (authenticator app) for every role, each person's choice, required per role when an admin says so, enforced by the database; admin reset for a lost phone. Accounts are `unverified` until the email is confirmed. Audit entries say which session, device and address, and whom a staff member acted for; profile, health-profile, contact, tracked-vital and doctor-credential changes audited; the profile email follows the sign-in email; an approved doctor's licence changes only through an approver. Doctors' signatures private; patients see doctors' contact details only for doctors they deal with (directory otherwise). Conditions catalogue; the treating doctor's monitoring plan per vital; reviews of readings; who opened a record; the patient downloads their own record; message read time; write limits; idle sign-out; admin Settings (two-step sign-in, idle minutes, retention, conditions) with retention applied nightly; support corrects someone's details with a reason. The "active accounts only" rule worked out once per query. Local backend: TOTP endpoints, request headers for the audit, instant change notices (`/__dev/changes`). Production security headers (`dist/_headers`), CI workflow, `.env.example`. Sign-in providers: Google and Apple only. | `7970e04` |
 | **Project cleanup.** The eight files in `docs/` merged into this guide (§7–§13) and the README (running, hosting, the notification sender); `docs/` removed. `public/robots.txt` removed (the page's `robots` meta tag and a new `X-Robots-Tag` header keep search engines out). The one-off `supabase/dev/_audit.mjs` removed; its useful check is now a rules test (every patient table has `zz_touch_patient`). Code comments that pointed at `docs/` now point at the README. | `7970e04` |
 | **Welcome page "Sign in"** easier to see: the action word larger than the question, with a larger tap area. | `7970e04` |

@@ -93,6 +93,10 @@ async function session(size = 'phone') {
       if (!(await page.getByPlaceholder('you@example.com').isVisible().catch(() => false))) await page.getByRole('button', { name: 'Sign in', exact: true }).first().click()
       await page.getByPlaceholder('you@example.com').fill(email)
       await page.getByPlaceholder('Enter your password').fill(password)
+      // The mouse is still parked where the welcome page's "Sign in" link was, which can land
+      // inside the Sign In pill's 2px hover lift: the pill moves out from under it, comes back
+      // and never settles, so Playwright reports "element is not stable". Move it off first.
+      await page.mouse.move(0, 0)
       await page.getByRole('button', { name: 'Sign In', exact: true }).click()
     },
   }

@@ -10,7 +10,7 @@ Patients log vitals, medicines, meals and water from their phone. Their doctor f
 
 ## Status
 
-*As of 4 October 2026. Detail: [AGENTS.md §13 Status](AGENTS.md#13-status); security: [AGENTS.md §11 Security](AGENTS.md#11-security).*
+*As of 7 October 2026. Detail: [AGENTS.md §13 Status](AGENTS.md#13-status); security: [AGENTS.md §11 Security](AGENTS.md#11-security).*
 
 | | |
 | --- | --- |
