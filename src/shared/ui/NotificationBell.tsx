@@ -4,6 +4,7 @@ import { useApp } from '@/shared/state/AppContext'
 import type { AppNotification } from '@/shared/lib/types'
 import { ago, dayKey } from '@/shared/lib/vitals'
 import { CloseButton } from './BottomSheet'
+import { useAct } from './controls'
 
 /* ─── Notifications bell + sheet ─── */
 const NOTIF_ICON: Record<AppNotification['kind'], string> = {
@@ -12,7 +13,8 @@ const NOTIF_ICON: Record<AppNotification['kind'], string> = {
 }
 /** `onNavigate` gets the screen to open and, when the notification says so, the record it is about. */
 export function NotificationBell({ onNavigate }: { onNavigate: (tab: string, about?: AppNotification['resource']) => void }) {
-  const { currentUser, notifications, markNotificationRead, markAllNotificationsRead, now } = useApp()
+  const { currentUser, notifications, markNotificationRead, markAllNotificationsRead, deleteNotification, clearReadNotifications, now } = useApp()
+  const act = useAct()
   const [open, setOpen] = useState(false)
   const [filter, setFilter] = useState<'all' | 'unread'>('all')
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null)
@@ -68,6 +70,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (tab: string, abo
   if (!currentUser) return null
   const mine = notifications.filter(n => n.userId === currentUser.id)
   const unread = mine.filter(n => !n.read).length
+  const read = mine.length - unread
   const visible = filter === 'unread' ? mine.filter(n => !n.read) : mine
   const today = dayKey(new Date(now))
   const groups = [
@@ -101,6 +104,15 @@ export function NotificationBell({ onNavigate }: { onNavigate: (tab: string, abo
                 className="whitespace-nowrap text-[11px] font-semibold text-teal-700 hover:text-teal-900 disabled:text-gray-300">Mark all read</button>
               <CloseButton onClick={() => setOpen(false)} />
             </header>
+            {(read > 0 || act.error) && (
+              <div className="flex items-center justify-end gap-2 border-b border-gray-100 px-4 py-1.5">
+                {act.error && <span className="min-w-0 flex-1">{act.node}</span>}
+                {read > 0 && (
+                  <button type="button" disabled={act.busy} onClick={() => act.run(() => clearReadNotifications(currentUser.id))}
+                    className="whitespace-nowrap text-[11px] font-semibold text-red-600 hover:text-red-700 disabled:text-gray-300">Clear read ({read})</button>
+                )}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-1 border-b border-gray-100 px-4 py-2" role="tablist" aria-label="Notification filter">
               {([
                 { id: 'all', label: 'All', count: mine.length },
@@ -125,9 +137,10 @@ export function NotificationBell({ onNavigate }: { onNavigate: (tab: string, abo
                   <h3 className="mb-2 px-1 text-[10px] font-bold uppercase tracking-wide text-gray-400">{group.title}</h3>
                   <div className="flex flex-col gap-1.5">
                     {group.items.map(n => (
-                      <button key={n.id} type="button" aria-label={`${n.title}, ${n.read ? 'read' : 'unread'}, ${ago(n.at, now)}`}
+                      <div key={n.id} className="flex items-start gap-1">
+                      <button type="button" aria-label={`${n.title}, ${n.read ? 'read' : 'unread'}, ${ago(n.at, now)}`}
                         onClick={() => { markNotificationRead(n.id); if (n.link) { onNavigate(n.link, n.resource); setOpen(false) } }}
-                        className={`w-full rounded-xl border p-3 text-left transition-colors ${n.read ? 'border-transparent bg-white hover:bg-gray-50' : 'border-teal-100 bg-teal-50 hover:bg-teal-100/70'}`}>
+                        className={`min-w-0 flex-1 rounded-xl border p-3 text-left transition-colors ${n.read ? 'border-transparent bg-white hover:bg-gray-50' : 'border-teal-100 bg-teal-50 hover:bg-teal-100/70'}`}>
                         <span className="flex items-start gap-3">
                           <span className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-base ${n.kind === 'alert' || n.kind === 'sos' || n.kind === 'escalation' ? 'bg-red-100' : 'bg-gray-50'}`} aria-hidden="true">
                             {NOTIF_ICON[n.kind]}
@@ -142,6 +155,17 @@ export function NotificationBell({ onNavigate }: { onNavigate: (tab: string, abo
                           </span>
                         </span>
                       </button>
+                      {/* Only once read: an unread notification stays until it has been seen. */}
+                      {n.read && (
+                        <button type="button" aria-label={`Delete notification: ${n.title}`} disabled={act.busy}
+                          onClick={() => act.run(() => deleteNotification(n.id))}
+                          className="mt-2 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-red-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50">
+                          <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6" />
+                          </svg>
+                        </button>
+                      )}
+                      </div>
                     ))}
                   </div>
                 </section>

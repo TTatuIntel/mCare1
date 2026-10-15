@@ -222,6 +222,9 @@ interface Ctx extends DocumentApi {
   sendWelcomeEmail: (userId: string) => void
   markNotificationRead: (id: string) => Saved
   markAllNotificationsRead: (userId: string) => Saved
+  /** Read notifications only; an unread one stays until it has been seen. */
+  deleteNotification: (id: string) => Saved
+  clearReadNotifications: (userId: string) => Saved
   audit: AuditEntry[]
   /** Demo mode only. In live mode the database writes the audit trail, with the change it describes. */
   logAudit: (action: string, detail: string) => void
@@ -1441,6 +1444,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setNotifications(prev => prev.map(n => n.userId === userId ? { ...n, read: true } : n))
     return LIVE ? save(() => api.markAllNotificationsRead(userId)) : done()
   }
+  // Gone from the list at once, read ones only (the database's rule); the save follows.
+  const deleteNotification = (id: string): Saved => {
+    if (!notifications.some(n => n.id === id && n.read)) return refused('Only a read notification can be deleted.')
+    setNotifications(prev => prev.filter(n => !(n.id === id && n.read)))
+    return LIVE ? save(() => api.deleteNotification(id)) : done()
+  }
+  const clearReadNotifications = (userId: string): Saved => {
+    setNotifications(prev => prev.filter(n => !(n.userId === userId && n.read)))
+    return LIVE ? save(() => api.clearReadNotifications(userId)) : done()
+  }
 
   /* ─ account self-service: password recovery (demo mode; live mode uses the sign-in service, see shared/auth/LiveAuth) ───
      Every password change — self-service or forgotten — is gated behind a
@@ -1969,7 +1982,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       appointments, addAppointment, updateAppointment,
       reportRequests, requestReport, fulfillReportRequest, declineReportRequest,
       messages, sendMessage, markMessagesRead,
-      notifications, notify, markNotificationRead, markAllNotificationsRead,
+      notifications, notify, markNotificationRead, markAllNotificationsRead, deleteNotification, clearReadNotifications,
       emails, emailsFor, texts, textsFor, resendVerification, verifyByLink, sendWelcomeEmail,
       audit, logAudit, logPatientView, canCorrect,
       changePassword, requestPasswordReset, verifyResetCode, verifyResetLink,
