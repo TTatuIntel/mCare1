@@ -55,7 +55,10 @@ let seq = 0
 /** Demo mode: a client id for a new record. In live mode the database issues the id. */
 const tempId = (p: string) => `${p}_${Date.now().toString(36)}${(seq++).toString(36)}`
 
-/** What the patient eats today: the doctor's plan when there is one, otherwise the standard plan. */
+/**
+ * What the patient eats today: the doctor's plan when there is one, otherwise the standard plan.
+ * A patient without a treating doctor has no plan yet: the day's meals start once a doctor takes them on.
+ */
 export interface TodaysMeals {
   meals: PlannedMeal[]
   /** True when the treating doctor set this plan for the patient. */
@@ -82,9 +85,12 @@ export function usePatient() {
     return u?.role === 'doctor' ? toPublicDoctor(u as DoctorUser) : undefined
   }
 
+  // Enrolled = a treating doctor has taken the patient on. Until then there is no daily plan
+  // (no standard meals, and medicines only ever come from that doctor's prescriptions).
+  const enrolled = !!patient.assignedDoctorId
   const plan: MealPlan | undefined = app.mealPlans.find(p => p.patientId === patient.id)
   const todaysMeals: TodaysMeals = {
-    meals: plan?.meals.length ? plan.meals : DAILY_MEALS,
+    meals: plan?.meals.length ? plan.meals : enrolled ? DAILY_MEALS : [],
     personal: !!plan?.meals.length,
     targetKcal: plan?.targetKcal,
     waterGoal: plan?.waterGoal ?? 8,
@@ -100,6 +106,8 @@ export function usePatient() {
     patient,
     /** GET doctors, profiles (the assigned doctor) */
     doctor: doctorById(patient.assignedDoctorId),
+    /** True once a treating doctor is assigned: the daily plan (medicines, meals) starts then. */
+    enrolled,
     doctorById,
     /** GET doctors — approved, active clinicians a patient can ask for. */
     doctors: app.getDoctors().filter(d => d.status === 'active' && d.approvalStatus === 'approved').map(toPublicDoctor),

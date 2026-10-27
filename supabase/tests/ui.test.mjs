@@ -165,7 +165,10 @@ try {
     && (await row(service.from('tracked_vitals').select('vital_id').eq('patient_id', newId))).some(v => v.vital_id === 'gluc'))
   const fresh = await s.text()
   check('a new account shows no sample people or readings', !/James Mwangi|Amara Osei|Samuel Kariuki/.test(fresh) && /No readings yet/.test(fresh), fresh.slice(0, 200))
+  check('before a doctor takes them on, a new patient has no meals or medicines to do, and is told why',
+    /Your daily plan starts with your doctor/.test(fresh) && !/Breakfast|Lunch|Dinner|Next meal|Next medicine/.test(fresh), fresh.slice(0, 300))
   await step(s, 'empty screens say what to do instead of inventing data', async () => {
+    await s.home(); await page.getByRole('button', { name: /Meals$/ }).click(); await page.getByText('No meal plan yet').waitFor({ timeout: 10000 })
     await s.nav('Meds'); await page.getByText('No active prescriptions').waitFor({ timeout: 10000 })
     await s.nav('Appts'); await page.getByText('No appointments yet').waitFor({ timeout: 10000 })
     await s.nav('Chat'); await page.getByText('No doctor on your care team yet').waitFor({ timeout: 10000 })

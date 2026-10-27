@@ -65,7 +65,7 @@ export default function PatientApp() {
       {tab ==='appts'    && <AppointmentsTab target={target} go={go} />}
       {tab ==='docs'     && <DocsTab go={go} openDoc={target} />}
       {tab ==='profile'  && <ProfileTab go={go} />}
-      {tab ==='meals'    && <MealsTab />}
+      {tab ==='meals'    && <MealsTab go={go} />}
       {tab ==='care'     && <CareTeamTab go={go} />}
       {tab ==='alerts'   && <MyAlertsTab openVital={openVital} onLog={log.logOne} go={go} />}
     </PortalShell>

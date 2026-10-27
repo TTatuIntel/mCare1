@@ -14,7 +14,7 @@ const CHIP: Record<string, string> = {
 /* ─── Medicine ──────────────────────────────────────────────────────── */
 export function MedicineTab() {
   const { doses, toggleDose } = useApp()
-  const { patient, nameOf, status, error, reload } = usePatient()
+  const { patient, enrolled, nameOf, status, error, reload } = usePatient()
   const day = useDaySchedule()
   const activePrescriptions = patient.prescriptions.filter(rx => rx.active)
 
@@ -24,7 +24,8 @@ export function MedicineTab() {
     <Page title="Medications" status={status} error={error} onRetry={reload}>
 
       {activePrescriptions.length === 0 ? (
-        <EmptyState icon="💊" title="No active prescriptions" text="Your doctor will prescribe medications here." />
+        <EmptyState icon="💊" title="No active prescriptions"
+          text={enrolled ? 'Your doctor will prescribe medications here.' : 'Your medicines will appear here once a doctor is caring for you.'} />
       ) : (
         <>
           {/* next dose — same countdown as the Home reminders */}

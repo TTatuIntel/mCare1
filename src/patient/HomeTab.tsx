@@ -73,7 +73,8 @@ export function HomeTab({ go, openVital, onLog }: {
 }) {
   const { currentUser, vitalDefs, alerts, now, unseenDocs } = useApp()
   const patient = currentUser as PatientUser
-  const { resumeSetup } = usePatient()
+  const { resumeSetup, enrolled } = usePatient()
+  const awaitingDoctor = patient.doctorRequest?.status === 'pending'
   const [openItem, setOpenItem] = useState<ScheduleItem | null>(null)
   const toast = useToast()
   const score = healthScore(patient, vitalDefs)
@@ -104,6 +105,16 @@ export function HomeTab({ go, openVital, onLog }: {
         </NoticeCard>
       )}
 
+      {/* no treating doctor yet: medicines and meals start once one takes the patient on */}
+      {!enrolled && (
+        <NoticeCard tone="teal" pulse={false} title={awaitingDoctor ? 'Waiting for your doctor' : 'Your daily plan starts with your doctor'}
+          action={awaitingDoctor ? 'Care team →' : 'Find a doctor →'} onAction={() => go('care')}>
+          <p className="text-[11px] text-teal-800">
+            {awaitingDoctor ? 'Your request is being reviewed. ' : ''}Once a doctor is caring for you, your medicines and meal plan will appear here. Until then you can log your vitals.
+          </p>
+        </NoticeCard>
+      )}
+
       {/* active alerts for me */}
       <AlertSummaryCard alerts={myAlerts} onOpenAll={() => go('alerts')} onLog={onLog} />
 
@@ -120,7 +131,7 @@ export function HomeTab({ go, openVital, onLog }: {
         progress={score ?? 0}
         aside={
             <UpNext go={go} onOpen={setOpenItem} items={[
-              {
+              ...(enrolled ? [{
                 key: 'med', icon: '💊', label: 'Next medicine', tab: 'medicine', item: nextMed,
                 inMin: nextMed?.inMin ?? null,
                 value: nextMed ? countdown(nextMed.inMin) : hasMeds ? 'All taken' : 'No meds',
@@ -131,7 +142,7 @@ export function HomeTab({ go, openVital, onLog }: {
                 inMin: nextMeal?.inMin ?? null,
                 value: nextMeal ? countdown(nextMeal.inMin) : 'All logged',
                 sub: `${nextMeal ? `${nextMeal.title} · ` : ''}${day.meals.logged}/${day.meals.total} logged`,
-              },
+              }] : []),
               {
                 key: 'vitals', icon: '🩺', label: 'Vitals check', tab: 'vitals', item: vitalsOpenItem,
                 inMin: vitals.item?.inMin ?? vitals.dueIn,
@@ -167,12 +178,14 @@ export function HomeTab({ go, openVital, onLog }: {
       {/* today's reminders: meds, meals, vitals and visits in time order */}
       <div>
         {toast.node && <div className="mb-2">{toast.node}</div>}
-        <SectionHead title={`Today's reminders · ${day.doses.taken + day.meals.logged}/${day.doses.total + day.meals.total} done`} action="Meds →" onAction={() => go('medicine')} />
+        {enrolled
+          ? <SectionHead title={`Today's reminders · ${day.doses.taken + day.meals.logged}/${day.doses.total + day.meals.total} done`} action="Meds →" onAction={() => go('medicine')} />
+          : <SectionHead title="Today's reminders" />}
         <div className="flex flex-col gap-2 mt-2">
           {reminders.length === 0 ? (
             <div className="bg-emerald-50 rounded-xl px-3.5 py-3 flex items-center gap-2">
               <span className="text-base">✅</span>
-              <p className="text-xs text-emerald-700 font-medium">You're all caught up for today. Nice work!</p>
+              <p className="text-xs text-emerald-700 font-medium">{enrolled ? "You're all caught up for today. Nice work!" : 'Nothing is due right now.'}</p>
             </div>
           ) : reminders.slice(0, 5).map(r => (
             <div key={r.key} className={`bg-white rounded-xl px-3.5 py-3 flex items-center gap-3 shadow-sm ${r.tone === 'late' ? 'border-l-4 border-red-400' : r.tone === 'soon' ? 'border-l-4 border-amber-400' : ''}`}>

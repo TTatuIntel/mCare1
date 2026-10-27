@@ -137,7 +137,7 @@ What the person sees or says, and where it lives. Screen titles are the `Page` /
 
 ## 1. Snapshot
 
-*As of 15 October 2026, branch `features-merge` (PR into `main`): deleting read notifications (migration `0017`) on top of `main`. On `main`: the security and data-architecture upgrade (migrations `0012`–`0016`), the docs cleanup and the no-warnings work are committed (`7970e04`, `c42b928`, merged to `main` in `ff542cc`). Full detail: [§13 Status](#13-status).*
+*As of 27 October 2026, branch `main`: no daily plan (meals, medicines) for a patient until a treating doctor is assigned; deleting read notifications (migration `0017`, PR #9). Earlier on `main`: the security and data-architecture upgrade (migrations `0012`–`0016`), the docs cleanup and the no-warnings work are committed (`7970e04`, `c42b928`, merged to `main` in `ff542cc`). Full detail: [§13 Status](#13-status).*
 
 mCare is remote patient monitoring. Patients log vitals, medicines, meals and water; their doctor follows them, answers alerts, prescribes, writes notes and care plans and issues signed reports; administrators and mCare assistants run assignments, approvals, support and the audit trail.
 
@@ -152,7 +152,7 @@ There is no patient database, doctor database or admin database: `src/patient`, 
 | Local backend | `supabase/dev/server.mjs`: the same migrations on PGlite, served as the Supabase API |
 | Sending | `supabase/functions/deliver`: Edge Function for queued email, SMS, push |
 
-**State.** All four portals are feature-complete against the local backend. Last verified run (15 October, `features-merge`): typecheck clean · `test:db` 412/0 · `test:api` 177/0 · `test:ui` 71/0 (no console warning or error); build without warnings (7 October, `main`).
+**State.** All four portals are feature-complete against the local backend. Last verified run (27 October, `main`): typecheck clean · `test:db` 412/0 · `test:api` 177/0 (15 October) · `test:ui` 72/0 (no console warning or error); build without warnings (7 October, `main`).
 
 **Recently finished** (`7970e04`, tested): the security and data-architecture upgrade (the Security & Data Architecture Implementation Plan; mapping in [§11 Security → The plan and the code](#the-plan-and-the-code)): clinical records cannot be hard-deleted; two-step sign-in for every role (each person's choice, required per role by an admin), enforced in SQL; audit entries with session, device, address and "on behalf of"; private doctor signatures and a doctor directory; conditions catalogue, monitoring plans, reviews of readings; who opened a record; download my record; write limits; idle sign-out; admin Settings and retention; instant change notices on the local backend; production security headers; CI. Controls: [§11 Security](#11-security). Also the two-document cleanup and no warnings anywhere (typecheck with unused code as errors, build, browser console).
 
@@ -981,12 +981,12 @@ Tabs: Home (`home`) · Vitals (`vitals`) · Meds (`medicine`) · Chat (`messages
 | --- | --- | --- |
 | Sign-up, sign-in, sessions | `src/shared/auth/*` | Account creation (the form names every missing field), consent recorded on the server, session kept across reloads, password change (other devices signed out), "sign out of all other devices", reset by emailed code. |
 | First-run health setup | `HealthSetup`, `healthForms` | Each step saved before the next opens; can be skipped and resumed. Conditions come from the admin's catalogue (`condition_defs`) and suggest the vitals to track. |
-| Home | `HomeTab`, `VitalsStrip`, `ReminderSheet` | Health score, up-next ticker, reminders, recent readings, doctor's latest note, open alerts with a Re-measure button. |
+| Home | `HomeTab`, `VitalsStrip`, `ReminderSheet` | Health score, up-next ticker, reminders, recent readings, doctor's latest note, open alerts with a Re-measure button. Before a treating doctor is assigned: a notice saying the daily plan starts with a doctor, and no medicine or meal reminders. |
 | Vitals | `VitalsTab`, `VitalDetail`, `VitalLogSheets`, `QuickLogFab` | Log one, a group or all; validation before saving; server grading; trends, history, filters; unit choice saved; a typo corrected within 15 minutes, first value kept. The doctor's monitoring plan ("measure twice a day · why") shows on the vital's page, and its "next check" and the day's schedule follow it. |
 | Alerts | `MyAlertsTab`, `alertKit` | Raised by the database; "send to doctor now"; Re-measure on every open alert, with the result explained (cleared, still out of range, waiting for the doctor); status steps; the full story of each alert. |
 | SOS | `SosSheet` | Sent to the doctor and care team; "I'm safe now"; if it cannot be sent the patient is told and the call buttons stay. |
 | Medication | `MedicineTab`, `useDaySchedule` | Active prescriptions, dose times, tick and un-tick; stopped medicines kept as history. |
-| Meals | `MealsTab` | The doctor's plan when there is one, else the standard plan; meals and water logged per day. |
+| Meals | `MealsTab` | The doctor's plan when there is one, else the standard plan; meals and water logged per day. No plan at all until a treating doctor is assigned ("No meal plan yet"). |
 | Appointments | `AppointmentsTab` | Request with validation against the doctor's hours; upcoming and history; withdraw or cancel; accept a proposed time. |
 | Care team | `CareTeamTab`, `DoctorProfileSheet` | Assigned and consulting doctors, care plans, directory, request a doctor (one pending), doctor profile, rating. |
 | Messages | `MessagesTab` (shared `Inbox`, `ChatThread`) | One private thread with the treating doctor and one with each current consulting doctor; former doctors' threads stay read-only; an unsent message stays in the box with the reason; "Read 10:42" under the newest message the other person has read. |
@@ -1436,7 +1436,7 @@ Typecheck, `test:db`, `test:api` and `test:ui` run on 12–15 October 2026 on `f
 | `npm run typecheck` | clean |
 | `npm run test:db` | 412 passed, 0 failed |
 | `npm run test:api` | 177 passed, 0 failed |
-| `npm run test:ui` | 71 passed, 0 failed (phone, tablet, laptop; no console warning or error) |
+| `npm run test:ui` | 72 passed, 0 failed (phone, tablet, laptop; no console warning or error; 27 October) |
 | `npm run build` | builds with no warning; writes `dist/_headers` |
 | Seed from an empty database | builds the whole test world, including the monitoring plan and a review |
 
@@ -1454,6 +1454,7 @@ Check `git status` too: work may have started since this was written.
 
 | Change | Commit |
 | --- | --- |
+| **No daily plan before a doctor**. A patient without a treating doctor (`assignedDoctorId`) no longer gets the standard meal plan: Home shows "Your daily plan starts with your doctor" (or "Waiting for your doctor" while a request is pending) with a link to the care team, the up-next ticker and reminders leave out medicines and meals, Meals says "No meal plan yet", and Meds explains that medicines arrive with a doctor. Vitals logging is unchanged. Display only: there is no data to protect (the standard plan is an app default; medicines exist only as a doctor's prescriptions). Typecheck clean; `test:ui` 72/0 (one new check). Files: `usePatient.ts` (`enrolled`), `HomeTab.tsx`, `MealsTab.tsx`, `MedicineTab.tsx`, `PatientApp.tsx`, `ui.test.mjs`. | branch `hide-schedule-until-enrolled` (merged to `main`) |
 | **Delete read notifications.** In the notification panel each read notification has a red bin; "Clear read (N)" removes every read one. Unread ones have no bin and the database refuses to delete them. Email/SMS/push delivery records stay. Files: `0017_clear_read_notifications.sql`, `actions.ts` (`deleteNotification`, `clearReadNotifications`), `AppContext.tsx`, `NotificationBell.tsx`, `server.mjs` (outbox label), all three test suites. | branch `features-merge` (PR into `main`) |
 | **No console errors after sign-out.** The sign-in page's "is mCare reachable?" check asked with the session that had just ended, so the backend refused it (a 401 in the console) right after "Sign out". It now asks with the public key only (`checkBackend`), so it never depends on who is signed in. | `262241f` (merged to `main` in `ff542cc`) |
 | **Security and data-architecture upgrade** (the Security & Data Architecture Implementation Plan; how each item is met: [§11 Security → The plan and the code](#the-plan-and-the-code)). Six additive migrations, nothing existing removed. A patient with a clinical record can no longer be hard-deleted. Two-step sign-in (authenticator app) for every role, each person's choice, required per role when an admin says so, enforced by the database; admin reset for a lost phone. Accounts are `unverified` until the email is confirmed. Audit entries say which session, device and address, and whom a staff member acted for; profile, health-profile, contact, tracked-vital and doctor-credential changes audited; the profile email follows the sign-in email; an approved doctor's licence changes only through an approver. Doctors' signatures private; patients see doctors' contact details only for doctors they deal with (directory otherwise). Conditions catalogue; the treating doctor's monitoring plan per vital; reviews of readings; who opened a record; the patient downloads their own record; message read time; write limits; idle sign-out; admin Settings (two-step sign-in, idle minutes, retention, conditions) with retention applied nightly; support corrects someone's details with a reason. The "active accounts only" rule worked out once per query. Local backend: TOTP endpoints, request headers for the audit, instant change notices (`/__dev/changes`). Production security headers (`dist/_headers`), CI workflow, `.env.example`. Sign-in providers: Google and Apple only. | `7970e04` |

@@ -1,5 +1,5 @@
 import { useApp } from '@/shared/state/AppContext'
-import { Page, Pill } from '@/shared'
+import { Page, Pill, EmptyState } from '@/shared'
 import { usePatient } from './usePatient'
 import { dayKey } from '@/shared/lib/vitals'
 import { clock, countdown, TONE_PILL } from '@/shared/lib/schedule'
@@ -12,10 +12,11 @@ const DEFAULT_KCAL = 2000
    Today's meals from the plan the doctor set for this patient (or the
    standard plan until they do), what has been eaten, water, and the
    doctor's dietary note. Everything shown is the patient's own record:
-   nothing here is a sample figure. */
-export function MealsTab() {
+   nothing here is a sample figure. A patient without a treating doctor
+   has no plan yet, so the page says so instead. */
+export function MealsTab({ go }: { go: (t: string) => void }) {
   const { mealsDone } = useApp()
-  const { patient, doctor, todaysMeals, waterToday, setWater, status, error, reload } = usePatient()
+  const { patient, doctor, enrolled, todaysMeals, waterToday, setWater, status, error, reload } = usePatient()
   const day = useDaySchedule()
   const ateNote = (mealId: string) => mealsDone.find(m => m.patientId === patient.id && m.mealId === mealId && m.day === dayKey())?.note
   const mealItems = day.items.filter(x => x.kind === 'meal')
@@ -35,6 +36,14 @@ export function MealsTab() {
   ].filter(m => m.value !== null)
   const goal = todaysMeals.waterGoal
   const left = Math.max(0, goal - waterToday)
+
+  if (!enrolled) return (
+    <Page title="Meals" status={status} error={error} onRetry={reload}>
+      <EmptyState icon="🍽️" title="No meal plan yet"
+        text="Your meals and water goal will appear here once a doctor is caring for you."
+        action="Find a doctor →" onAction={() => go('care')} />
+    </Page>
+  )
 
   return (
     <Page title="Meals" status={status} error={error} onRetry={reload}>
