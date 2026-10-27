@@ -137,7 +137,7 @@ What the person sees or says, and where it lives. Screen titles are the `Page` /
 
 ## 1. Snapshot
 
-*As of 7 October 2026, branch `main`: the security and data-architecture upgrade (migrations `0012`–`0016`), the docs cleanup and the no-warnings work are committed (`7970e04`, `c42b928`, merged to `main` in `ff542cc`). Full detail: [§13 Status](#13-status).*
+*As of 15 October 2026, branch `features-merge` (PR into `main`): deleting read notifications (migration `0017`) on top of `main`. On `main`: the security and data-architecture upgrade (migrations `0012`–`0016`), the docs cleanup and the no-warnings work are committed (`7970e04`, `c42b928`, merged to `main` in `ff542cc`). Full detail: [§13 Status](#13-status).*
 
 mCare is remote patient monitoring. Patients log vitals, medicines, meals and water; their doctor follows them, answers alerts, prescribes, writes notes and care plans and issues signed reports; administrators and mCare assistants run assignments, approvals, support and the audit trail.
 
@@ -152,7 +152,7 @@ There is no patient database, doctor database or admin database: `src/patient`, 
 | Local backend | `supabase/dev/server.mjs`: the same migrations on PGlite, served as the Supabase API |
 | Sending | `supabase/functions/deliver`: Edge Function for queued email, SMS, push |
 
-**State.** All four portals are feature-complete against the local backend. Last verified run (7 October): typecheck clean · `test:db` 410/0 · `test:api` 176/0 · `test:ui` 70/0 (no console warning or error) · build without warnings.
+**State.** All four portals are feature-complete against the local backend. Last verified run (15 October, `features-merge`): typecheck clean · `test:db` 412/0 · `test:api` 177/0 · `test:ui` 71/0 (no console warning or error); build without warnings (7 October, `main`).
 
 **Recently finished** (`7970e04`, tested): the security and data-architecture upgrade (the Security & Data Architecture Implementation Plan; mapping in [§11 Security → The plan and the code](#the-plan-and-the-code)): clinical records cannot be hard-deleted; two-step sign-in for every role (each person's choice, required per role by an admin), enforced in SQL; audit entries with session, device, address and "on behalf of"; private doctor signatures and a doctor directory; conditions catalogue, monitoring plans, reviews of readings; who opened a record; download my record; write limits; idle sign-out; admin Settings and retention; instant change notices on the local backend; production security headers; CI. Controls: [§11 Security](#11-security). Also the two-document cleanup and no warnings anywhere (typecheck with unused code as errors, build, browser console).
 
@@ -217,7 +217,7 @@ Test accounts (password `M7c24`): `test.patient@mcare.test` (Patient One: two we
 - **The database decides.** Access rules, clinical rules (grading, alerts), notifications and the audit trail belong to `supabase/migrations`, not to a screen. A screen may hide a button the person cannot use; it must never be the only thing stopping them. The browser cannot write the audit trail: audit inside the trigger or function that makes the change (`audit_event(...)`).
 - **Identity checks come from the helpers.** Use `my_role()`, `is_admin()`, `staff_can()`, `treats()`, `consults()`, `account_active()` in policies and functions: they already include the account status and two-step sign-in (`mfa_ok()`). A `security definer` function the app calls must check one of them itself (it bypasses row rules). A function acting for someone sets `set_config('mcare.on_behalf_of', <person>, true)` before auditing; one that writes its own audit entry for a batch sets `mcare.self_audited` so the row triggers stay quiet.
 - **Staying current.** A table that belongs to a patient needs the `zz_touch_patient` trigger, or open screens will not learn of its changes.
-- **Migrations.** Add a new numbered file (next: `0017_…`); never edit one that has been applied. New functions must have their default grants revoked ([§8 Database → Adding a change](#adding-a-change)).
+- **Migrations.** Add a new numbered file (next: `0018_…`); never edit one that has been applied. New functions must have their default grants revoked ([§8 Database → Adding a change](#adding-a-change)).
 - **Sending.** Never send email, SMS or push from a screen: the database queues every channel ([§10](#10-notifications-and-delivery)).
 - **Errors** shown to people are sentences: every `api/actions.ts` request goes through `ok(…)`, which throws an `ApiError` whose message (`explain()`) can be shown as it is; `run()` in `AppContext` turns it into `{ ok: false, error }`.
 - **No warnings.** `npm run typecheck` treats unused variables, imports and parameters as errors (app and Edge Function); `npm run build` must print no warning (keep every file under 500 kB: split with `codeSplitting` in `vite.config.ts` or a dynamic `import()`); `npm run test:ui` fails on any console warning or error. Fix a warning where it starts; never silence it.
@@ -482,7 +482,7 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 
 | File | Holds |
 | --- | --- |
-| `migrations/0001`–`0016` | The database. One line each: [§8 Database → Migrations](#migrations); which file defines which function: [the index](#function-and-trigger-index). |
+| `migrations/0001`–`0017` | The database. One line each: [§8 Database → Migrations](#migrations); which file defines which function: [the index](#function-and-trigger-index). |
 | `dev/server.mjs` (1,180) | Local backend: PGlite + auth (two-step sign-in: TOTP factors, `aal` in tokens; `totpCode` exported for tests), REST (PostgREST subset, RPC, request claims and headers set for the database), storage, `/__dev/auth-codes`, `/__dev/changes` (instant change notices), local sender and jobs (escalation, retention, prescriptions). `startBackend(options)`. Owns its data folder (`backend.pid`), keeps `pg-backup`, recovers a damaged `pg`; `AUTH_UPGRADES` for older databases; `--reset`, `--check`. |
 | `dev/bootstrap.sql` | Stubs Supabase's `auth` schema and roles (sessions with `aal`, `mfa_factors`, `mfa_challenges`). |
 | `dev/seed.mjs` | Test accounts and the test world, written through the app's own calls by each role (local or hosted), including a monitoring plan and a review for Patient One; `MCARE_SEED_BASIC=1` for accounts and a starter record only. |
@@ -577,7 +577,7 @@ The sign-in email lives in `auth.users`; `profiles.email` follows it and is neve
 | Availability (`doctor_hours`, `doctor_time_off`) | doctor | doctor | doctor | hours: everyone signed in. Why a doctor is away: the doctor and staff | |
 | Message (`messages`) | one patient–doctor pair | patient, or a current treating or consulting doctor of that patient | receiver marks read | only the two people in that pair | cannot be edited; an ended relationship keeps its thread read-only |
 | Document (`documents`) | patient | patient (upload), treating doctor (official) | owner; doctor signs, releases, corrects | see `can_open_document` | `document_events`; soft delete, versions |
-| Notification (`notifications`) | the recipient | the database only | recipient marks read | recipient | each is queued for delivery |
+| Notification (`notifications`) | the recipient | the database only | recipient marks read | recipient, once read (`notifications_clear`, `0017`); read ones also go by the admin's retention | each is queued for delivery; the delivery record outlives it |
 | Push device (`push_subscriptions`) | the person | the person | the person | the person | |
 | Support request (`support_tickets`) | the person asking | anyone | support staff answer it once | the person, support staff | |
 | Audit entry (`audit_log`) | mCare | the database only | nobody | staff with "View audit logs" | append-only; only the retention job removes entries past the admin's period |
@@ -709,7 +709,9 @@ The first ten files are the **baseline**. On 3 October 2026, before any hosted d
 | `0015_clinical_model.sql` | Conditions catalogue (`condition_defs`, `condition_vitals`, `conditions.condition_code`, `save_condition_def`); the monitoring plan on `tracked_vitals` (`frequency`, `reason`, `condition_code`, who, when) and `set_vital_plan`; `vital_reviews` and `review_vitals`; the `patient_care_team` view. |
 | `0016_access_retention.sql` | Message read time; write limits (`rate_limit`); `record_views` and `log_record_view` (who opened a record); `export_my_record()`; retention as the admin sets it (`purge_deleted_documents` reads it, `apply_retention`, `run_retention_now`, the audit trail removable only by that job); the storage upload rule and MIME list (hosted); every `*_active_only` rule recreated as `(select account_active())`. |
 
-**Next file number: `0017`.**
+| `0017_clear_read_notifications.sql` | Policy `notifications_clear`: a person may delete their own notifications once read. A delivery row now outlives its notification (`notification_id` foreign key `on delete set null`), so what was sent stays on record and follows its own retention (`delivery_days`). |
+
+**Next file number: `0018`.**
 
 #### Function and trigger index
 
@@ -729,6 +731,7 @@ The first ten files are the **baseline**. On 3 October 2026, before any hosted d
 | `0014` | `signature_audit` `keep_signature_private` `stamp_signature` `doctor_directory` `is_clinician` `patient_knows_doctor`; policy `profiles_read` (replaced) | `signature_audit` `keep_signature_private` (doctors) `stamp_signature` (documents) `stamp_updated` (doctor_signatures) |
 | `0015` | `condition_def_audit` `condition_link` `save_condition_def` `frequency_label` `set_vital_plan` `review_vitals`; view `patient_care_team` | `condition_def_audit` `condition_link` `zz_touch_topic` (condition_defs, condition_vitals) `zz_touch_patient` (vital_reviews) `vital_reviews_append_only` |
 | `0016` | `message_read_stamp` `rate_limit` `log_record_view` `export_my_record` `audit_log_guard` `apply_retention` `run_retention_now`; replaced: `log_patient_view` `purge_deleted_documents` `purge_expired_documents` | `message_read_stamp` `rate_limit` (messages, support_tickets, appointments, share_links, report_requests) `record_views_append_only` `audit_log_append_only` (now `audit_log_guard`) |
+| `0017` | policy `notifications_clear`; `notification_deliveries.notification_id` foreign key now `on delete set null` | |
 
 #### Adding a change
 
@@ -988,7 +991,7 @@ Tabs: Home (`home`) · Vitals (`vitals`) · Meds (`medicine`) · Chat (`messages
 | Care team | `CareTeamTab`, `DoctorProfileSheet` | Assigned and consulting doctors, care plans, directory, request a doctor (one pending), doctor profile, rating. |
 | Messages | `MessagesTab` (shared `Inbox`, `ChatThread`) | One private thread with the treating doctor and one with each current consulting doctor; former doctors' threads stay read-only; an unsent message stays in the box with the reason; "Read 10:42" under the newest message the other person has read. |
 | Documents | `DocsTab`, `ReportRequest`, shared `documents/*` | Official documents once released; upload with type and content checks; view, download, zip; private or shared; delete and restore; access history; share link for report content; ask for a signed vitals report. |
-| Notifications | shared `NotificationBell`, `NotificationsSheet` | Written by the database; mark one or all read; choose email, SMS and push. |
+| Notifications | shared `NotificationBell`, `NotificationsSheet` | Written by the database; mark one or all read; delete a read one (red bin) or "Clear read" (unread ones cannot be deleted); choose email, SMS and push. |
 | Profile, privacy | `ProfileTab`, `HealthEditSheet`, `EmergencyContacts`, shared `profile/*` | Details and photo; health profile; emergency contacts (one next of kin); who can see the record (treating and consulting doctors, monitoring staff); **who opened my record** (`record_views`); **download my record** (`export_my_record()`, JSON); two-step sign-in; consent; deactivate account. |
 | Failure states | `PortalShell`, `Page` | Every form shows busy and error states; a banner says when mCare cannot be reached and how old the data is. Nothing claims to be saved before it is. |
 
@@ -1422,18 +1425,18 @@ Covered by rule and API tests only: editing vital definitions, doctor approval, 
 
 What works, what is in progress, and what is still to do. **Update this section whenever you finish, start or discover something** (see [§14](#14-keeping-these-docs-true)).
 
-Last updated: **7 October 2026** · branch `main` · everything below is committed (latest `ff542cc`) except the row under In progress.
+Last updated: **15 October 2026** · branch `features-merge` (`main` plus deleting read notifications, PR into `main`) · everything below is committed except the row under In progress.
 
 ### Verified
 
-Run on 7 October 2026 on the working tree.
+Typecheck, `test:db`, `test:api` and `test:ui` run on 12–15 October 2026 on `features-merge`; build and seed on 7 October on `main`.
 
 | Check | Result |
 | --- | --- |
 | `npm run typecheck` | clean |
-| `npm run test:db` | 410 passed, 0 failed |
-| `npm run test:api` | 176 passed, 0 failed |
-| `npm run test:ui` | 70 passed, 0 failed (phone, tablet, laptop; no console warning or error) |
+| `npm run test:db` | 412 passed, 0 failed |
+| `npm run test:api` | 177 passed, 0 failed |
+| `npm run test:ui` | 71 passed, 0 failed (phone, tablet, laptop; no console warning or error) |
 | `npm run build` | builds with no warning; writes `dist/_headers` |
 | Seed from an empty database | builds the whole test world, including the monitoring plan and a review |
 
@@ -1451,6 +1454,7 @@ Check `git status` too: work may have started since this was written.
 
 | Change | Commit |
 | --- | --- |
+| **Delete read notifications.** In the notification panel each read notification has a red bin; "Clear read (N)" removes every read one. Unread ones have no bin and the database refuses to delete them. Email/SMS/push delivery records stay. Files: `0017_clear_read_notifications.sql`, `actions.ts` (`deleteNotification`, `clearReadNotifications`), `AppContext.tsx`, `NotificationBell.tsx`, `server.mjs` (outbox label), all three test suites. | branch `features-merge` (PR into `main`) |
 | **No console errors after sign-out.** The sign-in page's "is mCare reachable?" check asked with the session that had just ended, so the backend refused it (a 401 in the console) right after "Sign out". It now asks with the public key only (`checkBackend`), so it never depends on who is signed in. | `262241f` (merged to `main` in `ff542cc`) |
 | **Security and data-architecture upgrade** (the Security & Data Architecture Implementation Plan; how each item is met: [§11 Security → The plan and the code](#the-plan-and-the-code)). Six additive migrations, nothing existing removed. A patient with a clinical record can no longer be hard-deleted. Two-step sign-in (authenticator app) for every role, each person's choice, required per role when an admin says so, enforced by the database; admin reset for a lost phone. Accounts are `unverified` until the email is confirmed. Audit entries say which session, device and address, and whom a staff member acted for; profile, health-profile, contact, tracked-vital and doctor-credential changes audited; the profile email follows the sign-in email; an approved doctor's licence changes only through an approver. Doctors' signatures private; patients see doctors' contact details only for doctors they deal with (directory otherwise). Conditions catalogue; the treating doctor's monitoring plan per vital; reviews of readings; who opened a record; the patient downloads their own record; message read time; write limits; idle sign-out; admin Settings (two-step sign-in, idle minutes, retention, conditions) with retention applied nightly; support corrects someone's details with a reason. The "active accounts only" rule worked out once per query. Local backend: TOTP endpoints, request headers for the audit, instant change notices (`/__dev/changes`). Production security headers (`dist/_headers`), CI workflow, `.env.example`. Sign-in providers: Google and Apple only. | `7970e04` |
 | **Project cleanup.** The eight files in `docs/` merged into this guide (§7–§13) and the README (running, hosting, the notification sender); `docs/` removed. `public/robots.txt` removed (the page's `robots` meta tag and a new `X-Robots-Tag` header keep search engines out). The one-off `supabase/dev/_audit.mjs` removed; its useful check is now a rules test (every patient table has `zz_touch_patient`). Code comments that pointed at `docs/` now point at the README. | `7970e04` |
@@ -1511,7 +1515,7 @@ Check `git status` too: work may have started since this was written.
 | Support moving / cancelling an appointment | Done, no browser test |
 | Doctor working hours, visit length, days away; slot picker | Done; slot picker with a timetable: no browser test |
 | Support tickets | Done |
-| In-app notifications, mark read | Done |
+| In-app notifications, mark read, delete read ones | Done |
 | Delivery queue (email, SMS, push), choices per person, delivery report | Done (queue); provider calls Unverified |
 | Push on the device (service worker, subscription) | Unverified: needs VAPID keys and https |
 
