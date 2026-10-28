@@ -57,21 +57,29 @@ const TOUCH_SETTLE_MS = 600
 
 /**
  * The logo (`children`) with the feature icons floating around it, straight on
- * the page: no card or bubble behind any of them. While `open` is false the
- * icons stay tucked away; they spring out one by one once it turns true,
- * `openDelayMs` later (time for the logo to arrive).
+ * the page: no card or bubble behind any of them. The icons start tucked away
+ * and spring out one by one, `openDelayMs` after the cluster appears or `open`
+ * turns true (time for the logo to fly in); while `open` is false they stay tucked.
  *
  * The icons follow the pointer: all of them drift a little with it (each at
  * its own depth), and the ones it comes close to lean in and grow. `active`
  * is the icon of the feature on stage, which moves the way the real thing does.
  */
-export function BrandCluster({ children, className = '', open = true, openDelayMs = 0, active, compact = false }: {
+export function BrandCluster({ children, className = '', open: openProp = true, openDelayMs = 0, active, compact = false }: {
   children?: React.ReactNode; className?: string; open?: boolean; openDelayMs?: number; active?: AuthIconName
   /** Form steps: a smaller cluster, so the fields below get the room. */
   compact?: boolean
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const magnets = useRef<(HTMLSpanElement | null)[]>([])
+  // Drawn tucked first, then opened a frame later, so the icons spring out whenever a cluster appears.
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    let inner = 0
+    const outer = requestAnimationFrame(() => { inner = requestAnimationFrame(() => setReady(true)) })
+    return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner) }
+  }, [])
+  const open = openProp && ready
 
   useEffect(() => {
     const root = rootRef.current
@@ -307,38 +315,89 @@ export function PasswordInput({ value, onChange, placeholder, invalid = false, a
   )
 }
 
+/** How far (px) the main button leans towards a mouse pointer over it. */
+const LEAN_X = 6, LEAN_Y = 3
+
 /**
- * The main action of a step. Once it can be pressed it looks like Get Started
- * on the welcome page: a compact, centred pill with a glow breathing under it, a sheen crossing
- * it and the arrow in a frosted tile. Until then it is a quiet grey pill.
+ * The main action of a step, and Get Started on the welcome page: one pill
+ * everywhere. Once it can be pressed: a glow breathes under it, a ring pulses
+ * out from it, a sheen crosses it and the arrow nudges forward. Under a mouse
+ * it leans towards the pointer, a light follows the pointer across it and the
+ * arrow flies out of its tile as its twin flies in; a press sends a ripple out
+ * from the touch. Until it can be pressed it is a quiet grey pill.
  */
-export function AuthButton({ children, onClick, type = 'button', disabled = false, variant = 'primary' }: {
+export function AuthButton({ children, onClick, type = 'button', disabled = false, variant = 'primary', className = '' }: {
   children: React.ReactNode; onClick?: () => void; type?: 'button' | 'submit'; disabled?: boolean; variant?: 'primary' | 'secondary'
+  /** Spacing around the button (its wrapper). */
+  className?: string
 }) {
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [ripples, setRipples] = useState<{ id: number; x: number; y: number }[]>([])
+  // A button that turns disabled under the pointer must not stay leaning.
+  useEffect(() => { if (disabled && wrapRef.current) wrapRef.current.style.transform = '' }, [disabled])
+
   if (variant === 'secondary') {
     return (
       <button type={type} onClick={onClick} disabled={disabled}
-        className="mx-auto block w-fit min-w-40 max-w-full rounded-full border border-gray-200 bg-white h-11 px-6 text-sm font-bold text-gray-800 transition-all hover:border-teal-300 active:scale-[.98]">
+        className={`mx-auto block w-fit min-w-40 max-w-full rounded-full border border-gray-200 bg-white h-11 px-6 text-sm font-bold text-gray-800 transition-all hover:border-teal-300 active:scale-[.98] ${className}`}>
         {children}
       </button>
     )
   }
+
+  const track = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const wrap = wrapRef.current
+    if (!wrap || disabled) return
+    const r = e.currentTarget.getBoundingClientRect()
+    const x = e.clientX - r.left, y = e.clientY - r.top
+    wrap.style.setProperty('--mx', `${x}px`)
+    wrap.style.setProperty('--my', `${y}px`)
+    if (e.pointerType !== 'mouse' || reducedMotion()) return
+    wrap.style.transform = `translate(${((x / r.width - 0.5) * 2 * LEAN_X).toFixed(1)}px, ${((y / r.height - 0.5) * 2 * LEAN_Y).toFixed(1)}px)`
+  }
+
   return (
-    <div className="relative mx-auto w-fit min-w-40 max-w-full">
-      {!disabled && <span aria-hidden className="auth-glow absolute inset-x-6 -bottom-1.5 h-8 rounded-full bg-teal-500/60 blur-xl" />}
+    <div ref={wrapRef} className={`relative mx-auto w-fit min-w-40 max-w-full transition-transform duration-200 ease-out ${className}`}>
+      {!disabled && <>
+        <span aria-hidden className="auth-glow absolute inset-x-6 -bottom-1.5 h-8 rounded-full bg-teal-500/60 blur-xl" />
+        <span aria-hidden className="auth-cta-ring pointer-events-none absolute inset-0 rounded-full ring-2 ring-teal-500/60" />
+      </>}
       <button type={type} onClick={onClick} disabled={disabled}
+        onPointerMove={track}
+        onPointerLeave={() => { if (wrapRef.current) wrapRef.current.style.transform = '' }}
+        onPointerDown={e => {
+          if (disabled) return
+          track(e)
+          const r = e.currentTarget.getBoundingClientRect()
+          setRipples(rs => [...rs, { id: e.timeStamp, x: e.clientX - r.left, y: e.clientY - r.top }])
+        }}
         className={`group relative w-full overflow-hidden rounded-full py-1.5 pl-6 pr-1.5 flex items-center gap-4 text-[15px] font-bold transition-all duration-300 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-teal-500/40 ${disabled
           ? 'bg-gray-100 text-gray-400'
-          : 'bg-teal-700 text-white ring-1 ring-inset ring-white/20 shadow-lg shadow-teal-700/30 hover:-translate-y-0.5 hover:bg-teal-800 hover:shadow-xl active:translate-y-0 active:scale-[.98]'}`}>
+          : 'bg-teal-700 text-white ring-1 ring-inset ring-white/20 shadow-lg shadow-teal-700/30 hover:bg-teal-800 hover:shadow-xl hover:shadow-teal-700/40 active:scale-[.96]'}`}>
         {!disabled && <>
           <span aria-hidden className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/15 to-transparent" />
           <span aria-hidden className="auth-sheen absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent" />
+          {/* A soft light under the pointer. */}
+          <span aria-hidden className="absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+            style={{ background: 'radial-gradient(90px circle at var(--mx, 50%) var(--my, 50%), rgba(255,255,255,.3), transparent 70%)' }} />
         </>}
-        {/* The pill hugs its label and arrow (short labels keep a minimum width). Label and tile are the size of Get Started's. */}
-        <span className="relative flex-1 text-center whitespace-nowrap">{children}</span>
-        <span className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors ${disabled
-          ? 'bg-gray-200/70' : 'bg-white/15 ring-1 ring-inset ring-white/25 backdrop-blur-sm group-hover:bg-white/25'}`}>
-          <span className={`flex ${disabled ? '' : 'auth-nudge'}`}><AuthIcon name="arrow" className="w-4 h-4" /></span>
+        {ripples.map(rp => (
+          <span key={rp.id} aria-hidden onAnimationEnd={() => setRipples(rs => rs.filter(x => x.id !== rp.id))}
+            className="auth-ripple pointer-events-none absolute -ml-3 -mt-3 h-6 w-6 rounded-full bg-white/40" style={{ left: rp.x, top: rp.y }} />
+        ))}
+        {/* The pill hugs its label and arrow (short labels keep a minimum width). */}
+        <span className={`relative flex-1 text-center whitespace-nowrap ${disabled ? '' : 'transition-[letter-spacing] duration-300 group-hover:tracking-wide'}`}>{children}</span>
+        <span className={`relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full transition-all duration-300 ${disabled
+          ? 'bg-gray-200/70' : 'bg-white/15 ring-1 ring-inset ring-white/25 backdrop-blur-sm group-hover:bg-white group-hover:text-teal-700 group-active:scale-90'}`}>
+          {disabled ? <AuthIcon name="arrow" className="w-4 h-4" /> : <>
+            {/* One arrow leaves to the right as its twin arrives from the left. */}
+            <span className="flex transition-transform duration-300 ease-out group-hover:translate-x-9">
+              <span className="auth-nudge flex"><AuthIcon name="arrow" className="w-4 h-4" /></span>
+            </span>
+            <span aria-hidden className="absolute flex -translate-x-9 transition-transform duration-300 ease-out group-hover:translate-x-0">
+              <AuthIcon name="arrow" className="w-4 h-4" />
+            </span>
+          </>}
         </span>
       </button>
     </div>

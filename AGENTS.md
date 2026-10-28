@@ -456,14 +456,14 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `SecuritySheet.tsx` | Two-step sign-in: set up an authenticator app, see it is on, turn it off. |
 | `SignatureSheet.tsx` | Doctor's signature. |
 | **auth/** | |
-| `WelcomeScreen.tsx` · `AuthShell.tsx` (440) | Welcome + help ("Get started", "Already have an account? Sign in") · the signed-out frame with the animated feature tour. |
+| `WelcomeScreen.tsx` · `AuthShell.tsx` (466) | Welcome + help ("Get started", "Already have an account? Sign in") · the signed-out frame with the animated feature tour. The same motion on every step (welcome, sign in, sign up, recovery, verification): one `FlyingLogo` that flies, resizing, from where it stood to where it is mounted (tour ↔ card on web, following the pointer; welcome → form and back on every size; it is the way back to welcome on a form step), and `StepBrand`, whose icons spring out around it and act out the feature on stage (the tour reports it through `onActive`, and keeps turning while hidden on mobile). |
 | `LoginScreen.tsx` · `SelfRegisterScreen.tsx` | Sign in · patient sign-up (names every missing field). |
 | `LiveAuth.tsx` | Live mode: confirm email, recovery, dev-only test OTP display. |
 | `MfaScreen.tsx` · `TotpSetup.tsx` | The second step at sign-in (code, or setting one up when required) · the authenticator setup panel (key, link, QR on hosted). |
 | `VerificationScreen.tsx` · `ForgotPassword.tsx` | Demo-mode equivalents. |
 | `SocialAuth.tsx` · `Legal.tsx` | Google and Apple sign-in buttons · consent text (placeholder). |
 | `DoctorStatusScreen.tsx` · `SuspendedScreen.tsx` | Doctor awaiting approval · stopped account. |
-| `authKit.tsx` (457) | Signed-out form controls, icons, OTP input; `AuthSwitch` (the "Sign in" / "Create an account" link: a larger word with a larger tap area, a shimmer, an underline drawn on hover). |
+| `authKit.tsx` (516) | Signed-out form controls, icons, OTP input; `AuthSwitch` (the "Sign in" / "Create an account" link: a larger word with a larger tap area, a shimmer, an underline drawn on hover); `AuthButton`, the one main-action pill, Get Started included (once enabled: glow, pulsing ring, sheen; under a mouse it leans to the pointer with a light following it, arrow swap; ripple on press; no hover lift); `BrandCluster` (icons follow the pointer and spring out whenever a cluster appears). |
 | **documents/** | |
 | `useDocumentStore.ts` (737) | The document store both modes use (`DocumentApi`, spread into `AppContext`). |
 | `documents.ts` (483) | Categories, upload validation, demo access policy (`canView`, `canSign`…), `buildVitalsReport`. |
@@ -1448,7 +1448,7 @@ Check `git status` too: work may have started since this was written.
 
 | Change | Files |
 | --- | --- |
-| **The sign-in pill can be clicked at every width.** `AuthButton` lifts 2px on hover (`hover:-translate-y-0.5`), so a pointer parked within those 2px of its bottom edge makes it move out from under the pointer and back for ever; Playwright reported "element is not stable" and `test:ui` stopped at the doctor's sign-in. The browser test moves the pointer off the pill before clicking. The hover lift itself is unchanged (a real pointer landing in that band would still jitter — a design question, not a test one). | `supabase/tests/ui.test.mjs` (`signIn`) |
+| **Sign in, sign up and every form step move like the welcome page** (branch `auth-motion-parity`). The logo flies (and resizes) from the welcome page onto the form and back, follows the pointer between the tour and the form on web, and is the way back to welcome; the icons around it spring out, drift with the pointer and act out the tour's feature at every size; every main button (`AuthButton`) is the Get Started pill: lean to the pointer, pointer light, ripple, pulsing ring once it can be pressed. The old 2px hover lift is gone, which also ends the pointer jitter the browser test had to work around (`signIn` in `ui.test.mjs` still moves the pointer away first; harmless). Under reduced motion: no flight, no lean (`reducedMotion()`), icons appear without the spring. Verified: typecheck clean; `test:ui` 70 of 71 (the one failure was another change to `authBackend.ts` saved mid-run, not this one); a separate browser check at 390/834/1366px: one logo on screen on every step, logo flight and button lean measured, sign-up fits a 1366×768 window, no console error. | `src/shared/auth/AuthShell.tsx`, `authKit.tsx`, `WelcomeScreen.tsx` |
 
 ### Recently finished
 

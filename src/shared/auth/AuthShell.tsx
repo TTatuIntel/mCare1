@@ -167,59 +167,78 @@ const FLY_MS = 750
 /** A resting place only counts as "where it just was" for this long. */
 const FLY_FROM_MAX_AGE_MS = 200
 
-/** Where the logo last stood on screen, so the next one mounted flies in from there. */
-let lastLogoSpot: { x: number; y: number; at: number } | undefined
+/** Where the logo last stood on screen (its centre and width), so the next one mounted flies in from there. */
+let lastLogoSpot: { x: number; y: number; w: number; at: number } | undefined
 
 /**
- * The logo, wherever it is mounted. Mounting it in a new place while removing
+ * The logo, wherever it is mounted: in the tour, in the welcome card, over a
+ * form step, at every screen size. Mounting it in a new place while removing
  * it from the old one makes it fly across: sideways and vertical motion run on
- * different curves so the path bends, and it lifts slightly mid-flight. The
- * logo's own pulse stays in phase through the move (see MCareLogo's beat clock).
+ * different curves so the path bends, it lifts slightly mid-flight, and it
+ * grows or shrinks to its new size on the way. The logo's own pulse stays in
+ * phase through the move (see MCareLogo's beat clock). With `onHome` it is
+ * also the way back to the welcome page.
  */
-function FlyingLogo() {
+function FlyingLogo({ size = 'lg', onHome }: { size?: 'md' | 'lg'; onHome?: () => void }) {
   const xRef = useRef<HTMLDivElement>(null)
   const yRef = useRef<HTMLDivElement>(null)
 
   useLayoutEffect(() => {
     const outer = xRef.current, inner = yRef.current
     if (!outer || !inner) return
-    const from = lastLogoSpot
-    lastLogoSpot = undefined
-    const to = outer.getBoundingClientRect()
-    const still = reducedMotion()
-    // to.width is 0 while this size's layout is hidden (mobile and tablet).
-    if (from && to.width && !still && performance.now() - from.at < FLY_FROM_MAX_AGE_MS) {
-      const dx = from.x - to.left, dy = from.y - to.top
-      if (Math.abs(dx) + Math.abs(dy) > 2) {
-        outer.animate({ translate: [`${dx}px 0`, '0 0'] }, { duration: FLY_MS, easing: 'cubic-bezier(.65,0,.35,1)' })
-        inner.animate({ translate: [`0 ${dy}px`, '0 0'], scale: [1, 1.12, 1] }, { duration: FLY_MS, easing: 'cubic-bezier(.3,0,.2,1)' })
+    const to = inner.getBoundingClientRect()
+    // A logo in a layout hidden at this size (width 0) neither takes the hand-off nor gives one.
+    if (to.width) {
+      const from = lastLogoSpot
+      lastLogoSpot = undefined
+      if (from && !reducedMotion() && performance.now() - from.at < FLY_FROM_MAX_AGE_MS) {
+        const dx = from.x - (to.left + to.width / 2), dy = from.y - (to.top + to.height / 2)
+        const ratio = from.w / to.width
+        if (Math.abs(dx) + Math.abs(dy) > 2 || Math.abs(ratio - 1) > 0.02) {
+          outer.animate({ translate: [`${dx}px 0`, '0 0'] }, { duration: FLY_MS, easing: 'cubic-bezier(.65,0,.35,1)' })
+          inner.animate({ translate: [`0 ${dy}px`, '0 0'], scale: [ratio, Math.max(ratio, 1) * 1.12, 1] },
+            { duration: FLY_MS, easing: 'cubic-bezier(.3,0,.2,1)' })
+        }
       }
     }
     // Still in the page here, so a logo caught mid-flight hands on where it had got to.
     return () => {
       const r = inner.getBoundingClientRect()
-      if (r.width) lastLogoSpot = { x: r.left, y: r.top, at: performance.now() }
+      if (r.width) lastLogoSpot = { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, at: performance.now() }
     }
   }, [])
 
   return (
     <div ref={xRef} className="relative z-10">
-      <div ref={yRef}><MCareLogo size="lg" /></div>
+      <div ref={yRef}>
+        {onHome ? (
+          <button type="button" onClick={onHome} aria-label="mCare: back to the welcome page"
+            className="block rounded-2xl outline-none transition-transform duration-300 hover:scale-105 active:scale-95 focus-visible:ring-2 focus-visible:ring-teal-500/60">
+            <MCareLogo size={size} />
+          </button>
+        ) : <MCareLogo size={size} />}
+      </div>
     </div>
   )
 }
 
 /* ─── Hero: the logo, then the tour ─────────────────────────────────── */
 
-function AuthHero({ className, playing, rise, logoHere, onUse }: {
+function AuthHero({ className, playing, rise, logoHere, onUse, welcome, onHome, onActive }: {
   className: string
-  /** Web: false while the logo is over in the welcome card. */
+  /** Web: false while the logo is over in the card. */
   logoHere: boolean
   /** The user has come back to the tour. */
   onUse: () => void
   /** False until the boot splash clears, so the tour doesn't advance unseen. */
   playing: boolean
   rise: (delayMs: number) => { cls: string; style?: React.CSSProperties }
+  /** Mobile and tablet show the tour only on the welcome step; on a form step the logo is over the form. */
+  welcome: boolean
+  /** Form steps: the logo is the way back to the welcome page. */
+  onHome?: () => void
+  /** The feature on stage, so the icons around the logo elsewhere act it out too. */
+  onActive: (icon: AuthIconName) => void
 }) {
   const [active, setActive] = useState(0)
   /** The slide on its way out, drawn underneath for a moment so the two cross over. */
@@ -247,6 +266,7 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
     const t = setTimeout(() => go(active + 1, 1), AUTO_MS)
     return () => clearTimeout(t)
   }, [active, auto]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { onActive(SLIDES[active].icon) }, [active]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const r0 = rise(0)
   // The tour opens once the page is on screen; hidden until then.
@@ -313,13 +333,16 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
     <section aria-label="What you can do with mCare" onFocus={onUse}
       onPointerEnter={e => { if (e.pointerType === 'mouse') onUse() }}
       className={`${className} flex-col justify-center items-center text-center gap-10 @5xl:items-start @5xl:text-left @5xl:gap-8`}>
-      {/* Mobile and tablet: the logo stays put with the icons around it. Web: it
-          rests here (its place is kept) until the user turns to the welcome card. */}
+      {/* Mobile and tablet: the logo stands here with the icons around it on the welcome
+          step, and flies over the form when a form step opens. Web: it rests here (its
+          place is kept) until the user turns to the card, then follows them. */}
       <div className={r0.cls} style={r0.style}>
         {/* Mobile: the compact cluster, so the tour and the way in fit the screen. Tablet has room for the large one. */}
-        <BrandCluster compact className="@2xl:hidden mt-6" active={SLIDES[active].icon}><MCareLogo size="md" /></BrandCluster>
-        <BrandCluster className="hidden @2xl:flex @5xl:hidden" active={SLIDES[active].icon}><MCareLogo size="lg" /></BrandCluster>
-        <div className="hidden @5xl:block h-[4.5rem]">{logoHere && <FlyingLogo />}</div>
+        {welcome && <>
+          <BrandCluster compact className="@2xl:hidden mt-6" active={SLIDES[active].icon}><FlyingLogo size="md" /></BrandCluster>
+          <BrandCluster className="hidden @2xl:flex @5xl:hidden" active={SLIDES[active].icon}><FlyingLogo size="lg" /></BrandCluster>
+        </>}
+        <div className="hidden @5xl:block h-[4.5rem]">{logoHere && <FlyingLogo onHome={onHome} />}</div>
       </div>
 
       <div className="w-full max-w-2xl flex flex-col gap-1 @5xl:gap-2">
@@ -353,24 +376,24 @@ function AuthHero({ className, playing, rise, logoHere, onUse }: {
 /* ─── Shell ─────────────────────────────────────────────────────────── */
 
 /**
- * The brand over a form step, where the welcome page has it: the logo with the
- * feature icons around it on mobile and tablet, the small logo on web (the big
- * one is beside it, over the tour). With `onHome` the logo is the way back to
- * the welcome page.
+ * The brand over a form step, behaving as it does on the welcome page: the
+ * logo flies in from where it stood, the feature icons spring out around it,
+ * drift with the pointer and act out the feature on the tour. Mobile and
+ * tablet: always here. Web: here while the user is at the form (`logoHere`),
+ * back over the tour when they turn to it. With `onHome` the logo is the way
+ * back to the welcome page.
  */
-function StepBrand({ onHome }: { onHome?: () => void }) {
-  const logo = (size: 'sm' | 'md' | 'lg') => onHome ? (
-    <button type="button" onClick={onHome} aria-label="mCare: back to the welcome page"
-      className="relative z-10 rounded-2xl outline-none transition-transform duration-300 hover:scale-105 active:scale-95 focus-visible:ring-2 focus-visible:ring-teal-500/60">
-      <MCareLogo size={size} />
-    </button>
-  ) : <MCareLogo size={size} />
+function StepBrand({ onHome, active, logoHere }: { onHome?: () => void; active: AuthIconName; logoHere: boolean }) {
+  const delay = FLY_MS * 0.55
   return (
     <>
       {/* The same cluster as the welcome page at each size: compact on mobile, large on tablet. */}
-      <BrandCluster compact className="@2xl:hidden mt-6 mb-4">{logo('md')}</BrandCluster>
-      <BrandCluster className="hidden @2xl:flex @5xl:hidden mb-6">{logo('lg')}</BrandCluster>
-      <div className="hidden @5xl:flex justify-center mb-5">{logo('sm')}</div>
+      <BrandCluster compact className="@2xl:hidden mt-6 mb-4" active={active} openDelayMs={delay}><FlyingLogo size="md" onHome={onHome} /></BrandCluster>
+      <BrandCluster className="hidden @2xl:flex @5xl:hidden mb-6" active={active} openDelayMs={delay}><FlyingLogo size="lg" onHome={onHome} /></BrandCluster>
+      {/* Web: compact, so the fields keep the room. */}
+      <BrandCluster compact className="hidden @5xl:flex mb-3" active={active} open={logoHere} openDelayMs={delay}>
+        {logoHere && <FlyingLogo size="md" onHome={onHome} />}
+      </BrandCluster>
     </>
   )
 }
@@ -398,9 +421,10 @@ export function AuthShell({ children, welcome = false, entrance = false, onHome 
     : splashDone ? { cls: 'rise-in', style: { animationDelay: `${delayMs}ms` } }
     : { cls: 'opacity-0' }
   const card = rise(300)
-  // Web welcome step: the logo follows the user, from the tour to the card and back.
-  const [usingCard, setUsingCard] = useState(false)
-  const logoInCard = welcome && usingCard
+  // Web, every step: the logo follows the user, from the tour to the card and back.
+  const [logoInCard, setUsingCard] = useState(false)
+  // The feature on the tour, acted out by the icons around the logo wherever it stands.
+  const [activeIcon, setActiveIcon] = useState<AuthIconName>('shield')
 
   return (
     <div className="relative h-full overflow-hidden bg-white">
@@ -411,25 +435,27 @@ export function AuthShell({ children, welcome = false, entrance = false, onHome 
       <div className="absolute inset-0 overflow-y-auto overscroll-none scrollbar-hide">
         <div className="mx-auto min-h-full w-full max-w-md flex flex-col gap-4 px-4 py-3 @2xl:justify-center @2xl:py-8 @5xl:max-w-6xl @5xl:flex-row @5xl:items-center @5xl:gap-14 @5xl:px-10">
           <AuthHero playing={splashDone} rise={rise} logoHere={!logoInCard} onUse={() => setUsingCard(false)}
+            welcome={welcome} onHome={welcome ? undefined : onHome} onActive={setActiveIcon}
             className={`${welcome ? 'flex' : 'hidden @5xl:flex'} flex-none min-w-0 @5xl:flex-1`} />
 
           <main onFocus={() => setUsingCard(true)} onPointerDown={() => setUsingCard(true)}
             onPointerEnter={e => { if (e.pointerType === 'mouse') setUsingCard(true) }}
-            className={`w-full flex flex-col @2xl:flex-none @5xl:w-[27rem] @5xl:shrink-0 flex-1 ${!welcome ? card.cls : ''}`} style={!welcome ? card.style : undefined}>
+            className="w-full flex flex-col @2xl:flex-none @5xl:w-[27rem] @5xl:shrink-0 flex-1">
             <div className="flex flex-1 flex-col px-3 py-2.5 @2xl:px-4 @2xl:py-3 @5xl:p-8">
               {/* Web: where the logo lands; the icons spring out around it as it arrives. */}
               {welcome ? <>
-                <BrandCluster className="hidden @5xl:flex mb-3" open={logoInCard} openDelayMs={FLY_MS * 0.55}>
+                <BrandCluster className="hidden @5xl:flex mb-3" active={activeIcon} open={logoInCard} openDelayMs={FLY_MS * 0.55}>
                   {logoInCard && <FlyingLogo />}
                 </BrandCluster>
                 {children}
               </> : <>
-                {/* Mobile: the step sits in the middle of the screen, the rights line at its foot. */}
+                {/* Mobile: the step sits in the middle of the screen, the rights line at its foot.
+                    The brand stays out of the step's entrance so the logo is seen flying in. */}
                 <div className="my-auto">
-                  <StepBrand onHome={onHome} />
-                  {children}
+                  <StepBrand onHome={onHome} active={activeIcon} logoHere={logoInCard} />
+                  <div className={card.cls} style={card.style}>{children}</div>
                 </div>
-                <AuthRights className="pt-4" />
+                <div className={card.cls} style={card.style}><AuthRights className="pt-4" /></div>
               </>}
             </div>
           </main>
