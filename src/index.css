@@ -275,6 +275,38 @@ body {
 :where(:root[data-motion='reduce']) .vital-pop { transition: opacity .15s linear; }
 :where(:root[data-motion='reduce']) .vital-pop[data-open='false'][data-side] { filter: none; transform: none; }
 
+/* Vital trend popup chart: the line draws itself in from the left, the fill and dots follow
+   it, the latest point breathes; a value picked on the chart rises into place. */
+@keyframes chart-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes chart-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes chart-dot-in { from { opacity: 0; transform: scale(0); } to { opacity: 1; transform: none; } }
+@keyframes chart-halo { 0%, 100% { transform: scale(1); opacity: .25; } 50% { transform: scale(1.7); opacity: 0; } }
+@keyframes value-pop { from { opacity: .35; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.chart-draw { stroke-dasharray: 1; animation: chart-draw .9s cubic-bezier(.4,0,.2,1) both; }
+.chart-fill-in { animation: chart-fade .6s ease-out .35s both; }
+.chart-dot-in { transform-box: fill-box; transform-origin: center; animation: chart-dot-in .35s cubic-bezier(.3,1.5,.5,1) both; }
+.chart-latest-halo { transform-box: fill-box; transform-origin: center; animation: chart-halo 2.2s ease-in-out .9s infinite; }
+.vital-pop-value { display: inline-block; animation: value-pop .18s ease-out; }
+
+/* Lists that arrive one item after another (the vital picker), and chips that pop in. */
+@keyframes stagger-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes chip-in { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: none; } }
+@keyframes pick-pop { 0% { transform: scale(1); } 40% { transform: scale(1.18) rotate(-6deg); } 100% { transform: none; } }
+:where(.stagger-in) > * { animation: stagger-in .4s cubic-bezier(.2,.8,.2,1) both; }
+:where(.stagger-in) > :nth-child(2) { animation-delay: 40ms; }
+:where(.stagger-in) > :nth-child(3) { animation-delay: 80ms; }
+:where(.stagger-in) > :nth-child(4) { animation-delay: 120ms; }
+:where(.stagger-in) > :nth-child(5) { animation-delay: 160ms; }
+:where(.stagger-in) > :nth-child(6) { animation-delay: 200ms; }
+:where(.stagger-in) > :nth-child(n+7) { animation-delay: 240ms; }
+.chip-in { animation: chip-in .35s cubic-bezier(.3,1.4,.5,1) both; }
+/* A vital switched on: its icon tile gives a small bounce. */
+.vital-choice[data-on='true'] .vital-choice-icon { animation: pick-pop .45s cubic-bezier(.3,1.6,.5,1); }
+:where(:root[data-motion='reduce']) .chart-draw { animation: chart-fade .25s ease-out both; }
+:where(:root[data-motion='reduce']) :is(.chart-dot-in, .chip-in, .vital-pop-value) { animation: calm-in .25s ease-out both; }
+:where(:root[data-motion='reduce']) :where(.stagger-in) > * { animation: calm-in .25s ease-out both; }
+:where(:root[data-motion='reduce']) :is(.chart-latest-halo, .vital-choice .vital-choice-icon) { animation: none; }
+
 /* Home "Up next" ticker: each item rises in; the active dot fills, then advances. */
 @keyframes upnext-in { from { opacity: 0; transform: translateY(8px); filter: blur(3px); } to { opacity: 1; transform: none; filter: none; } }
 @keyframes upnext-progress { from { width: 0; } to { width: 100%; } }

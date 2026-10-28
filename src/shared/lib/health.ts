@@ -26,6 +26,7 @@ export const BLOOD_TYPES: BloodType[] = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', '
 /**
  * Common long-term conditions, each with the vitals worth tracking for it
  * (ids from INITIAL_VITAL_DEFS). Picking a condition at setup pre-selects them.
+ * Conditions not listed here are matched by body area (CONDITION_AREAS).
  */
 export const COMMON_CONDITIONS: { name: string; icon: string; vitals: string[] }[] = [
   { name: 'High blood pressure',    icon: '🫀', vitals: ['bp', 'hr'] },
@@ -62,13 +63,56 @@ export const RELATIONSHIPS = ['Spouse', 'Partner', 'Parent', 'Child', 'Sibling',
 /** A condition as the forms list it: from the live catalogue (condition_defs), or COMMON_CONDITIONS in demo mode. */
 export type CatalogueCondition = { name: string; icon: string; vitals: string[] }
 
-/** Vitals suggested by the patient's conditions, most-called-for first, with the condition that suggested each. */
+/**
+ * Body areas, for conditions the catalogue does not list by name (typed in by
+ * the patient, or worded differently: "high BP", "pre-diabetes", "lung
+ * disease"). Each area is the vitals that watch that part of the body. A
+ * match is only ever a suggestion the patient confirms; the catalogue's own
+ * list always wins for a name it knows.
+ */
+export const CONDITION_AREAS: { area: string; match: RegExp; vitals: string[] }[] = [
+  { area: 'Heart and circulation', vitals: ['bp', 'hr'],
+    match: /blood pressure|hypertens|\bb\.?p\b|heart|cardi|coronary|angina|arrhythm|atrial|palpitat|stroke|vascular|aneurysm|circulat/ },
+  { area: 'Fluid balance', vitals: ['wt', 'spo2'], match: /heart failure|o?edema|swelling|fluid/ },
+  { area: 'Blood sugar', vitals: ['gluc', 'wt'], match: /diabet|sugar|glucose|insulin|glyc|gestational/ },
+  { area: 'Breathing', vitals: ['spo2', 'rr'],
+    match: /asthma|copd|lung|pulmon|bronch|emphysema|breath|respir|pneumon|tubercul|\btb\b|covid|apn(o)?ea|wheez/ },
+  { area: 'Kidneys', vitals: ['bp', 'wt'], match: /kidney (disease|failure|problem)|renal|\bckd\b|nephr|dialysis/ },
+  { area: 'Weight and metabolism', vitals: ['wt'], match: /obes|overweight|underweight|weight|malnutri|eating disorder|metabolic/ },
+  { area: 'Thyroid', vitals: ['wt', 'hr'], match: /thyroid/ },
+  { area: 'Cholesterol', vitals: ['chol'], match: /cholesterol|lipid|triglycer/ },
+  { area: 'Infection and fever', vitals: ['temp'], match: /fever|infect|hiv|malaria|sepsis|cancer|chemo|lupus|immun/ },
+  { area: 'Blood and oxygen', vitals: ['spo2', 'hr'], match: /an(a)?emi|sickle|thalass/ },
+  { area: 'Pregnancy', vitals: ['bp', 'wt'], match: /pregnan|pre-?eclamp/ },
+]
+
+/**
+ * The vitals one condition calls for: the catalogue's list for a name it
+ * knows, otherwise every vital of each body area the name falls under.
+ * `areas` names the areas matched (empty for a catalogue match, or no match).
+ */
+export function vitalsForCondition(name: string, catalogue: CatalogueCondition[] = COMMON_CONDITIONS): { vitals: string[]; areas: string[] } {
+  const key = name.trim().toLowerCase()
+  const known = catalogue.find(c => c.name.toLowerCase() === key)
+  if (known) return { vitals: known.vitals, areas: [] }
+  const hits = CONDITION_AREAS.filter(a => a.match.test(key))
+  return { vitals: [...new Set(hits.flatMap(a => a.vitals))], areas: hits.map(a => a.area) }
+}
+
+/** Vitals suggested by the patient's conditions, in the order of the conditions, with the first condition that suggested each. */
 export function suggestedVitals(conditions: string[], catalogue: CatalogueCondition[] = COMMON_CONDITIONS): Map<string, string> {
   const out = new Map<string, string>()
-  const chosen = new Set(conditions.map(c => c.toLowerCase()))
-  for (const c of catalogue) {
-    if (!chosen.has(c.name.toLowerCase())) continue
-    for (const v of c.vitals) if (!out.has(v)) out.set(v, c.name)
+  for (const name of conditions) {
+    for (const v of vitalsForCondition(name, catalogue).vitals) if (!out.has(v)) out.set(v, name)
+  }
+  return out
+}
+
+/** Each vital the patient's conditions call for, with every condition that calls for it (for "For High blood pressure · Heart disease"). */
+export function conditionsByVital(conditions: string[], catalogue: CatalogueCondition[] = COMMON_CONDITIONS): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  for (const name of conditions) {
+    for (const v of vitalsForCondition(name, catalogue).vitals) out.set(v, [...(out.get(v) ?? []), name])
   }
   return out
 }

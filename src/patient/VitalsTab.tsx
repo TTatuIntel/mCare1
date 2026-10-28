@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
-import { Toggle, Page, HeroCard, VitalChart, InsightNotes, levelStyle, useElementWidth, TREND_ARROW, HERO_GRADIENT } from '@/shared'
+import { Page, HeroCard, VitalChart, InsightNotes, levelStyle, useElementWidth, TREND_ARROW, HERO_GRADIENT } from '@/shared'
 import type { PatientUser, VitalDef } from '@/shared/lib/types'
 import {
   evaluate, latestValid, targetRange, vitalTrend, generateInsights, readingTime, unitView, ago, groupOf, VITAL_GROUPS,
@@ -11,6 +11,7 @@ import { useDaySchedule } from './useDaySchedule'
 import { usePatient } from './usePatient'
 import { VitalDetail } from './VitalDetail'
 import { useVitalLog, SelfClearBanner } from './VitalLogSheets'
+import { VitalPicker } from './VitalPicker'
 import { ReportRequestCard } from './ReportRequest'
 
 type View = 'readings' | 'trends' | 'select'
@@ -44,7 +45,7 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital, go }: {
   go?: (tab: string) => void
 }) {
   const { currentUser, vitalDefs, now } = useApp()
-  const { doctor, setTrackedVitals, canStopTracking, status, error, reload } = usePatient()
+  const { doctor, status, error, reload } = usePatient()
   const patient = currentUser as PatientUser
   const { vitals: vitalsDue } = useDaySchedule()
   const log = useVitalLog()
@@ -77,16 +78,6 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital, go }: {
   const activeVitals = vitalDefs.filter(v => v.active)
   const tracked = activeVitals.filter(v => patient.trackedVitalIds.includes(v.id))
   const doctorName = doctor?.name
-
-  /** A vital the doctor set, or any tracked vital once a doctor is assigned: only the doctor removes it. */
-  const lockedOn = (id: string) => patient.trackedVitalIds.includes(id) && !canStopTracking(id)
-  const toggleVital = (id: string) => {
-    if (lockedOn(id)) return
-    const next = patient.trackedVitalIds.includes(id)
-      ? patient.trackedVitalIds.filter(v => v !== id)
-      : [...patient.trackedVitalIds, id]
-    void setTrackedVitals(next)   // a refused save is reported by the banner at the top of the portal
-  }
 
   const statusOf = (v: VitalDef): Status => {
     const r = latestValid(patient, v.id)
@@ -420,44 +411,8 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital, go }: {
           doctorName={doctorName}
         />
       ) : (
-        /* My Vitals — selection with lock logic */
-        <div className="flex flex-col gap-2 @2xl:grid @2xl:grid-cols-2 @2xl:gap-3 @5xl:grid-cols-3">
-          <p className="text-xs text-gray-500 px-1 col-span-full">
-            Switch on the vitals you want to track.{patient.assignedDoctorId ? ' Once you track one, only your doctor can remove it.' : ' The ones your doctor sets are locked.'}
-          </p>
-          {activeVitals.map(v => {
-            const isOn     = patient.trackedVitalIds.includes(v.id)
-            const thr      = patient.thresholds[v.id]
-            const isLocked = lockedOn(v.id)
-            const u        = unitView(v, patient)
-            const shown    = u.range(thr ?? { min: v.normalMin, max: v.normalMax })
-            return (
-              <div key={v.id}
-                className={`bg-white rounded-2xl flex items-center gap-3 px-3.5 py-3 shadow-sm ${isLocked ? 'ring-1 ring-blue-100' : ''}`}>
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg flex-shrink-0 ${isLocked ? 'bg-blue-50' : 'bg-gray-50'}`}>
-                  {v.icon}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 truncate">{v.name}</p>
-                  <p className="text-[11px] text-gray-400 truncate">
-                    {thr
-                      ? <span className="text-blue-500 font-semibold">🔒 Doctor range: {shown.min}–{shown.max} {u.unit}</span>
-                      : `Default: ${shown.min}–${shown.max} ${u.unit}`
-                    }
-                  </p>
-                </div>
-                {isLocked ? (
-                  <div className="flex items-center gap-1 bg-blue-100 px-2 py-0.5 rounded-full flex-shrink-0">
-                    <span className="text-[9px]">🔒</span>
-                    <span className="text-[10px] font-bold text-blue-600">Locked</span>
-                  </div>
-                ) : (
-                  <Toggle on={isOn} onChange={() => toggleVital(v.id)} />
-                )}
-              </div>
-            )
-          })}
-        </div>
+        /* My Vitals: chosen by the patient, matched to their conditions; the doctor's are locked. */
+        <VitalPicker grid onEditConditions={go ? () => go('profile') : undefined} />
       )}
 
       {log.sheets}

@@ -39,7 +39,9 @@ What the person sees or says, and where it lives. Screen titles are the `Page` /
 | Says / sees | Code |
 | --- | --- |
 | Home, health score, "up next", reminders, recent readings | `patient/HomeTab.tsx`, `VitalsStrip.tsx`, `ReminderSheet.tsx` |
+| Vital popup, trend popover on the home card (scrub, "+ Log", "For Hypertension") | `patient/VitalsStrip.tsx` (`TrendPopover`, `TrendChart`) |
 | "Vitals" page | `patient/VitalsTab.tsx` |
+| "My Vitals", "Vitals I Track", choosing vitals, vitals matched to conditions | `patient/VitalPicker.tsx` (both screens); matching: `vitalsForCondition`, `CONDITION_AREAS`, `conditionsByVital` in `lib/health.ts` |
 | One vital's page ("Vital"), chart, history, fix a typo | `patient/VitalDetail.tsx`, `shared/ui/VitalHistory.tsx`, `shared/ui/vitals.tsx` |
 | Log a reading, "Log all", re-measure banner | `patient/VitalLogSheets.tsx` |
 | Floating "Log vitals" button, FAB, quick log | `patient/QuickLogFab.tsx` |
@@ -297,7 +299,7 @@ File `src/<role>/<Name>Tab.tsx` wrapped in `Page` → `<Role>App.tsx`: id in `SC
 
 ### F. A new vital
 
-Live: insert into `vital_defs` in a new migration (shape: `0010_reference_data_jobs.sql`), or let an admin add it in Vitals. Demo: `INITIAL_VITAL_DEFS` in `demoData.ts`. Grouping: `VITAL_GROUPS` / `groupOf` in `vitals.ts`. Condition suggestions: `suggestedVitals` in `lib/health.ts`.
+Live: insert into `vital_defs` in a new migration (shape: `0010_reference_data_jobs.sql`), or let an admin add it in Vitals. Demo: `INITIAL_VITAL_DEFS` in `demoData.ts`. Grouping: `VITAL_GROUPS` / `groupOf` in `vitals.ts`. Condition suggestions: `suggestedVitals` in `lib/health.ts` (catalogue first, then `CONDITION_AREAS` by body area); add the new id to the areas it watches.
 
 ### G. A new email
 
@@ -333,9 +335,10 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `usePatient.ts` (256) | The portal's data hook: the signed-in patient's record, doctors (`doctor`, `consultingDoctors`, `doctorById`), `messagePartners`, `vitalPlans`, `reviews`, `recordViews`, `exportMyRecord`, `conditionDefs`, and every patient action. |
 | `useDaySchedule.ts` | Today's doses/meals with a `toggle`. |
 | `HomeTab.tsx` | Home: health score, up-next, reminders, recent readings, doctor's note, open alerts. |
-| `VitalsStrip.tsx` (497) | Home-card vitals strip. |
+| `VitalsStrip.tsx` (580) | Home-card vitals strip and its trend popup: 7D/30D (sliding thumb), a chart that draws itself in and can be scrubbed (mouse or finger) to read any point, the level of the latest reading, the conditions the vital is for, "+ Log" and "Open". |
+| `VitalPicker.tsx` (207) | Choosing the vitals to track (Vitals → My Vitals, Profile → Vitals I Track): the patient's conditions, "For your conditions" first with "Suggested for …" on any not tracked and "Track all", then other vitals; doctor-set ones locked. One save at a time. |
 | `ReminderSheet.tsx` | Reminder detail sheet. |
-| `VitalsTab.tsx` (673) | Vitals overview by group, logging entry points. |
+| `VitalsTab.tsx` (628) | Vitals overview by group, logging entry points; My Vitals is `VitalPicker`. |
 | `VitalDetail.tsx` (538) | One vital: chart, history, insights, log/correct. |
 | `VitalLogSheets.tsx` (397) | `useVitalLog`, `LogAllSheet`, self-clear (re-measure) banner. |
 | `QuickLogFab.tsx` | Floating "Log vitals": one, a group or all. |
@@ -420,7 +423,7 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `vitals.ts` (615) | Grading (`evaluate`, `targetRange`), validation, risk and health score, `alertStory`, units, trends, insights, check-in cadence (`planHours`, `checkInStatus` follow the doctor's plan), `VITAL_GROUPS`. |
 | `schedule.ts` | `buildDaySchedule`: what is due when (doses, meals, vitals, appointments). |
 | `messaging.ts` | `threadOf`, `partnersOf`, `conversationsOf`. |
-| `health.ts` | Conditions (`COMMON_CONDITIONS` for demo mode; live uses the catalogue), allergies, `suggestedVitals(conditions, catalogue)`, `healthGaps`. |
+| `health.ts` | Conditions (`COMMON_CONDITIONS` for demo mode; live uses the catalogue), allergies, `vitalsForCondition` (catalogue name first, else `CONDITION_AREAS`: body areas matched by keyword, so typed-in conditions such as "high BP" or "pre-diabetes" suggest vitals too), `suggestedVitals`, `conditionsByVital`, `healthGaps`. Suggestions only: the patient confirms; nothing is tracked without a save. |
 | `push.ts` | This device's push subscription. |
 | `ids.ts` | `newRef()` (form reference for once-only saves). |
 | `clipboard.ts` | `copyText()`: copies on https and on plain-http network addresses. |
@@ -981,7 +984,7 @@ Tabs: Home (`home`) · Vitals (`vitals`) · Meds (`medicine`) · Chat (`messages
 | --- | --- | --- |
 | Sign-up, sign-in, sessions | `src/shared/auth/*` | Account creation (the form names every missing field), consent recorded on the server, session kept across reloads, password change (other devices signed out), "sign out of all other devices", reset by emailed code. |
 | First-run health setup | `HealthSetup`, `healthForms` | Each step saved before the next opens; can be skipped and resumed. Conditions come from the admin's catalogue (`condition_defs`) and suggest the vitals to track. |
-| Home | `HomeTab`, `VitalsStrip`, `ReminderSheet` | Health score, up-next ticker, reminders, recent readings, doctor's latest note, open alerts with a Re-measure button. |
+| Home | `HomeTab`, `VitalsStrip`, `ReminderSheet` | Health score, up-next ticker, reminders, recent readings (each vital's trend popup: scrub the chart, see why it is tracked, log from it), doctor's latest note, open alerts with a Re-measure button. |
 | Vitals | `VitalsTab`, `VitalDetail`, `VitalLogSheets`, `QuickLogFab` | Log one, a group or all; validation before saving; server grading; trends, history, filters; unit choice saved; a typo corrected within 15 minutes, first value kept. The doctor's monitoring plan ("measure twice a day · why") shows on the vital's page, and its "next check" and the day's schedule follow it. |
 | Alerts | `MyAlertsTab`, `alertKit` | Raised by the database; "send to doctor now"; Re-measure on every open alert, with the result explained (cleared, still out of range, waiting for the doctor); status steps; the full story of each alert. |
 | SOS | `SosSheet` | Sent to the doctor and care team; "I'm safe now"; if it cannot be sent the patient is told and the call buttons stay. |
@@ -1448,7 +1451,7 @@ Check `git status` too: work may have started since this was written.
 
 | Change | Files |
 | --- | --- |
-| **The sign-in pill can be clicked at every width.** `AuthButton` lifts 2px on hover (`hover:-translate-y-0.5`), so a pointer parked within those 2px of its bottom edge makes it move out from under the pointer and back for ever; Playwright reported "element is not stable" and `test:ui` stopped at the doctor's sign-in. The browser test moves the pointer off the pill before clicking. The hover lift itself is unchanged (a real pointer landing in that band would still jitter — a design question, not a test one). | `supabase/tests/ui.test.mjs` (`signIn`) |
+| **Vitals matched to conditions, a richer vital popup** (branch `vitals-conditions-ux`). My Vitals and Vitals I Track are one `VitalPicker`: the patient's conditions on top, the vitals they call for first ("For Hypertension"; amber "Suggested for …" when not tracked, with "Track all"), then the rest; doctor-set vitals locked; one save at a time, so two quick taps cannot undo each other; every switch labelled. Conditions typed in or worded differently are matched by body area (`CONDITION_AREAS`), which also feeds first-run setup and the health-profile editor; still only suggestions. Home trend popup: sliding 7D/30D, the line draws in, scrub with a mouse or finger to read any reading and its time, the latest level (✓ Normal / ▲ Out / ⚠ Critical), the conditions it is for, "+ Log" (opens the log sheet) beside "Open". New motion (`index.css`: `chart-*`, `stagger-in`, `chip-in`, `pick-pop`) with calm fallbacks under reduced motion. No SQL change. Verified: typecheck; browser check of both test patients at 1366px and 390px (touch): popup, scrub, My Vitals, no console error; the matcher on 18 condition names; `test:ui` 71 passed, 0 failed. | `patient/VitalPicker.tsx` (new), `VitalsStrip.tsx`, `VitalsTab.tsx`, `ProfileTab.tsx`, `HomeTab.tsx`, `shared/lib/health.ts`, `index.css` |
 
 ### Recently finished
 

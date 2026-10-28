@@ -145,7 +145,7 @@ export function HomeTab({ go, openVital, onLog }: {
             ]} />
         }>
         {heroIds.length > 0 && (
-          <VitalsStrip patient={patient} defs={vitalDefs} ids={heroIds} now={now} onOpen={openVital} />
+          <VitalsStrip patient={patient} defs={vitalDefs} ids={heroIds} now={now} onOpen={openVital} onLog={onLog} />
         )}
       </HeroCard>
 
