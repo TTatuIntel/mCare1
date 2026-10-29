@@ -5,10 +5,17 @@ import type {
   AccountStatus, SupportTicket, ResetToken, ResetChannel, AuthProvider, VitalsReportInclude, EmailContent, SentEmail, SentSms,
   MealPlan, HydrationLog, DoctorRating, Outcome, Invitation, UserRole, ReportNote,
   CarePlan, CarePlanDraft, CarePlanItemStatus, CarePlanStatus, CareAssignment, CareTeamMember, PastPatient, DeliveryReport, TimeOff, WorkBlock, DayAvailability, AdminReport,
+<<<<<<< Updated upstream
   AppSettings, ConditionDef, RecordView, RecordViewContext, RetentionSettings, SecuritySettings, VitalFrequency, VitalReview,
 } from '@/shared/lib/types'
 import { DEFAULT_SETTINGS, FREQUENCY_LABELS } from '@/shared/lib/types'
 import { COMMON_CONDITIONS } from '@/shared/lib/health'
+=======
+  AppSettings, ClinicalSettings, DiaThreshold, AlertRule, ConditionDef, MedicationDef, PathwayPlan, RecordView, RecordViewContext, RetentionSettings, SecuritySettings, VitalFrequency, VitalReview,
+} from '@/shared/lib/types'
+import { DEFAULT_SETTINGS, FREQUENCY_LABELS } from '@/shared/lib/types'
+import { COMMON_CONDITIONS, DEMO_PATHWAYS, healthOf } from '@/shared/lib/health'
+>>>>>>> Stashed changes
 import { emails as mail, sms as smsText, appBaseUrl, activationLink, activationToken } from '@/shared/email/emailTemplate'
 import { RESET_TTL_MIN, MAX_RESET_ATTEMPTS, AUTH_PROVIDER_LABELS, FOLLOW_UP_REASON } from '@/shared/lib/types'
 import { passwordIssue } from './auth'
@@ -18,7 +25,12 @@ import { subscribePush, unsubscribePush } from '@/shared/lib/push'
 import { mfaGate, signOutBackend, type MfaGate } from '@/shared/api/authBackend'
 import * as api from '@/shared/api/actions'
 import { changeToken, isoClock, isoDay, loadRecords, searchAudit as searchAuditApi, type AuditWho, type Records } from '@/shared/api/records'
+<<<<<<< Updated upstream
 import { evaluate, alertIsFor, stamp, dateLabel, dayKey, targetRange, ESCALATE_AFTER_MIN, CORRECTION_WINDOW_MIN, type VitalLevel } from '@/shared/lib/vitals'
+=======
+import { evaluate, alertIsFor, stamp, dateLabel, dayKey, targetRange, gradingRange, levelOf, CORRECTION_WINDOW_MIN, type VitalLevel } from '@/shared/lib/vitals'
+import { allergyConflicts, conflictLabel, DEMO_MEDICATIONS, structureIssue } from '@/shared/lib/medicines'
+>>>>>>> Stashed changes
 import { apptDateLabel, apptTimeLabel, apptWhen, isOpenAppt } from '@/shared/lib/schedule'
 import { useDocumentStore, type DocumentApi } from '@/shared/documents/useDocumentStore'
 import { seedDocuments } from '@/shared/documents/docSeed'
@@ -97,7 +109,9 @@ interface Ctx extends DocumentApi {
   users: AppUser[]
   vitalDefs: VitalDef[]
   /** Admins: add a vital type, or change one (its ranges, or whether it is collected). */
-  saveVitalDef: (def: VitalDef) => Saved
+  saveVitalDef: (def: VitalDef, reason?: string) => Saved
+  /** Admins: how many active patients a definition's standard range grades (they have no personal target). */
+  vitalDefImpact: (vitalId: string) => Saved<number>
   updateUser: (id: string, patch: Partial<AppUser>) => Saved
   addUser: (u: AppUser, opts?: { invited?: boolean }) => void
   /** People registered in advance who have not signed up yet. */
@@ -152,6 +166,8 @@ interface Ctx extends DocumentApi {
   /** Set a patient's personal target range for a vital, and record the change. */
   setThreshold: (patientId: string, vitalId: string, range: { min: number; max: number }) => Saved
   setCriticalThreshold: (patientId: string, vitalId: string, range: { min: number; max: number } | null) => Saved
+  /** Blood pressure: the personal diastolic target and critical band (null = back to the standard). */
+  setDiaThreshold: (patientId: string, vitalId: string, dia: DiaThreshold | null) => Saved
   clinicalNotes: ClinicalNote[]
   doses: MedDose[]
   toggleDose: (patientId: string, rxId: string, slot: number) => Saved
@@ -260,6 +276,7 @@ interface Ctx extends DocumentApi {
   settings: AppSettings
   saveSecuritySettings: (v: SecuritySettings) => Saved
   saveRetentionSettings: (v: RetentionSettings) => Saved
+  saveClinicalSettings: (v: ClinicalSettings) => Saved
   /** Applies the retention settings now. Resolves with how many of each it removed. */
   runRetentionNow: () => Saved<api.RetentionRun>
   /** The conditions catalogue and the vitals each calls for. */
@@ -324,6 +341,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Always-fresh refs so callbacks never read stale state
   const usersRef = useRef(users); usersRef.current = users
   const alertsRef = useRef(alerts); alertsRef.current = alerts
+  const settingsRef = useRef(settings); settingsRef.current = settings
   const dosesRef = useRef(doses); dosesRef.current = doses
   const mealsRef = useRef(mealsDone); mealsRef.current = mealsDone
 
@@ -411,14 +429,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const t = Date.now()
       setNow(t)
       if (LIVE) return
-      const due = alertsRef.current.filter(a =>
-        a.status === 'open' && a.severity === 'danger' && t - a.at > ESCALATE_AFTER_MIN * MIN)
-      if (due.length === 0) return
-      setAlerts(prev => prev.map(a => due.some(d => d.id === a.id) ? { ...a, status: 'escalated', escalatedAt: stamp(new Date(t)) } : a))
+      // The same tiers as escalate_stale_alerts (migration 0023).
+      const c = settingsRef.current.clinical
+      const what = (a: AppAlert) => (a.type === 'sos' ? 'SOS' : `${a.vitalName} ${a.value} ${a.unit}`)
+      const doctorOf = (a: AppAlert) => (findUser(a.patientId) as PatientUser | undefined)?.assignedDoctorId
+      const due = alertsRef.current.filter(a => a.status === 'open' && a.severity === 'danger' && t - a.at > c.escalateMinutes * MIN)
+      const since = (a: AppAlert) => a.lastRemindedAt ?? a.at
+      const critical = alertsRef.current.filter(a => a.severity === 'danger' && (a.status === 'acknowledged' || a.status === 'escalated')
+        && (a.reminders ?? 0) < c.maxReminders && t - since(a) > c.criticalReminderMinutes * MIN && !due.includes(a))
+      const waiting = alertsRef.current.filter(a => a.severity === 'warning' && a.status !== 'resolved'
+        && (a.reminders ?? 0) < c.maxReminders && t - since(a) > c.warningReminderHours * 60 * MIN)
+      if (!due.length && !critical.length && !waiting.length) return
+      const reminded = [...critical, ...waiting]
+      setAlerts(prev => prev.map(a => due.some(d => d.id === a.id) ? { ...a, status: 'escalated', escalatedAt: stamp(new Date(t)) }
+        : reminded.some(r => r.id === a.id) ? { ...a, reminders: (a.reminders ?? 0) + 1, lastRemindedAt: t } : a))
       due.forEach(a => {
         const pt = findUser(a.patientId)
-        adminsAndMonitors().forEach(ad => notify(ad.id, 'escalation', `Escalated: ${pt?.name ?? 'Patient'}`,
-          `${a.type === 'sos' ? 'SOS' : `${a.vitalName} ${a.value} ${a.unit}`} not acknowledged within ${ESCALATE_AFTER_MIN} min`, 'alerts'))
+        adminsAndMonitors().forEach(ad => notify(ad.id, 'escalation', `Escalated: ${pt?.name ?? 'Patient'}`, `${what(a)} not acknowledged within ${c.escalateMinutes} min`, 'alerts'))
+        const doc = doctorOf(a)
+        if (doc) notify(doc, 'escalation', `Not acknowledged: ${pt?.name ?? 'Patient'}`, `${what(a)} · passed to the monitoring team`, 'alerts')
+        notify(a.patientId, 'alert', 'Your alert was passed to the wider care team',
+          `Nobody had answered yet, so more of the team has been told. If you feel unwell, use SOS or call ${c.emergencyNumber}.`, 'alerts')
+        logAudit('Escalated alert (automatic)', `${pt?.name} · ${what(a)}`)
+      })
+      critical.forEach(a => {
+        const pt = findUser(a.patientId), doc = doctorOf(a)
+        if (doc) notify(doc, 'escalation', `Still unresolved: ${pt?.name ?? 'Patient'}`, `${what(a)} · critical, open ${Math.round((t - a.at) / MIN)} min`, 'alerts')
+        adminsAndMonitors().forEach(ad => notify(ad.id, 'escalation', `Still unresolved: ${pt?.name ?? 'Patient'}`, `${what(a)} · critical alert not yet resolved`, 'alerts'))
+        logAudit('Reminded about alert', `${pt?.name} · ${what(a)} · critical`)
+      })
+      waiting.forEach(a => {
+        const pt = findUser(a.patientId), doc = doctorOf(a)
+        if (doc) notify(doc, 'alert', `Alert waiting: ${pt?.name ?? 'Patient'}`, `${what(a)} · out of range, not yet resolved`, 'alerts')
+        else adminsAndMonitors().forEach(ad => notify(ad.id, 'alert', `Alert waiting: ${pt?.name ?? 'Patient'}`, `${what(a)} · patient has no doctor`, 'alerts'))
+        logAudit('Reminded about alert', `${pt?.name} · ${what(a)} · warning`)
       })
     }
     tick()
@@ -862,16 +906,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return done()
   }
 
-  const saveVitalDef = (def: VitalDef): Saved => {
+  /** The fields that decide how readings are graded: changing any needs a reason (save_vital_def, migration 0024). */
+  const gradingOf = (v: VitalDef) => JSON.stringify([v.normalMin, v.normalMax, v.criticalMin ?? null, v.criticalMax ?? null, v.diaNormalMin ?? null, v.diaNormalMax ?? null,
+    v.diaCriticalMin ?? null, v.diaCriticalMax ?? null, v.graded !== false, v.criticalFallback !== false, v.contextRanges ?? {}])
+  /** Active patients tracking this vital with no personal target: the ones its standard range grades. */
+  const gradedByStandard = (vitalId: string) => usersRef.current.filter((u): u is PatientUser =>
+    u.role === 'patient' && u.status === 'active' && u.trackedVitalIds.includes(vitalId) && !u.thresholds[vitalId])
+  const saveVitalDef = (def: VitalDef, reason?: string): Saved => {
     if (!def.name.trim() || !def.unit.trim()) return refused('Name and unit are required.')
     if (!(def.normalMin < def.normalMax)) return refused('Normal min must be lower than normal max.')
-    if (LIVE) return run(() => api.saveVitalDef(def))   // the database audits the change
     const before = vitalDefs.find(v => v.id === def.id)
+    const why = reason?.trim()
+    const gradingChanged = !!before && gradingOf(before) !== gradingOf(def)
+    if (gradingChanged && !why) return refused('Say why the standard range is changing: it changes how readings are graded for patients without a personal target.')
+    if (LIVE) return run(() => api.saveVitalDef(def, why))   // the database audits the change and tells the doctors
     setVitalDefsState(prev => before ? prev.map(v => v.id === def.id ? def : v) : [...prev, def])
     if (!before) logAudit('Added vital type', def.name)
     else if (before.active !== def.active) logAudit(def.active ? 'Activated vital type' : 'Deactivated vital type', def.name)
-    else logAudit('Updated vital definition', `${def.name}: normal ${def.normalMin}–${def.normalMax}`)
+    else logAudit('Updated vital definition', `${def.name}: normal ${def.normalMin}–${def.normalMax}${why ? ` · ${why}` : ''}`)
+    if (gradingChanged)
+      new Set(gradedByStandard(def.id).map(p => p.assignedDoctorId).filter((d): d is string => !!d)).forEach(doc =>
+        notify(doc, 'alert', `Standard range changed: ${def.name}`, `Normal ${def.normalMin}–${def.normalMax} ${def.unit} now applies to your patients without a personal target · ${why}`, 'patients'))
     return done()
+  }
+  const vitalDefImpact = async (vitalId: string): Saved<number> => {
+    if (!LIVE) return { ok: true, value: gradedByStandard(vitalId).length }
+    try { return { ok: true, value: await api.vitalDefImpact(vitalId) } } catch (e) { return { ok: false, error: api.explain(e) } }
   }
 
   /* ─ prescriptions, notes, doses ─ */
@@ -1002,34 +1062,61 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return done()
   }
 
+  const setDiaThreshold = (patientId: string, vitalId: string, dia: DiaThreshold | null): Saved => {
+    const pt = findUser(patientId) as PatientUser | undefined
+    const def = vitalDefs.find(v => v.id === vitalId)
+    if (!pt || !def) return refused('That vital is no longer available.')
+    if (dia?.target && !(dia.target.min < dia.target.max)) return refused("The lower number's target minimum must be below its maximum.")
+    if (dia?.critical?.min !== undefined && dia?.critical?.max !== undefined && !(dia.critical.min < dia.critical.max)) return refused("The lower number's critical limits are the wrong way round.")
+    if (LIVE) return run(() => api.setDiaThreshold(patientId, vitalId, dia, targetRange(pt, def)))
+    patchPatient(patientId, p => {
+      const next = { ...p.diaThresholds }
+      if (dia) next[vitalId] = dia
+      else delete next[vitalId]
+      return { ...p, diaThresholds: next }
+    })
+    if (dia?.target) notify(patientId, 'alert', 'Your target was updated', `${def.name} (lower number): ${dia.target.min}–${dia.target.max} ${def.unit}`, 'vitals')
+    logAudit('Set diastolic range', `${pt.name} · ${def.name}`)
+    return done()
+  }
+
   /* ─ alert engine (demo mode; in live mode the database runs these same rules when a reading is saved) ─ */
-  const createAlert = (pt: PatientUser, def: VitalDef, reading: VitalReading, severity: 'danger' | 'warning') => {
+  /** Current consulting doctors of a patient: told of a critical alert or an SOS (migration 0023), never of routine steps. */
+  const consultantsOf = (patientId: string) => careTeam.filter(m => m.patientId === patientId && !m.endedAt).map(m => m.doctorId)
+  const createAlert = (pt: PatientUser, def: VitalDef, reading: VitalReading, severity: 'danger' | 'warning', rule?: AlertRule, detail?: string) => {
     const t = Date.now()
     const alert: AppAlert = {
       id: uid('al'), patientId: pt.id, vitalId: def.id, vitalName: def.name, value: reading.value, unit: def.unit,
-      severity, type: 'vital', status: 'open', resolved: false, at: t, loggedAt: stamp(new Date(t)), readingId: reading.id,
+      severity, type: 'vital', status: 'open', resolved: false, at: t, loggedAt: stamp(new Date(t)), readingId: reading.id, rule,
     }
     setAlerts(prev => [alert, ...prev])
-    const title = `${severity === 'danger' ? 'Critical' : 'Warning'}: ${pt.name}`
-    const body = `${def.name} ${reading.value} ${def.unit}`
+    const title = `${severity === 'danger' ? 'Critical' : rule === 'repeat_warning' ? 'Repeatedly out of range' : rule === 'weight_gain' ? 'Weight gain' : 'Warning'}: ${pt.name}`
+    const body = `${def.name} ${reading.value} ${def.unit}${detail ? ` · ${detail}` : ''}`
     if (pt.assignedDoctorId) notify(pt.assignedDoctorId, 'alert', title, body, 'alerts')
     if (severity === 'danger' || !pt.assignedDoctorId)
       adminsAndMonitors().forEach(a => notify(a.id, 'alert', title, `${body}${pt.assignedDoctorId ? '' : ' — patient has no doctor'}`, 'alerts'))
-    notify(pt.id, 'alert', severity === 'danger' ? 'Critical reading — your doctor has been alerted' : 'Reading sent to your doctor', body, 'alerts')
+    if (severity === 'danger') consultantsOf(pt.id).forEach(d => notify(d, 'alert', title, body, 'alerts'))
+    notify(pt.id, 'alert', severity === 'danger' ? 'Critical reading — your doctor has been alerted'
+      : rule === 'weight_gain' ? 'Your weight gain was sent to your care team' : rule === 'repeat_warning' ? 'Your readings were sent to your care team' : 'Reading sent to your doctor',
+      `${body}${severity === 'danger' ? ` · If you feel unwell, use SOS or call ${settings.clinical.emergencyNumber}.` : ''}`, 'alerts')
   }
 
   const logReading = (patientId: string, reading: VitalReading): Saved<LogResult> => {
     if (LIVE) return run(async () => {
-      const saved = await api.logReading(patientId, reading.vitalId, reading.value, reading.note, reading.clientRef)
+      const saved = await api.logReading(patientId, reading.vitalId, reading.value, reading.note, reading.clientRef, { context: reading.context, source: reading.source })
       return { level: saved.level, alerted: saved.alerted, readingId: saved.readingId, cleared: saved.cleared, followsAlert: saved.followsAlert }
     })
     const pt = findUser(patientId) as PatientUser | undefined
     const def = vitalDefs.find(v => v.id === reading.vitalId)
     const t = Date.now()
-    const full: VitalReading = { ...reading, at: t, loggedAt: stamp(new Date(t)), recordedBy: actorId() }
+    const byOther = actorId() !== patientId
+    const graded = pt && def ? { level: evaluate(pt, def, reading.value, reading.context), gradedRange: gradingRange(pt, def, reading.context) } : {}
+    const full: VitalReading = { ...reading, ...graded, at: t, loggedAt: stamp(new Date(t)), recordedBy: actorId(),
+      source: byOther ? 'clinic' : reading.source === 'device' ? 'device' : 'manual' }
     patchPatient(patientId, p => ({ ...p, readings: [full, ...p.readings] }))
     if (!pt || !def) return done({ level: 'normal', alerted: false, readingId: full.id })
-    const level = evaluate(pt, def, full.value)
+    const level = full.level ?? 'normal'
+    const clinical = settings.clinical
     const label = `${def.name} ${full.value} ${def.unit}`
     // A reading the care team entered is announced to the patient, whose record it is.
     if (actorId() !== patientId) {
@@ -1037,15 +1124,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       logAudit('Recorded reading for patient', `${pt.name} · ${label}`)
     }
 
-    // The alert still open on this vital: this reading is a re-measurement of it.
+    // The alert still open on this vital (and still recent: the re-measurement window): this reading is a re-measurement of it.
+    const lastActivity = (a: AppAlert) => Math.max(a.at, a.recheckRequestedAt ?? 0,
+      ...(a.remeasureIds ?? []).map(id => pt.readings.find(r => r.id === id)?.at ?? 0))
     const open = alertsRef.current.find(a =>
-      a.patientId === patientId && a.type === 'vital' && alertIsFor(a, def) && a.status !== 'resolved')
+      a.patientId === patientId && a.type === 'vital' && alertIsFor(a, def) && a.status !== 'resolved'
+      && t - lastActivity(a) < clinical.remeasureWindowHours * 60 * MIN)
     if (open) {
       const linked = { recheckReadingId: full.id, remeasureIds: [...(open.remeasureIds ?? []), full.id] }
       const patch = (more: Partial<AppAlert>) => setAlerts(prev => prev.map(a => (a.id === open.id ? { ...a, ...linked, ...more } : a)))
       const doctor = pt.assignedDoctorId
-      // A warning closes on an in-range re-measurement, whenever it comes.
-      if (level === 'normal' && open.severity === 'warning') {
+      // A warning closes on an in-range re-measurement; one raised by a pattern goes to the doctor like a critical one.
+      if (level === 'normal' && open.severity === 'warning' && !open.rule) {
         const asked = open.recheckRequestedAt !== undefined
         patch({
           status: 'resolved', resolved: true, resolvedAt: stamp(), resolvedBy: actorId(), resolvedHow: 'remeasure',
@@ -1066,17 +1156,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Still out of range: the same alert carries on, at the worse of the two severities.
       patch(level === 'critical' ? { severity: 'danger' } : {})
       notify(patientId, 'alert', level === 'critical' ? 'Still critical: contact your doctor' : 'Still outside your range',
-        `${label} · ${level === 'critical' ? 'your care team has been told. If you feel unwell, use SOS or call 999.' : 'your doctor has been told. Message them if you feel unwell.'}`, 'alerts')
+        `${label} · ${level === 'critical' ? `your care team has been told. If you feel unwell, use SOS or call ${clinical.emergencyNumber}.` : 'your doctor has been told. Message them if you feel unwell.'}`, 'alerts')
       if (doctor) notify(doctor, 'alert', `${level === 'critical' ? 'Critical' : 'Still out of range'}: ${pt.name}`, `${label} · re-measurement`, 'alerts')
+      if (level === 'critical') consultantsOf(patientId).forEach(d => notify(d, 'alert', `Critical: ${pt.name}`, `${label} · re-measurement`, 'alerts'))
       return done({ level, alerted: false, readingId: full.id, followsAlert: true })
     }
 
-    if (level === 'normal') return done({ level, alerted: false, readingId: full.id })
     if (level === 'critical') { createAlert(pt, def, full, 'danger'); return done({ level, alerted: true, readingId: full.id }) }
-    // Warning: ask the patient to re-measure first — alert only if the previous reading (last 60 min) was also abnormal
-    const prev = pt.readings.find(x => x.vitalId === def.id && !x.invalid && x.at && t - x.at < 60 * MIN)
-    const repeat = prev && evaluate(pt, def, prev.value) !== 'normal'
-    if (repeat) { createAlert(pt, def, full, 'warning'); return done({ level, alerted: true, readingId: full.id }) }
+    if (level === 'warning') {
+      // Ask the patient to re-measure first: alert only if the previous reading (last 60 min) was also abnormal ...
+      const prev = pt.readings.find(x => x.vitalId === def.id && !x.invalid && x.at && t - x.at < 60 * MIN)
+      if (prev && levelOf(pt, def, prev) !== 'normal') { createAlert(pt, def, full, 'warning'); return done({ level, alerted: true, readingId: full.id }) }
+      // ... or if this vital has been out of range repeatedly lately; counting restarts after the last alert on it.
+      const lastAlert = Math.max(0, ...alertsRef.current.filter(a => a.patientId === patientId && alertIsFor(a, def)).map(a => a.at))
+      const since = Math.max(t - clinical.repeatWarningDays * 24 * 60 * MIN, lastAlert)
+      const n = 1 + pt.readings.filter(x => x.vitalId === def.id && !x.invalid && (x.at ?? 0) > since && levelOf(pt, def, x) !== 'normal').length
+      if (n >= clinical.repeatWarnings) {
+        createAlert(pt, def, full, 'warning', 'repeat_warning', `${n} readings out of range in ${clinical.repeatWarningDays} days`)
+        return done({ level, alerted: true, readingId: full.id })
+      }
+    }
+    // Heart failure: a quick weight gain is a warning whatever the range says.
+    if (def.id === 'wt' && healthOf(pt).conditions.some(c => /heart failure/i.test(c))) {
+      const recent = pt.readings.filter(x => x.vitalId === 'wt' && !x.invalid && (x.at ?? 0) > t - clinical.weightGainDays * 24 * 60 * MIN).map(x => Number(x.value))
+      const gain = recent.length ? Number(full.value) - Math.min(...recent) : 0
+      if (gain >= clinical.weightGainKg) {
+        createAlert(pt, def, full, 'warning', 'weight_gain', `up ${Math.round(gain * 10) / 10} kg in ${clinical.weightGainDays} days`)
+        return done({ level, alerted: true, readingId: full.id })
+      }
+    }
     return done({ level, alerted: false, readingId: full.id })
   }
 
@@ -1138,6 +1246,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const body = message || 'Patient pressed the emergency button'
     if (pt.assignedDoctorId) notify(pt.assignedDoctorId, 'sos', `SOS: ${pt.name}`, body, 'alerts')
     adminsAndMonitors().forEach(a => notify(a.id, 'sos', `SOS: ${pt.name}`, body, 'alerts'))
+    consultantsOf(patientId).forEach(d => notify(d, 'sos', `SOS: ${pt.name}`, body, 'alerts'))
     logAudit('SOS raised', pt.name)
     return done()
   }
@@ -1873,6 +1982,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
     logAudit('Changed settings', 'Data retention')
     return done()
   }
+  const saveClinicalSettings = (v: ClinicalSettings): Saved => {
+    if (!/^\+?[0-9 ]{2,15}$/.test(v.emergencyNumber.trim())) return refused('The emergency number must be 2 to 15 digits.')
+    const limits: [keyof ClinicalSettings, number, number, string][] = [
+      ['escalateMinutes', 2, 120, 'Escalation'], ['criticalReminderMinutes', 15, 1440, 'Critical reminder'], ['warningReminderHours', 1, 168, 'Warning reminder'],
+      ['maxReminders', 0, 10, 'Reminders'], ['repeatWarnings', 2, 20, 'Repeated readings'], ['repeatWarningDays', 1, 30, 'Repeated readings days'],
+      ['remeasureWindowHours', 1, 168, 'Re-measurement window'], ['remeasureNudgeMinutes', 5, 240, 'Re-measure reminder'],
+      ['missedPatientFactor', 1, 10, 'Patient reminder'], ['missedDoctorFactor', 1.5, 30, 'Doctor reminder'], ['weightGainKg', 0.5, 10, 'Weight gain'], ['weightGainDays', 1, 14, 'Weight gain days'],
+    ]
+    for (const [k, lo, hi, label] of limits) {
+      const n = Number(v[k])
+      if (!Number.isFinite(n) || n < lo || n > hi) return refused(`${label} must be between ${lo} and ${hi}.`)
+    }
+    if (LIVE) return run(() => api.saveClinicalSettings({ ...v, emergencyNumber: v.emergencyNumber.trim() }))
+    if (!isAdminNow()) return refused('Only an admin can change the settings.')
+    setSettings(prev => ({ ...prev, clinical: { ...v, emergencyNumber: v.emergencyNumber.trim() } }))
+    logAudit('Changed settings', 'Clinical safety')
+    return done()
+  }
   const runRetentionNow = (): Saved<api.RetentionRun> => {
     if (LIVE) return run(() => api.runRetentionNow())
     if (!isAdminNow()) return refused('Only an admin can apply retention.')
@@ -1966,7 +2093,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ...docStore,
       now, live: LIVE, currentUser, setCurrentUser, signIn, entering, enterError, retryEnter,
       sync, online, refresh, run, saveError, clearSaveError: () => setSaveError(undefined),
-      users, vitalDefs, saveVitalDef,
+      users, vitalDefs, saveVitalDef, vitalDefImpact, setDiaThreshold,
       updateUser, addUser, invitations, inviteUser, revokeInvitation,
       getDoctors, getPatients, getAdmins,
       updateAssistantPerms, assignPatientToDoctor, resolvePatientRequest, setUserStatus, decideDoctor,
@@ -1989,7 +2116,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setPasswordAfterVerification, recoveryChannels, requestAdminPasswordHelp, socialAuth,
       supportTickets, createSupportTicket, resolveSupportTicket,
       signOut, mfa: mfa ? { step: mfa.step, account: mfa.account } : null, completeMfa, cancelMfa,
+<<<<<<< Updated upstream
       settings, saveSecuritySettings, saveRetentionSettings, runRetentionNow, conditionDefs, saveConditionDef,
+=======
+      settings, saveSecuritySettings, saveRetentionSettings, saveClinicalSettings, runRetentionNow, conditionDefs, saveConditionDef, applyPathway, medicationDefs, setMedicationActive,
+>>>>>>> Stashed changes
       setVitalPlan, vitalReviews, reviewVitals, recordViews, logRecordView, exportMyRecord, adminUpdateProfile, resetTwoStep,
     }}>
       {children}

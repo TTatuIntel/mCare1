@@ -7,7 +7,7 @@ import {
 import type { PatientUser } from '@/shared/lib/types'
 import { FREQUENCY_LABELS } from '@/shared/lib/types'
 import {
-  evaluate, alertIsFor, latestValid, targetRange, effectiveCriticalRange, validateReading, vitalTrend, generateInsights,
+  levelOf, alertIsFor, latestValid, targetRange, effectiveCriticalRange, validateReading, vitalTrend, generateInsights,
   checkInStatus, shortDuration, readingTime, unitView, ago, dateLabel, stamp, parseValue, groupOf, VITAL_GROUPS,
   type Range, type TimeWindow,
 } from '@/shared/lib/vitals'
@@ -84,19 +84,19 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
   const crit = effectiveCriticalRange(def, patient)
   const diaTarget = def.id === 'bp' ? { min: def.diaNormalMin ?? 60, max: def.diaNormalMax ?? 90 } : undefined
   const latest = latestValid(patient, def.id)
-  const st = levelStyle(latest ? evaluate(patient, def, latest.value) : null)
-  const checkIn = checkInStatus(def.id, latest?.at, now, patient)
+  const st = levelStyle(latest ? levelOf(patient, def, latest) : null)
+  const checkIn = checkInStatus(def.id, latest?.at, now, patient, def)
   // Where the latest reading sits against the target, in words. Blood pressure can be out on either number.
   const latestP = latest ? parseValue(def, latest.value) : null
-  const latestLvl = latest ? evaluate(patient, def, latest.value) : null
+  const latestLvl = latest ? levelOf(patient, def, latest) : null
   const standing = !latestP || !latestLvl ? null
     : latestLvl === 'normal' ? 'Inside your target'
     : latestP.primary > target.max ? 'Above your target'
     : latestP.primary < target.min ? 'Below your target'
     : 'Outside your target'
   // The vitals measured together with this one: the rest of its group that the patient tracks.
-  const group = VITAL_GROUPS.find(g => g.id === groupOf(def.id))
-  const related = vitalDefs.filter(v => v.active && v.id !== def.id && patient.trackedVitalIds.includes(v.id) && groupOf(v.id) === group?.id)
+  const group = VITAL_GROUPS.find(g => g.id === groupOf(def.id, def))
+  const related = vitalDefs.filter(v => v.active && v.id !== def.id && patient.trackedVitalIds.includes(v.id) && groupOf(v.id, v) === group?.id)
 
   // The period on show. Presets are open-ended at the top so a reading logged this second is never cut off.
   const preset = PRESETS.find(p => p.key === range.preset)
@@ -179,7 +179,7 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
                   on ? 'bg-teal-700 text-white border-teal-700' : 'bg-white text-gray-600 border-gray-200'}`}>
                 <span>{v.icon}</span>
                 {v.name}
-                <span className={`w-1.5 h-1.5 rounded-full ${levelStyle(r ? evaluate(patient, v, r.value) : null).dot}`} />
+                <span className={`w-1.5 h-1.5 rounded-full ${levelStyle(r ? levelOf(patient, v, r) : null).dot}`} />
               </button>
             )
           })}
@@ -255,7 +255,7 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
             {related.map(v => {
               const r = latestValid(patient, v.id)
               const ru = unitView(v, patient)
-              const rs = levelStyle(r ? evaluate(patient, v, r.value) : null)
+              const rs = levelStyle(r ? levelOf(patient, v, r) : null)
               const at = r ? readingTime(r) : null
               return (
                 <button key={v.id} onClick={() => onSelect(v.id)} className="flex items-center gap-2.5 border-t border-gray-50 py-2 text-left first:border-0">

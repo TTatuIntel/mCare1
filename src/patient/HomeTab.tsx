@@ -7,7 +7,7 @@ import {
 import { usePatient } from './usePatient'
 import { AlertSummaryCard } from './alertKit'
 import type { PatientUser } from '@/shared/lib/types'
-import { evaluate, latestValid, healthScore, unitView, ago } from '@/shared/lib/vitals'
+import { levelOf, latestValid, healthScore, unitView, ago } from '@/shared/lib/vitals'
 import { countdown, toneOf, TONE_PILL, type ScheduleItem } from '@/shared/lib/schedule'
 import { VitalsStrip } from './VitalsStrip'
 import { useDaySchedule } from './useDaySchedule'
@@ -132,7 +132,7 @@ export function HomeTab({ go, openVital, onLog }: {
           if (score === null) return patient.readings.length === 0
             ? <button onClick={logFirst} className="underline underline-offset-2 text-emerald-200">Log your first reading to see your score →</button>
             : 'Log your vitals to see your score'
-          const off = patient.trackedVitalIds.filter(id => { const d = vitalDefs.find(v => v.id === id); const r = latestValid(patient, id); return d && r && evaluate(patient, d, r.value) !== 'normal' }).length
+          const off = patient.trackedVitalIds.filter(id => { const d = vitalDefs.find(v => v.id === id); const r = latestValid(patient, id); return d && r && levelOf(patient, d, r) !== 'normal' }).length
           return off === 0 ? 'All readings on target' : `${off} reading${off > 1 ? 's' : ''} need${off > 1 ? '' : 's'} attention`
         })()}
         progress={score ?? 0}
@@ -230,7 +230,7 @@ export function HomeTab({ go, openVital, onLog }: {
               <button key={r.id} onClick={() => openVital(def.id)} className="w-full flex items-center gap-2 py-1.5 text-xs text-left">
                 <span>{def.icon}</span>
                 <span className="flex-1 text-gray-600">{def.name}</span>
-                <span className={`font-bold ${levelStyle(evaluate(patient, def, r.value)).value} font-mono`}>{unitView(def, patient).value(r.value)}</span>
+                <span className={`font-bold ${levelStyle(levelOf(patient, def, r)).value} font-mono`}>{unitView(def, patient).value(r.value)}</span>
                 <span className="text-[10px] text-gray-400 w-16 text-right">{ago(r.at!, now)}</span>
                 <span className="text-gray-300" aria-hidden="true">›</span>
               </button>

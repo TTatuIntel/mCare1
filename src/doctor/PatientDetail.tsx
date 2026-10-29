@@ -6,7 +6,7 @@ import {
 } from '@/shared'
 import { useVisits } from './useVisits'
 import type { AppAlert, DocSourceLink } from '@/shared/lib/types'
-import { evaluate, latestValid, riskScore, riskBand, targetRange, ago, dateLabel, resolvedHowLabel } from '@/shared/lib/vitals'
+import { levelOf, latestValid, riskScore, riskBand, targetRange, ago, dateLabel, resolvedHowLabel } from '@/shared/lib/vitals'
 import { buildDaySchedule, apptWhen, splitAppts } from '@/shared/lib/schedule'
 import { AlertCard } from './AlertCard'
 import { PatientDocs } from './PatientDocs'
@@ -104,7 +104,7 @@ export function PatientDetail({ patientId, onBack, initial = 'overview', initial
                   const def = vitalDefs.find(v => v.id === vId)
                   if (!def) return null
                   const latest = latestValid(patient, vId)
-                  const l = latest ? evaluate(patient, def, latest.value) : null
+                  const l = latest ? levelOf(patient, def, latest) : null
                   return (
                     <VitalCard key={vId} def={def} value={latest?.value} level={l} at={latest?.at} now={now} onClick={() => setSection('vitals')} />
                   )
@@ -192,7 +192,7 @@ export function PatientDetail({ patientId, onBack, initial = 'overview', initial
                 const def = vitalDefs.find(v => v.id === vId)
                 const r = latestValid(patient, vId)
                 if (!def || !r) return null
-                const l = evaluate(patient, def, r.value)
+                const l = levelOf(patient, def, r)
                 const thr = targetRange(patient, def)
                 return (
                   <div key={vId} className={`p-3 ${l === 'normal' ? 'bg-white' : l === 'warning' ? 'bg-amber-50' : 'bg-red-50'}`}>

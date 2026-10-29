@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import { RESOLUTION_REASONS, FOLLOW_UP_REASON, REMEASURED_REASON, ALERT_COMMENT_KINDS } from '@/shared/lib/types'
 import type { AppAlert, AlertCommentKind, PatientUser } from '@/shared/lib/types'
-import { dayKey, ago, alertStory, alertRemeasures, evaluate, LEVEL_WORD, type AlertStep } from '@/shared/lib/vitals'
+import { dayKey, ago, alertStory, alertRemeasures, levelOf, LEVEL_WORD, type AlertStep } from '@/shared/lib/vitals'
 import { Pill } from './primitives'
 import { BottomSheet, SheetButton, Field, inputCls, SaveError, useSave } from './BottomSheet'
 
@@ -93,7 +93,7 @@ export function ResolveAlertSheet({ alert: opened, patientName, onClose }: { ale
   // Where the re-measurement stands: not asked, waiting, or in.
   const remeasures = alertRemeasures(alert, patient).filter(r => !r.invalid)
   const last = remeasures[remeasures.length - 1]
-  const lastLevel = last && patient && def ? evaluate(patient, def, last.value) : undefined
+  const lastLevel = last && patient && def ? levelOf(patient, def, last) : undefined
   const requested = alert.recheckRequestedAt
   const answered = !!last && (!requested || (last.at ?? 0) >= requested)
   const useReading = () => {

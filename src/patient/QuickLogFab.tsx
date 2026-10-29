@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import { BottomSheet, SheetButton, levelStyle } from '@/shared'
-import { evaluate, latestValid, unitView, ago, readingTime, groupOf, VITAL_GROUPS } from '@/shared/lib/vitals'
+import { levelOf, latestValid, unitView, ago, readingTime, groupOf, VITAL_GROUPS } from '@/shared/lib/vitals'
 import { usePatient } from './usePatient'
 import { useSelfClear } from './VitalLogSheets'
 
@@ -35,7 +35,7 @@ export function QuickLogFab({ onLogOne, onLogGroup, onLogAll, due = false }: {
   const groups = VITAL_GROUPS
     .map(g => ({
       ...g,
-      tiles: tracked.filter(v => groupOf(v.id) === g.id).map(def => {
+      tiles: tracked.filter(v => groupOf(v.id, v) === g.id).map(def => {
         const sc = selfClear(def)
         return { def, last: latestValid(patient, def.id), remeasure: !!sc, clears: !!sc?.clears }
       }),
@@ -94,7 +94,7 @@ export function QuickLogFab({ onLogOne, onLogGroup, onLogAll, due = false }: {
                 {g.tiles.map(({ def, last, remeasure, clears }) => {
                   const u = unitView(def, patient)
                   const at = last ? readingTime(last) : null
-                  const lvl = last ? evaluate(patient, def, last.value) : null
+                  const lvl = last ? levelOf(patient, def, last) : null
                   return (
                     <button key={def.id} type="button" onClick={() => pick(() => onLogOne(def.id))}
                       className={`relative flex flex-col items-start gap-1 rounded-2xl border p-3 text-left transition-all active:scale-[.97] hover:border-teal-300 ${remeasure ? 'border-amber-300 bg-amber-50' : 'border-gray-200 bg-white'}`}>

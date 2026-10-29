@@ -3,7 +3,7 @@ import { useApp } from '@/shared/state/AppContext'
 import { Toggle, Page, HeroCard, VitalChart, InsightNotes, levelStyle, useElementWidth, TREND_ARROW, HERO_GRADIENT } from '@/shared'
 import type { PatientUser, VitalDef } from '@/shared/lib/types'
 import {
-  evaluate, latestValid, targetRange, vitalTrend, generateInsights, readingTime, unitView, ago, groupOf, VITAL_GROUPS,
+  levelOf, latestValid, targetRange, vitalTrend, generateInsights, readingTime, unitView, ago, groupOf, VITAL_GROUPS,
   type VitalInsight, type VitalTrend,
 } from '@/shared/lib/vitals'
 import { countdown } from '@/shared/lib/schedule'
@@ -91,13 +91,13 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital, go }: {
   const statusOf = (v: VitalDef): Status => {
     const r = latestValid(patient, v.id)
     if (!r) return 'none'
-    return evaluate(patient, v, r.value) === 'normal' ? 'normal' : 'alert'
+    return levelOf(patient, v, r) === 'normal' ? 'normal' : 'alert'
   }
   const count = (s: Status) => tracked.filter(v => statusOf(v) === s).length
 
   /** The groups the patient tracks something in: the choices of the group filter. */
-  const groups = VITAL_GROUPS.filter(g => tracked.some(v => groupOf(v.id) === g.id))
-  const inGroup = tracked.filter(v => !groupFilter || groupOf(v.id) === groupFilter)
+  const groups = VITAL_GROUPS.filter(g => tracked.some(v => groupOf(v.id, v) === g.id))
+  const inGroup = tracked.filter(v => !groupFilter || groupOf(v.id, v) === groupFilter)
   const clearFilters = () => { setStatusFilter(null); setGroupFilter(null) }
 
   /** Cards actually rendered: filtered by the summary pills and the group, alerts first. */
@@ -108,7 +108,7 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital, go }: {
   const sections: { group?: typeof VITAL_GROUPS[number]; vitals: VitalDef[] }[] = statusFilter
     ? [{ vitals: visible }]
     : VITAL_GROUPS
-      .map(group => ({ group, vitals: visible.filter(v => groupOf(v.id) === group.id) }))
+      .map(group => ({ group, vitals: visible.filter(v => groupOf(v.id, v) === group.id) }))
       .sort((a, b) => Math.min(...a.vitals.map(v => RANK[statusOf(v)]), 3) - Math.min(...b.vitals.map(v => RANK[statusOf(v)]), 3))
 
   /* ─ Trends: recomputed only when readings or the window change ─ */
@@ -252,7 +252,7 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital, go }: {
               : 'flex flex-col gap-2 @2xl:grid @2xl:grid-cols-2 @2xl:gap-3 @5xl:grid-cols-3'}>
               {sec.vitals.map(v => {
                 const reading  = latestValid(patient, v.id)
-                const lvl      = reading ? evaluate(patient, v, reading.value) : null
+                const lvl      = reading ? levelOf(patient, v, reading) : null
                 const st       = levelStyle(lvl)
                 const isLocked = !!patient.thresholds[v.id]
                 const tr       = trends.get(v.id)
