@@ -1538,5 +1538,56 @@ await as(ID.doc, `insert into thresholds (patient_id, vital_id, target_min, targ
 const vsCopd = await vlog('spo2', '89')
 check('with a target of 88–92 %, 89 % is in range: the critical edge moves outside the target', vsCopd.level === 'normal' && Number(vsCopd.graded_range.critical[0]) === 87)
 
+// Item 7: the app grades exactly as the database does. src/shared/lib/vitals.ts is compiled here and run on the same values,
+// for a patient with no personal ranges (pat2's standard ones) and one with personal ones (Vera: diastolic, SpO₂ 88–92).
+{
+  const ts = (await import('typescript')).default
+  const { mkdtempSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const out = mkdtempSync(join(tmpdir(), 'mcare-grading-'))
+  const lib = join(here, '..', '..', 'src', 'shared', 'lib')
+  for (const f of ['types', 'vitals']) {
+    const js = ts.transpileModule(readFileSync(join(lib, `${f}.ts`), 'utf8'), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText
+    writeFileSync(join(out, `${f}.mjs`), js.replace(/from '\.\/types'/g, "from './types.mjs'"))
+  }
+  const { evaluate } = await import(new URL(`file:///${join(out, 'vitals.mjs').replace(/\\/g, '/')}`))
+  const nums = v => (v === null || v === undefined ? undefined : Number(v))
+  const defs = Object.fromEntries((await db.query(`select * from vital_defs`)).rows.map(r => [r.id, {
+    id: r.id, name: r.name, unit: r.unit, active: true, normalMin: Number(r.normal_min), normalMax: Number(r.normal_max),
+    criticalMin: nums(r.critical_min), criticalMax: nums(r.critical_max), hardMin: Number(r.hard_min), hardMax: Number(r.hard_max),
+    diaNormalMin: nums(r.dia_normal_min), diaNormalMax: nums(r.dia_normal_max), diaCriticalMin: nums(r.dia_critical_min), diaCriticalMax: nums(r.dia_critical_max),
+    graded: r.graded, criticalFallback: r.critical_fallback,
+    contextRanges: Object.keys(r.context_ranges ?? {}).length ? Object.fromEntries(Object.entries(r.context_ranges).map(([k, c]) => [k, { normalMin: nums(c.normal_min), normalMax: nums(c.normal_max) }])) : undefined,
+  }]))
+  const patientOf = async id => {
+    const rows = (await db.query(`select * from thresholds where patient_id = $1`, [id])).rows
+    return {
+      thresholds: Object.fromEntries(rows.map(t => [t.vital_id, { min: Number(t.target_min), max: Number(t.target_max) }])),
+      criticalThresholds: Object.fromEntries(rows.filter(t => t.critical_min !== null && t.critical_max !== null).map(t => [t.vital_id, { min: Number(t.critical_min), max: Number(t.critical_max) }])),
+      diaThresholds: Object.fromEntries(rows.filter(t => t.dia_target_min !== null || t.dia_critical_min !== null || t.dia_critical_max !== null).map(t => [t.vital_id, {
+        target: t.dia_target_min !== null ? { min: Number(t.dia_target_min), max: Number(t.dia_target_max) } : undefined,
+        critical: { min: nums(t.dia_critical_min), max: nums(t.dia_critical_max) } }])),
+    }
+  }
+  const cases = [
+    ['bp', '120/80'], ['bp', '131/80'], ['bp', '180/90'], ['bp', '179/119'], ['bp', '120/85'], ['bp', '120/120'], ['bp', '80/50'], ['bp', '81/39'],
+    ['hr', '59'], ['hr', '60'], ['hr', '100'], ['hr', '101'], ['hr', '40'], ['hr', '130'],
+    ['spo2', '100'], ['spo2', '95'], ['spo2', '94'], ['spo2', '90'], ['spo2', '91'], ['spo2', '89'], ['spo2', '87'], ['spo2', '86'],
+    ['gluc', '120', 'fasting'], ['gluc', '120', 'after_meal'], ['gluc', '185', 'after_meal'], ['gluc', '54'], ['gluc', '250'], ['gluc', '141'], ['gluc', '95', 'bedtime'],
+    ['temp', '99.5'], ['temp', '103'], ['temp', '96.9'], ['wt', '151'], ['wt', '29.5'], ['ht', '400'], ['chol', '210'], ['chol', '300'], ['chol', '60'], ['rr', '7'], ['rr', '25'],
+  ]
+  const mismatches = []
+  for (const [who, pid] of [['standard', ID.pat2], ['personal', VS]]) {
+    const pt = await patientOf(pid)
+    for (const [vital, value, ctx] of cases) {
+      const [p, s] = value.split('/').map(Number)
+      const sql = (await one(`select grade_reading($1, $2, $3, $4, $5) g`, [pid, vital, p, s ?? null, ctx ?? null])).g
+      const app = evaluate(pt, defs[vital], value, ctx)
+      if (sql !== app) mismatches.push(`${who} ${vital} ${value}${ctx ? ` (${ctx})` : ''}: database ${sql}, app ${app}`)
+    }
+  }
+  check(`the app and the database grade ${cases.length * 2} shared values the same`, mismatches.length === 0, mismatches.join('; '))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

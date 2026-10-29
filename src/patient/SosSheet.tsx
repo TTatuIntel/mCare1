@@ -1,9 +1,7 @@
 import { useState } from 'react'
 import { BottomSheet, SheetButton, Field, inputCls } from '@/shared'
 import { usePatient } from './usePatient'
-
-/** Never changes, whatever the state of the app or the network. */
-const EMERGENCY_NUMBER = '999'
+import { useApp } from '@/shared/state/AppContext'
 
 /* ─── SOS ─────────────────────────────────────────────────────────────
    Alerts the patient's doctor and the mCare care team. It needs the
@@ -11,6 +9,9 @@ const EMERGENCY_NUMBER = '999'
    cannot be sent, the patient is told plainly and can still call. */
 export function SosSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { patient, doctor, raiseSos } = usePatient()
+  // The admin's emergency number (Settings → Clinical safety); the built-in default until the settings load, so it is always there.
+  const EMERGENCY_NUMBER = useApp().settings.clinical.emergencyNumber
+  const orIntl = EMERGENCY_NUMBER === '112' ? '' : ' or 112'
   const [msg, setMsg] = useState('')
   const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'failed'>('idle')
   const [failure, setFailure] = useState('')
@@ -47,7 +48,7 @@ export function SosSheet({ open, onClose }: { open: boolean; onClose: () => void
           <p className="text-4xl mb-2">✅</p>
           <p className="text-sm text-gray-700">{doctor ? `${doctor.name} and the care team` : 'The care team'} can see your SOS.</p>
           <p className="text-xs text-gray-500 mt-1">You can mark yourself safe under My Alerts.</p>
-          <p className="text-xs text-red-600 font-semibold mt-3">If you are in immediate danger, call {EMERGENCY_NUMBER} or 112 now.</p>
+          <p className="text-xs text-red-600 font-semibold mt-3">If you are in immediate danger, call {EMERGENCY_NUMBER}{orIntl} now.</p>
           {calls}
         </div>
       ) : state === 'failed' ? (
@@ -66,7 +67,7 @@ export function SosSheet({ open, onClose }: { open: boolean; onClose: () => void
             </div>
             <input value={msg} onChange={e => setMsg(e.target.value)} maxLength={200} placeholder="Describe briefly" className={inputCls} />
           </Field>
-          <p className="text-xs text-red-600 font-semibold">In a life-threatening emergency, call {EMERGENCY_NUMBER} or 112 first.</p>
+          <p className="text-xs text-red-600 font-semibold">In a life-threatening emergency, call {EMERGENCY_NUMBER}{orIntl} first.</p>
           {calls}
         </>
       )}

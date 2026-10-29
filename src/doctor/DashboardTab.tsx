@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import { Avatar, Pill, ResolveAlertSheet, PortalHeader, HeroCard, QuickGrid, NoticeCard, NoticeRow, SectionHead, EmptyState } from '@/shared'
 import type { AppAlert, AppNotification } from '@/shared/lib/types'
-import { ago, dateLabel } from '@/shared/lib/vitals'
+import { ago, dateLabel, missedCheckIns, shortDuration } from '@/shared/lib/vitals'
 import { apptWhen } from '@/shared/lib/schedule'
 import { isOfficial } from '@/shared/documents/documents'
 import { AlertCard } from './AlertCard'
@@ -20,8 +20,10 @@ export function DashboardTab({ goTo, openPatient, openAppt }: {
   openPatient: (id: string, section?: 'docs' | 'vitals') => void
   openAppt: (id: string) => void
 }) {
-  const { documentsFor } = useApp()
-  const { doctor, appointments, activeAlerts, nameOf, now, patients, unreviewedOf } = useDoctor()
+  const { documentsFor, settings } = useApp()
+  const { doctor, appointments, activeAlerts, nameOf, now, patients, unreviewedOf, vitalDefs } = useDoctor()
+  // Patients not measuring as the monitoring plan asks (past the point the patient is reminded).
+  const missed = patients.map(p => ({ p, m: missedCheckIns(p, vitalDefs, now, settings.clinical.missedPatientFactor) })).filter(x => x.m.length > 0)
   // Readings nobody has reviewed yet, by patient (abnormal ones also raised alerts above).
   const toReview = patients.map(p => ({ p, n: unreviewedOf(p.id).length })).filter(x => x.n > 0).sort((a, b) => b.n - a.n)
   const unsigned = documentsFor().filter(e => isOfficial(e.doc) && e.doc.status !== 'released' && (!e.doc.upload || e.doc.upload.state === 'ready'))
@@ -69,6 +71,16 @@ export function DashboardTab({ goTo, openPatient, openAppt }: {
             <AlertCard key={a.id} a={a} patientName={nameOf(a.patientId)} onResolve={setResolve} compact />
           ))}
         </div>
+      )}
+
+      {missed.length > 0 && (
+        <NoticeCard tone="amber" pulse={false} title={`⏱ Missed check-ins · ${missed.length} patient${missed.length > 1 ? 's' : ''}`}>
+          {missed.slice(0, 3).map(({ p, m }) => (
+            <NoticeRow key={p.id} onClick={() => openPatient(p.id, 'vitals')} title={p.name}
+              sub={m.map(x => `${x.name}: last ${shortDuration(x.hoursLate * 3600_000)} ago (plan every ${shortDuration(x.intervalHours * 3600_000)})`).join(' · ')}
+              right={<span className="text-[10px] font-bold text-amber-700">Open →</span>} />
+          ))}
+        </NoticeCard>
       )}
 
       {toReview.length > 0 && (

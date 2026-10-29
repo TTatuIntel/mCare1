@@ -134,6 +134,8 @@ export function useDoctor() {
     setTarget: app.setThreshold,
     /** UPDATE thresholds: the patient's own critical range, or `null` to go back to the standard one. */
     setCriticalRange: app.setCriticalThreshold,
+    /** UPDATE thresholds: blood pressure's lower number (diastolic) target and critical band, or `null` for the standard ones. */
+    setDiaRange: app.setDiaThreshold,
     /** INSERT readings: a reading taken in clinic. The database grades it, raises any alert and tells the patient. */
     recordReading: (patientId: string, r: { vitalId: string; value: string; note?: string; ref?: string }) =>
       app.logReading(patientId, { id: tempId('r'), vitalId: r.vitalId, value: r.value.trim(), loggedAt: '', note: r.note?.trim() || undefined, clientRef: r.ref }),

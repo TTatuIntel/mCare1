@@ -324,6 +324,19 @@ check('the admin switches a vital on; it is audited', !(await staff.from('vital_
   && (await pat.from('vital_defs').select('active').eq('id', 'rr').single()).data?.active === true && (await audited('Activated vital type')).length === 1)
 check('nobody else edits definitions, and an impossible range is refused', (await doc.from('vital_defs').update({ normal_max: 999 }).eq('id', 'rr').select()).data?.length === 0
   && !!(await staff.from('vital_defs').update({ normal_min: 50, normal_max: 10 }).eq('id', 'rr')).error)
+// How the app changes a definition (0024): one call, a reason for a grading change, audited with it.
+const rrNow = (await staff.from('vital_defs').select('*').eq('id', 'rr').single()).data
+const noReason = await staff.rpc('save_vital_def', { def: { ...rrNow, normal_max: 21 }, reason: null })
+const withReason = await staff.rpc('save_vital_def', { def: { ...rrNow, normal_max: 21 }, reason: 'Adult range' })
+check('a change to how a vital is graded needs a reason; with one it is saved and audited', /Say why/.test(noReason.error?.message ?? '')
+  && !withReason.error && (await pat.from('vital_defs').select('normal_max').eq('id', 'rr').single()).data?.normal_max == 21
+  && (await audited('Updated vital definition')).some(e => /Adult range/.test(e.detail ?? '')), withReason.error?.message)
+check('only an admin may ask how many patients a definition grades', typeof (await staff.rpc('vital_def_impact', { vital: 'rr' })).data === 'number'
+  && !!(await doc.rpc('vital_def_impact', { vital: 'rr' })).error)
+// The clinical settings (0023) through the API, and the emergency number every signed-in person reads.
+check('the admin changes the emergency number; patients read it', !(await staff.rpc('save_settings', { area: 'clinical', new_value: { emergency_number: '112' } })).error
+  && (await pat.rpc('emergency_number')).data === '112' && !!(await pat.rpc('save_settings', { area: 'clinical', new_value: { emergency_number: '1' } })).error)
+await staff.rpc('save_settings', { area: 'clinical', new_value: { emergency_number: '999' } })
 const registry = await staff.rpc('document_registry')
 check('staff see that documents exist, never their titles or content', registry.data?.length >= 2 && registry.data.every(r => !('title' in r) && !('body' in r) && !('file_name' in r)), registry.error?.message)
 check('the registry is refused to everyone else', !!(await pat.rpc('document_registry')).error && !!(await doc.rpc('document_registry')).error && !!(await nurse.rpc('document_registry')).error)

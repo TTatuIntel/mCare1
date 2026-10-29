@@ -29,10 +29,10 @@ export interface AlertView {
   tips: string[]
 }
 
-const EMERGENCY_TIP = 'Chest pain, trouble breathing, confusion or fainting? Use SOS or call 999.'
+const emergencyTip = (call: string) => `Chest pain, trouble breathing, confusion or fainting? Use SOS or call ${call}.`
 
 /** General self-care while the care team reviews a reading. Not a diagnosis; the doctor's advice always wins. */
-function tipsFor(vitalId: string | undefined, direction: 'high' | 'low' | null, danger: boolean): string[] {
+function tipsFor(vitalId: string | undefined, direction: 'high' | 'low' | null, danger: boolean, call: string): string[] {
   const rest = 'Sit quietly for 5 minutes, then measure again.'
   const byVital: Record<string, { high: string[]; low: string[] }> = {
     bp: {
@@ -58,11 +58,12 @@ function tipsFor(vitalId: string | undefined, direction: 'high' | 'low' | null, 
   }
   const own = (vitalId && direction && byVital[vitalId]?.[direction]) || [rest]
   // When it is critical, the emergency line comes first.
-  return danger ? [EMERGENCY_TIP, ...own] : [...own, EMERGENCY_TIP]
+  return danger ? [emergencyTip(call), ...own] : [...own, emergencyTip(call)]
 }
 
 export function useAlertView() {
-  const { vitalDefs } = useApp()
+  const { vitalDefs, settings } = useApp()
+  const call = settings.clinical.emergencyNumber
   const { patient } = usePatient()
 
   return (a: AppAlert): AlertView => {
@@ -75,7 +76,7 @@ export function useAlertView() {
     if (a.type === 'sos') {
       return {
         icon: '🚨', name: 'SOS', value: a.value, unit: '', direction: null, danger: true, statusLine, remeasure: null,
-        tips: ['Stay where you are if it is safe, and keep your phone close.', 'If you can, call 999 or your emergency contact now.'],
+        tips: ['Stay where you are if it is safe, and keep your phone close.', `If you can, call ${call} or your emergency contact now.`],
       }
     }
 
@@ -83,7 +84,7 @@ export function useAlertView() {
     const id = a.vitalId ?? patient.readings.find(r => r.id === a.readingId)?.vitalId
     const def = vitalDefs.find(d => (id ? d.id === id : d.name === a.vitalName))
     if (!def) {
-      return { icon: '⚠️', name: a.vitalName, value: a.value, unit: a.unit, direction: null, danger, statusLine, remeasure: null, tips: tipsFor(undefined, null, danger) }
+      return { icon: '⚠️', name: a.vitalName, value: a.value, unit: a.unit, direction: null, danger, statusLine, remeasure: null, tips: tipsFor(undefined, null, danger, call) }
     }
 
     const u = unitView(def, patient)
@@ -104,7 +105,7 @@ export function useAlertView() {
     return {
       def, icon: def.icon, name: def.name, value: u.value(a.value), unit: u.unit, direction, danger, statusLine, remeasure,
       target: def.id === 'bp' ? `Target ${shown.min}–${shown.max} / ${diaMin}–${diaMax}` : `Target ${shown.min}–${shown.max}`,
-      tips: tipsFor(def.id, direction, danger),
+      tips: tipsFor(def.id, direction, danger, call),
     }
   }
 }

@@ -111,11 +111,14 @@ export function useAdmin() {
     /* ── configuration ── */
     /** UPSERT vital_defs (full admin only) */
     saveVitalDef: app.saveVitalDef,
+    vitalDefImpact: app.vitalDefImpact,
     /** GET app_settings: two-step sign-in, idle sign-out and retention, as decided by an admin. */
     settings: app.settings,
     /** RPC save_settings (full admin only): checked and audited by the database. */
     saveSecuritySettings: app.saveSecuritySettings,
     saveRetentionSettings: app.saveRetentionSettings,
+    /** RPC save_settings('clinical') (full admin only): the emergency number and the timings of reminders and pattern alerts. */
+    saveClinicalSettings: app.saveClinicalSettings,
     /** RPC run_retention_now (full admin only): applies the retention settings now; resolves with what was removed. */
     runRetentionNow: app.runRetentionNow,
     /** GET condition_defs, condition_vitals: the conditions catalogue. */

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Page, Inbox, EmptyState } from '@/shared'
 import type { InboxPerson } from '@/shared'
 import { usePatient } from './usePatient'
+import { useApp } from '@/shared/state/AppContext'
 
 /* ─── Messages ────────────────────────────────────────────────────────
    One private conversation with the treating doctor and one with each
@@ -11,6 +12,7 @@ import { usePatient } from './usePatient'
 export function MessagesTab({ go, target }: { go: (t: string) => void; /** The conversation a notification points at. */ target?: string }) {
   const { patient, doctor, consultingDoctors, doctorById, messagePartners, status, error, reload } = usePatient()
   const [openId, setOpenId] = useState<string | null>(target ?? null)
+  const { settings } = useApp()
   const currentDoctorIds = new Set([doctor?.id, ...consultingDoctors.map(d => d.id)].filter((id): id is string => !!id))
   const people: InboxPerson[] = [
     ...(doctor ? [{ id: doctor.id, name: doctor.name, avatar: doctor.avatar, subtitle: `${doctor.specialty || 'Treating doctor'} · private chat` }] : []),
@@ -23,7 +25,7 @@ export function MessagesTab({ go, target }: { go: (t: string) => void; /** The c
   return (
     <Page title="Messages" fill status={status} error={error} onRetry={reload}>
       <Inbox meId={patient.id} people={people} openId={openId} onOpen={setOpenId} quickReplies
-        notice="Private one-to-one chat · Only you and this doctor can read it · Not monitored 24/7. For emergencies use SOS or call 999."
+        notice={`Private one-to-one chat · Only you and this doctor can read it · Not monitored 24/7. For emergencies use SOS or call ${settings.clinical.emergencyNumber}.`}
         empty={<EmptyState icon="💬" title="No doctor on your care team yet" text="Choose a doctor to start a private conversation."
           action="Go to Care Team" onAction={() => go('care')} />} />
     </Page>

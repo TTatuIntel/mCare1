@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import type { PatientUser, VitalDef, VitalReading } from '@/shared/lib/types'
-import { levelOf, parseValue, readingTime, dateLabel, formatReadingValue, toDisplayUnit, type VitalLevel } from '@/shared/lib/vitals'
+import { READING_CONTEXT_LABELS } from '@/shared/lib/types'
+import { levelOf, parseValue, rangeWords, readingTime, dateLabel, formatReadingValue, toDisplayUnit, type VitalLevel } from '@/shared/lib/vitals'
 import { levelStyle } from './vitals'
 
 /* ─── A vital's history ───────────────────────────────────────────────
@@ -269,6 +270,17 @@ export function VitalHistory({
                           {t !== null ? `${dayOf(t)} · ${clockOf(t)}` : r.loggedAt}
                           {r.note ? ` · “${r.note}”` : ''}
                         </p>
+                        {/* Where it came from and what it was graded against, as the database stamped it when it was saved. */}
+                        {(r.source === 'clinic' || r.source === 'device' || r.context || r.gradedRange) && (
+                          <p className="text-[10px] text-gray-400 truncate">
+                            {[r.source === 'clinic' ? 'Clinic reading' : r.source === 'device' ? 'From a device' : null,
+                              r.context && !r.note ? READING_CONTEXT_LABELS[r.context] : null,
+                              r.gradedRange && r.gradedRange.graded
+                                ? `graded against ${rangeWords(toDisplayUnit(r.gradedRange.target[0] ?? NaN, def.unit, unit), toDisplayUnit(r.gradedRange.target[1] ?? NaN, def.unit, unit))}${r.gradedRange.personal ? ' (personal target)' : ''}`
+                                : r.gradedRange ? 'recorded, not graded' : null,
+                            ].filter(Boolean).join(' · ')}
+                          </p>
+                        )}
                         {r.invalid && r.invalidReason && <p className="text-[10px] text-gray-400 truncate">Marked invalid — {r.invalidReason}</p>}
                         {/* A corrected reading says so, and keeps what was first entered. */}
                         {r.correctedFrom && <p className="text-[10px] text-gray-400 truncate">Corrected · first entered as <span className="font-mono">{formatReadingValue(def, r.correctedFrom, unit)}</span></p>}

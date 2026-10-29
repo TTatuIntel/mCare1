@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { BackHeader, BottomSheet, Field, Pill, SaveError, SheetButton, Toggle, inputCls, useAct, useSave } from '@/shared'
 import { FREQUENCY_LABELS } from '@/shared/lib/types'
-import type { ConditionDef, PathwayVital, RetentionSettings, SecuritySettings, UserRole, VitalFrequency } from '@/shared/lib/types'
+import type { ClinicalSettings, ConditionDef, PathwayVital, RetentionSettings, SecuritySettings, UserRole, VitalFrequency } from '@/shared/lib/types'
 import { useAdmin } from './useAdmin'
 
 const ROLES: { id: UserRole; label: string }[] = [
@@ -13,6 +13,21 @@ const RETENTION: { key: keyof RetentionSettings; label: string; hint: string }[]
   { key: 'readNotificationDays', label: 'Read notifications', hint: 'At least 7 days' },
   { key: 'deliveryDays', label: 'Sent email and text records', hint: 'At least 7 days' },
 ]
+/** The clinical-safety timings an admin can change (migration 0023 checks the same limits). */
+const CLINICAL: { key: Exclude<keyof ClinicalSettings, 'emergencyNumber'>; label: string; hint: string }[] = [
+  { key: 'escalateMinutes', label: 'Critical alert unanswered (minutes)', hint: 'Then it goes to admins and monitors · 2–120' },
+  { key: 'criticalReminderMinutes', label: 'Critical alert unresolved (minutes)', hint: 'Then the doctor and monitors are reminded · 15–1440' },
+  { key: 'warningReminderHours', label: 'Warning alert unresolved (hours)', hint: 'Then the doctor is reminded · 1–168' },
+  { key: 'maxReminders', label: 'Reminders per alert', hint: '0–10' },
+  { key: 'repeatWarnings', label: 'Out-of-range readings that raise an alert', hint: 'Of one vital, within the days below · 2–20' },
+  { key: 'repeatWarningDays', label: '… within (days)', hint: '1–30' },
+  { key: 'remeasureWindowHours', label: 'Re-measurement window (hours)', hint: 'A later reading starts a new alert · 1–168' },
+  { key: 'remeasureNudgeMinutes', label: 'Remind to re-measure after (minutes)', hint: '5–240' },
+  { key: 'missedPatientFactor', label: 'Missed check-in: remind the patient after (× the plan)', hint: '1–10' },
+  { key: 'missedDoctorFactor', label: 'Missed check-in: tell the doctor after (× the plan)', hint: '1.5–30' },
+  { key: 'weightGainKg', label: 'Heart failure: weight gain (kg)', hint: '0.5–10' },
+  { key: 'weightGainDays', label: '… within (days)', hint: '1–14' },
+]
 const EMPTY_CONDITION: ConditionDef = { code: '', name: '', icon: '🩺', active: true, vitals: [], vitalPlans: {}, goals: [] }
 const FREQS = Object.keys(FREQUENCY_LABELS) as VitalFrequency[]
 const numOrUndef = (s: string) => (s.trim() === '' ? undefined : Number(s))
@@ -21,17 +36,20 @@ const numOrUndef = (s: string) => (s.trim() === '' ? undefined : Number(s))
    What an administrator decides for the whole service. The database checks every value
    again and audits each change with before and after (save_settings). */
 export default function SettingsTab({ onBack }: { onBack: () => void }) {
-  const { admin, settings, saveSecuritySettings, saveRetentionSettings, runRetentionNow, conditionDefs, saveConditionDef, vitalDefs, medicationDefs, setMedicationActive } = useAdmin()
+  const { admin, settings, saveSecuritySettings, saveRetentionSettings, saveClinicalSettings, runRetentionNow, conditionDefs, saveConditionDef, vitalDefs, medicationDefs, setMedicationActive } = useAdmin()
   const [security, setSecurity] = useState<SecuritySettings>(settings.security)
   const [retention, setRetention] = useState<Record<keyof RetentionSettings, string>>(() => toText(settings.retention))
   const [condition, setCondition] = useState<ConditionDef | null>(null)
   const [markReviewed, setMarkReviewed] = useState(false)
-  const savingSecurity = useSave(), savingRetention = useSave(), savingCondition = useSave()
+  const [clinical, setClinical] = useState<ClinicalSettings>(settings.clinical)
+  const savingSecurity = useSave(), savingRetention = useSave(), savingCondition = useSave(), savingClinical = useSave()
   const act = useAct()
 
   // A change saved elsewhere (another admin, another tab) shows here once it arrives, unless this form is being edited.
   useEffect(() => { if (!savingSecurity.busy) setSecurity(settings.security) }, [settings.security]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!savingRetention.busy) setRetention(toText(settings.retention)) }, [settings.retention]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!savingClinical.busy) setClinical(settings.clinical) }, [settings.clinical]) // eslint-disable-line react-hooks/exhaustive-deps
+  const saveClinical = async () => { if ((await savingClinical.run(() => saveClinicalSettings(clinical))).ok) act.say('Clinical safety settings saved') }
 
   const required = (r: UserRole) => security.mfaRequiredRoles.includes(r)
   const toggleRequired = (r: UserRole) => setSecurity(s => ({ ...s, mfaRequiredRoles: required(r) ? s.mfaRequiredRoles.filter(x => x !== r) : [...s.mfaRequiredRoles, r] }))
@@ -64,7 +82,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="flex flex-col gap-3 card-flow">
-      <BackHeader title="Settings" subtitle="Security and data retention, for everyone" onBack={onBack} />
+      <BackHeader title="Settings" subtitle="Security, data retention and clinical safety, for everyone" onBack={onBack} />
       {act.node && <div className="span-all">{act.node}</div>}
 
       {/* Two-step sign-in and idle sign-out */}
@@ -125,6 +143,33 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
         </div>
       </section>
 
+      {/* Clinical safety: the emergency number and when the database reminds, escalates and raises pattern alerts */}
+      <section className="bg-white rounded-2xl p-4 shadow-sm flex flex-col gap-3" aria-label="Clinical safety">
+        <div>
+          <h2 className="text-sm font-bold text-gray-800">Clinical safety</h2>
+          <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
+            The number patients are told to call, and when mCare escalates an alert, reminds the care team, raises an alert for a pattern of readings and reminds a patient who has not measured. Check these with the clinical lead.
+          </p>
+        </div>
+        <Field label="Emergency number">
+          <input className={inputCls} inputMode="tel" maxLength={15} aria-label="Emergency number" value={clinical.emergencyNumber}
+            onChange={e => setClinical(c => ({ ...c, emergencyNumber: e.target.value }))} />
+          <span className="text-[10px] text-gray-400">Shown on SOS, critical readings and chat</span>
+        </Field>
+        <div className="grid grid-cols-2 gap-2">
+          {CLINICAL.map(f => (
+            <Field key={f.key} label={f.label}>
+              <input type="number" inputMode="decimal" className={inputCls} aria-label={f.label} value={clinical[f.key]}
+                onChange={e => setClinical(c => ({ ...c, [f.key]: Number(e.target.value) }))} />
+              <span className="text-[10px] text-gray-400">{f.hint}</span>
+            </Field>
+          ))}
+        </div>
+        <SaveError message={savingClinical.error} />
+        <button onClick={saveClinical} disabled={savingClinical.busy}
+          className="self-start text-xs font-bold text-white bg-teal-700 px-4 py-2 rounded-full disabled:opacity-50">{savingClinical.busy ? 'Saving…' : 'Save clinical safety'}</button>
+      </section>
+
       {/* Medicine catalogue: offered when prescribing (free text still works for anything else) */}
       <section className="bg-white rounded-2xl p-4 shadow-sm flex flex-col gap-2 span-all" aria-label="Medicines">
         <div>
@@ -167,6 +212,9 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
                 <span className="text-sm font-semibold text-gray-800">{c.name}</span>
                 {c.icd10 && <span className="ml-1.5 text-[10px] font-mono text-gray-400">{c.icd10}</span>}
                 <span className="block text-[11px] text-gray-400 truncate">{c.vitals.length ? c.vitals.map(vitalName).join(' · ') : 'No vitals suggested'}</span>
+                {c.vitals.some(id => !vitalDefs.find(v => v.id === id)?.active) && (
+                  <span className="block text-[10px] text-amber-700 truncate">Not collected, so not suggested: {c.vitals.filter(id => !vitalDefs.find(v => v.id === id)?.active).map(vitalName).join(', ')}</span>
+                )}
                 {!!c.keywords?.length && <span className="block text-[10px] text-gray-400 truncate">Also: {c.keywords.join(', ')}</span>}
               </button>
               {c.active && (c.reviewedAt ? <Pill color="green">Reviewed</Pill> : <Pill color="amber">Not reviewed</Pill>)}
@@ -198,6 +246,14 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
                 })}
               </div>
             </Field>
+            {/* A vital that is switched off is never suggested to a patient: say so instead of dropping it silently. */}
+            {condition.vitals.some(id => !vitalDefs.find(v => v.id === id)?.active) && (
+              <p className="text-[11px] text-amber-800 bg-amber-50 rounded-lg px-2.5 py-1.5">
+                {condition.vitals.filter(id => !vitalDefs.find(v => v.id === id)?.active).map(vitalName).join(', ')} {condition.vitals.filter(id => !vitalDefs.find(v => v.id === id)?.active).length > 1 ? 'are' : 'is'} not collected,
+                so patients with {condition.name || 'this condition'} are not asked to track {condition.vitals.filter(id => !vitalDefs.find(v => v.id === id)?.active).length > 1 ? 'them' : 'it'}. Switch it on in Vitals, or remove it here
+                <button onClick={() => setCondition({ ...condition, vitals: condition.vitals.filter(id => !!vitalDefs.find(v => v.id === id)?.active) })} className="ml-1 font-bold text-amber-900 underline">Remove</button>
+              </p>
+            )}
             <KeywordsField words={condition.keywords ?? []} onChange={keywords => setCondition({ ...condition, keywords })} />
             {condition.vitals.length > 0 && (
               <div className="flex flex-col gap-2">

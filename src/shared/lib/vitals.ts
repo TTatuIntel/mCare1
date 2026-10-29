@@ -257,16 +257,26 @@ export function alertStory(a: AppAlert, patient: PatientUser | undefined, def: V
   const steps: AlertStep[] = [{
     kind: 'raised', when: a.loggedAt, level: sos ? undefined : a.severity === 'danger' ? 'critical' : 'warning',
     title: sos ? `SOS · ${a.value}` : `${a.vitalName} ${a.value} ${a.unit}`.trim(),
-    detail: sos ? 'Emergency help requested' : a.severity === 'danger' ? 'Critical reading · alert raised' : 'Out of range · alert raised',
+    detail: sos ? 'Emergency help requested'
+      : a.rule === 'repeat_warning' ? 'Repeatedly out of range · alert raised'
+      : a.rule === 'weight_gain' ? 'Quick weight gain · alert raised'
+      : a.severity === 'danger' ? 'Critical reading · alert raised' : 'Out of range · alert raised',
   }]
+  // The range the reading was graded against, when the database stamped it.
+  const raisedBy = a.readingId ? patient?.readings.find(r => r.id === a.readingId) : undefined
+  if (raisedBy?.gradedRange && def) {
+    const g = raisedBy.gradedRange
+    steps[0].detail += ` · target ${rangeWords(g.target[0], g.target[1], def.unit)}${g.personal ? ' (personal)' : ''}`
+  }
   if (a.acknowledgedAt) steps.push({ kind: 'acknowledged', when: a.acknowledgedAt, by: a.acknowledgedBy, title: 'Reviewed by the care team' })
   if (a.escalatedAt) steps.push({ kind: 'escalated', when: a.escalatedAt, title: 'Escalated to the care team' })
+  if (a.reminders) steps.push({ kind: 'escalated', when: a.lastRemindedAt ? stamp(new Date(a.lastRemindedAt)) : '', title: `Care team reminded${a.reminders > 1 ? ` ${a.reminders} times` : ''}` })
 
   // What followed, in the order it happened.
   const timed: (AlertStep & { at: number })[] = []
   if (a.recheckRequestedAt) timed.push({ kind: 'requested', at: a.recheckRequestedAt, when: stamp(new Date(a.recheckRequestedAt)), title: 'Re-measurement requested' })
   alertRemeasures(a, patient).forEach(r => {
-    const level = r.invalid ? undefined : patient && def ? evaluate(patient, def, r.value) : undefined
+    const level = r.invalid ? undefined : patient && def ? levelOf(patient, def, r) : undefined
     timed.push({
       kind: 'remeasure', at: r.at ?? 0, when: r.loggedAt, by: r.recordedBy, level,
       title: `Re-measured ${r.value} ${def?.unit ?? a.unit}`.trim(),
@@ -644,6 +654,19 @@ export function checkInStatus(vitalId: string, lastAt: number | undefined, now =
     dueAt: lastAt + span,
     intervalHours,
   }
+}
+
+/** Vitals the doctor set a rhythm for that the patient has not measured for `factor` times that rhythm (the same rule as
+    nudge_vitals in the database, which tells the treating doctor at missedDoctorFactor). Most overdue first. */
+export function missedCheckIns(patient: PatientUser, defs: VitalDef[], now = Date.now(), factor = 1): { vitalId: string; name: string; hoursLate: number; intervalHours: number }[] {
+  return patient.trackedVitalIds.flatMap(id => {
+    const hrs = planHours(patient, id), def = defs.find(d => d.id === id)
+    if (!hrs || !def?.active) return []
+    const last = latestValid(patient, id)?.at ?? patient.vitalPlans?.[id]?.assignedAt
+    if (last === undefined) return []
+    const late = (now - last) / 3600_000
+    return late > hrs * factor ? [{ vitalId: id, name: def.name, hoursLate: Math.round(late), intervalHours: hrs }] : []
+  }).sort((a, b) => b.hoursLate / b.intervalHours - a.hoursLate / a.intervalHours)
 }
 
 /** Compact duration, e.g. "45m", "3h", "2d". */

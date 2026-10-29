@@ -5,7 +5,7 @@ import {
 } from '@/shared'
 import type { PatientUser, VitalDef, VitalFrequency } from '@/shared/lib/types'
 import { FREQUENCY_LABELS, VITAL_FREQUENCIES } from '@/shared/lib/types'
-import { effectiveCriticalRange, latestValid, targetRange, validateReading, vitalTrend } from '@/shared/lib/vitals'
+import { effectiveCriticalRange, latestValid, rangeWords, targetRange, validateReading, vitalTrend } from '@/shared/lib/vitals'
 import { conditionGaps, patientConditionsByVital } from '@/shared/lib/health'
 import { useApp } from '@/shared/state/AppContext'
 import { useDoctor } from './useDoctor'
@@ -16,7 +16,9 @@ const PERIODS: { id: Period; label: string }[] = [
 ]
 const DAY = 86_400_000
 
-type RangeForm = { vitalId: string; min: string; max: string; critLow: string; critHigh: string }
+type RangeForm = { vitalId: string; min: string; max: string; critLow: string; critHigh: string
+  /** Blood pressure only: the lower number's target and critical limits (empty = the standard ones). */
+  diaMin: string; diaMax: string; diaLow: string; diaHigh: string }
 const num = (v: string) => (v.trim() === '' ? NaN : Number(v))
 
 /* ─── A patient's vitals, as the treating doctor works with them ──────
@@ -25,7 +27,7 @@ const num = (v: string) => (v.trim() === '' ? NaN : Number(v))
    each. A reading is never rewritten: a wrong one is marked invalid, with
    the reason, and stays in the record. */
 export function PatientVitals({ patient }: { patient: PatientUser }) {
-  const { vitalDefs, nameOf, now, setTrackedVitals, setTarget, setCriticalRange, recordReading, invalidateReading, setVitalPlan, reviewsOf, unreviewedOf, reviewVitals } = useDoctor()
+  const { vitalDefs, nameOf, now, setTrackedVitals, setTarget, setCriticalRange, setDiaRange, recordReading, invalidateReading, setVitalPlan, reviewsOf, unreviewedOf, reviewVitals } = useDoctor()
   const activeVitals = vitalDefs.filter(v => v.active)
   const { conditionDefs } = useApp()
   // The patient's conditions against what they record: each vital's reasons, and the ones not recorded yet.
@@ -65,9 +67,11 @@ export function PatientVitals({ patient }: { patient: PatientUser }) {
   const rangeSave = useSave()
   const rangeDef = activeVitals.find(v => v.id === range?.vitalId)
   const openRange = (def: VitalDef) => {
-    const target = targetRange(patient, def), own = patient.criticalThresholds?.[def.id]
+    const target = targetRange(patient, def), own = patient.criticalThresholds?.[def.id], dia = patient.diaThresholds?.[def.id]
+    const s = (n?: number) => (n === undefined ? '' : String(n))
     rangeSave.clear()
-    setRange({ vitalId: def.id, min: String(target.min), max: String(target.max), critLow: own ? String(own.min) : '', critHigh: own ? String(own.max) : '' })
+    setRange({ vitalId: def.id, min: String(target.min), max: String(target.max), critLow: own ? String(own.min) : '', critHigh: own ? String(own.max) : '',
+      diaMin: s(dia?.target?.min), diaMax: s(dia?.target?.max), diaLow: s(dia?.critical?.min), diaHigh: s(dia?.critical?.max) })
   }
   const rangeIssue = (() => {
     if (!range || !rangeDef) return null
@@ -76,6 +80,12 @@ export function PatientVitals({ patient }: { patient: PatientUser }) {
     if (min >= max) return 'The target minimum must be lower than the maximum.'
     if (isNaN(lo) !== isNaN(hi)) return 'Enter both critical limits, or leave both empty to use the standard ones.'
     if (!isNaN(lo) && (lo >= min || hi <= max)) return 'The critical limits must sit outside the target range.'
+    if (rangeDef.id === 'bp') {
+      const dMin = num(range.diaMin), dMax = num(range.diaMax), dLo = num(range.diaLow), dHi = num(range.diaHigh)
+      if (isNaN(dMin) !== isNaN(dMax)) return 'Enter both lower-number targets, or leave both empty to use the standard ones.'
+      if (!isNaN(dMin) && dMin >= dMax) return 'The lower-number target minimum must be lower than its maximum.'
+      if (!isNaN(dMin) && ((!isNaN(dLo) && dLo >= dMin) || (!isNaN(dHi) && dHi <= dMax))) return 'The lower-number critical limits must sit outside its target.'
+    }
     return null
   })()
   const saveRange = async () => {
@@ -85,15 +95,24 @@ export function PatientVitals({ patient }: { patient: PatientUser }) {
     const before = targetRange(patient, rangeDef), ownBefore = patient.criticalThresholds?.[rangeDef.id]
     const targetChanged = before.min !== target.min || before.max !== target.max
     const criticalChanged = (ownBefore?.min ?? null) !== (critical?.min ?? null) || (ownBefore?.max ?? null) !== (critical?.max ?? null)
+    const opt = (s: string) => (isNaN(num(s)) ? undefined : num(s))
+    const dia = rangeDef.id === 'bp' && (opt(range.diaMin) !== undefined || opt(range.diaLow) !== undefined || opt(range.diaHigh) !== undefined)
+      ? { target: opt(range.diaMin) !== undefined ? { min: num(range.diaMin), max: num(range.diaMax) } : undefined,
+          critical: opt(range.diaLow) !== undefined || opt(range.diaHigh) !== undefined ? { min: opt(range.diaLow), max: opt(range.diaHigh) } : undefined }
+      : null
+    const diaBefore = patient.diaThresholds?.[rangeDef.id] ?? null
+    const diaChanged = rangeDef.id === 'bp' && JSON.stringify(diaBefore) !== JSON.stringify(dia)
     const saved = await rangeSave.run(async () => {
       // The target first: a critical range belongs to a vital that has one.
       const first = targetChanged ? await setTarget(patient.id, rangeDef.id, target) : { ok: true as const, value: undefined }
-      if (!first.ok || !criticalChanged) return first
-      return setCriticalRange(patient.id, rangeDef.id, critical)
+      if (!first.ok) return first
+      const second = criticalChanged ? await setCriticalRange(patient.id, rangeDef.id, critical) : first
+      if (!second.ok || !diaChanged) return second
+      return setDiaRange(patient.id, rangeDef.id, dia)
     })
     if (!saved.ok) return
     setRange(null)
-    act.say(targetChanged ? `${rangeDef.name} target saved · patient told` : criticalChanged ? `${rangeDef.name} critical range saved` : 'Nothing changed')
+    act.say(targetChanged || diaChanged ? `${rangeDef.name} target saved · patient told` : criticalChanged ? `${rangeDef.name} critical range saved` : 'Nothing changed')
   }
 
   /* how often the patient measures a vital */
@@ -223,7 +242,10 @@ export function PatientVitals({ patient }: { patient: PatientUser }) {
               {tracked ? (
                 <div className="flex flex-wrap items-center gap-1.5 mt-2">
                   <Pill color="teal">Target {target.min}–{target.max} {v.unit}</Pill>
-                  <Pill color="red">Critical ≤ {critical.min} · ≥ {critical.max}</Pill>
+                  <Pill color="red">Critical {[Number.isFinite(critical.min) && `≤ ${critical.min}`, Number.isFinite(critical.max) && `≥ ${critical.max}`].filter(Boolean).join(' · ') || 'none'}</Pill>
+                  {v.id === 'bp' && patient.diaThresholds?.[v.id]?.target && (
+                    <Pill color="teal">Lower number {rangeWords(patient.diaThresholds[v.id].target!.min, patient.diaThresholds[v.id].target!.max)}</Pill>
+                  )}
                   <span className="text-[10px] text-gray-400">{own ? 'Your target' : 'Standard target'}{ownCritical ? ' · your critical range' : ''}</span>
                   <button onClick={() => { planSave.clear(); setPlan({ def: v, frequency: patient.vitalPlans?.[v.id]?.frequency ?? null, reason: patient.vitalPlans?.[v.id]?.reason ?? '' }) }}
                     className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-blue-50 text-blue-700" aria-label={`How often to measure ${v.name}`}>
@@ -337,9 +359,20 @@ export function PatientVitals({ patient }: { patient: PatientUser }) {
             <div className="grid grid-cols-2 gap-2">
               <Field label={`Target min (${rangeDef.unit}) *`}><input inputMode="decimal" value={range.min} onChange={e => setRange({ ...range, min: e.target.value })} className={`${inputCls} font-mono`} /></Field>
               <Field label={`Target max (${rangeDef.unit}) *`}><input inputMode="decimal" value={range.max} onChange={e => setRange({ ...range, max: e.target.value })} className={`${inputCls} font-mono`} /></Field>
-              <Field label="Critical at or below"><input inputMode="decimal" value={range.critLow} onChange={e => setRange({ ...range, critLow: e.target.value })} placeholder={String(effectiveCriticalRange(rangeDef).min)} className={`${inputCls} font-mono`} /></Field>
-              <Field label="Critical at or above"><input inputMode="decimal" value={range.critHigh} onChange={e => setRange({ ...range, critHigh: e.target.value })} placeholder={String(effectiveCriticalRange(rangeDef).max)} className={`${inputCls} font-mono`} /></Field>
+              <Field label="Critical at or below"><input inputMode="decimal" value={range.critLow} onChange={e => setRange({ ...range, critLow: e.target.value })} placeholder={Number.isFinite(effectiveCriticalRange(rangeDef).min) ? String(effectiveCriticalRange(rangeDef).min) : 'none'} className={`${inputCls} font-mono`} /></Field>
+              <Field label="Critical at or above"><input inputMode="decimal" value={range.critHigh} onChange={e => setRange({ ...range, critHigh: e.target.value })} placeholder={Number.isFinite(effectiveCriticalRange(rangeDef).max) ? String(effectiveCriticalRange(rangeDef).max) : 'none'} className={`${inputCls} font-mono`} /></Field>
             </div>
+            {rangeDef.id === 'bp' && (
+              <>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mt-1 mb-1">Lower number (diastolic)</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="Target min"><input inputMode="decimal" value={range.diaMin} onChange={e => setRange({ ...range, diaMin: e.target.value })} placeholder={String(rangeDef.diaNormalMin ?? 60)} className={`${inputCls} font-mono`} /></Field>
+                  <Field label="Target max"><input inputMode="decimal" value={range.diaMax} onChange={e => setRange({ ...range, diaMax: e.target.value })} placeholder={String(rangeDef.diaNormalMax ?? 90)} className={`${inputCls} font-mono`} /></Field>
+                  <Field label="Critical at or below"><input inputMode="decimal" value={range.diaLow} onChange={e => setRange({ ...range, diaLow: e.target.value })} placeholder={String(rangeDef.diaCriticalMin ?? 40)} className={`${inputCls} font-mono`} /></Field>
+                  <Field label="Critical at or above"><input inputMode="decimal" value={range.diaHigh} onChange={e => setRange({ ...range, diaHigh: e.target.value })} placeholder={String(rangeDef.diaCriticalMax ?? 120)} className={`${inputCls} font-mono`} /></Field>
+                </div>
+              </>
+            )}
             <p className="text-[10px] text-gray-400 mb-2">Leave the critical limits empty to use the standard ones for {rangeDef.name}. The patient is told when their target changes.</p>
             {rangeIssue && <p className="text-xs text-red-500 mb-2">{rangeIssue}</p>}
             <SaveError message={rangeSave.error} />
