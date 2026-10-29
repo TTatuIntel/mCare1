@@ -35,7 +35,10 @@ export function MealsTab({ go }: { go: (t: string) => void }) {
     { label: 'Fat', value: macro('fat'), cls: 'text-rose-500' },
   ].filter(m => m.value !== null)
   const goal = todaysMeals.waterGoal
+  const limit = todaysMeals.fluidMode === 'limit'
+  const caution = todaysMeals.fluidCaution
   const left = Math.max(0, goal - waterToday)
+  const overBy = limit && goal > 0 ? Math.max(0, waterToday - goal) : 0
 
   if (!enrolled) return (
     <Page title="Meals" status={status} error={error} onRetry={reload}>
@@ -135,24 +138,37 @@ export function MealsTab({ go }: { go: (t: string) => void }) {
         </div>
       )}
 
-      {/* Hydration: tap a glass to set today's count */}
-      <div className="bg-white rounded-2xl p-4 shadow-sm">
+      {/* Hydration: tap a glass to set today's count. A fluid LIMIT (heart failure, kidney disease) is a maximum, not a goal. */}
+      <div className={`bg-white rounded-2xl p-4 shadow-sm ${overBy > 0 ? 'ring-2 ring-red-200' : ''}`}>
         <div className="flex items-center justify-between mb-3">
-          <p className="text-sm font-bold text-gray-900">💧 Hydration</p>
-          <span className="text-xs text-teal-700 font-bold"><span className="font-mono">{waterToday}</span> / <span className="font-mono">{goal}</span> glasses</span>
+          <p className="text-sm font-bold text-gray-900">💧 {limit || caution ? 'Fluids' : 'Hydration'}</p>
+          <span className={`text-xs font-bold ${overBy > 0 ? 'text-red-600' : 'text-teal-700'}`}>
+            <span className="font-mono">{waterToday}</span>
+            {goal > 0 && <> / {limit && 'at most '}<span className="font-mono">{goal}</span></>} glasses
+          </span>
         </div>
-        <div className="flex gap-1.5" role="group" aria-label="Glasses of water today">
-          {Array.from({ length: goal }).map((_, i) => (
-            <button key={i} onClick={() => setWater(waterToday === i + 1 ? i : i + 1)} aria-label={`${i + 1} glass${i ? 'es' : ''}`} aria-pressed={i < waterToday}
-              className={`flex-1 h-9 rounded-lg transition-colors active:scale-95 ${i < waterToday ? 'bg-teal-500' : 'bg-gray-100 hover:bg-gray-200'}`} />
-          ))}
-        </div>
-        <div className="flex items-center justify-between mt-2">
-          <p className="text-xs text-gray-400">
-            {waterToday === 0 ? 'Tap a glass each time you drink one.' : left ? `${left} more glass${left > 1 ? 'es' : ''} to reach today's goal` : 'Goal reached for today.'}
+        {goal > 0 ? (
+          <div className="flex gap-1.5" role="group" aria-label="Glasses today">
+            {Array.from({ length: Math.max(goal, waterToday) }).map((_, i) => (
+              <button key={i} onClick={() => setWater(waterToday === i + 1 ? i : i + 1)} aria-label={`${i + 1} glass${i ? 'es' : ''}`} aria-pressed={i < waterToday}
+                className={`flex-1 h-9 rounded-lg transition-colors active:scale-95 ${i < waterToday ? (i >= goal && limit ? 'bg-red-400' : 'bg-teal-500') : 'bg-gray-100 hover:bg-gray-200'}`} />
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-amber-800 bg-amber-50 rounded-xl px-3 py-2 leading-snug">
+            With {caution?.toLowerCase()}, too much fluid can be harmful. Your doctor sets how much you may drink each day: ask them for your limit. You can still count what you drink here.
           </p>
-          {waterToday >= goal && (
-            <button onClick={() => setWater(waterToday + 1)} className="text-[11px] font-bold text-teal-700">+ 1 more</button>
+        )}
+        <div className="flex items-center justify-between gap-2 mt-2">
+          <p className={`text-xs ${overBy > 0 ? 'text-red-600 font-semibold' : 'text-gray-400'}`}>
+            {limit
+              ? overBy > 0 ? `${overBy} glass${overBy > 1 ? 'es' : ''} over today's limit. If you feel breathless or your ankles swell, contact your doctor.`
+                : waterToday >= goal ? "You've reached today's limit." : `${goal - waterToday} glass${goal - waterToday > 1 ? 'es' : ''} left within today's limit (all drinks count).`
+              : goal === 0 ? (waterToday ? `${waterToday} glass${waterToday > 1 ? 'es' : ''} today.` : 'Tap + each time you drink a glass.')
+              : waterToday === 0 ? 'Tap a glass each time you drink one.' : left ? `${left} more glass${left > 1 ? 'es' : ''} to reach today's goal` : 'Goal reached for today.'}
+          </p>
+          {(goal === 0 || waterToday >= goal) && (
+            <button onClick={() => setWater(waterToday + 1)} className={`text-[11px] font-bold flex-shrink-0 ${limit ? 'text-gray-500' : 'text-teal-700'}`}>+ 1 {goal === 0 ? 'glass' : 'more'}</button>
           )}
         </div>
       </div>

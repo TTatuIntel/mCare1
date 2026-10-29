@@ -394,7 +394,7 @@ export async function loadRecords(me: AppUser): Promise<Records> {
         id: r.id, medication: r.medication, dosage: r.dosage, frequency: r.frequency, purpose: r.purpose ?? '',
         prescribedAt: dateLabel(new Date(r.prescribed_at)), doctorId: r.doctor_id, active: r.active,
         status: r.status ?? (r.active ? 'active' : 'discontinued'), route: r.route ?? undefined, instructions: r.instructions ?? undefined,
-        startDate: r.start_date ?? undefined, endDate: r.end_date ?? undefined, stopReason: r.stop_reason ?? undefined,
+        startDate: r.start_date ?? undefined, endDate: r.end_date ?? undefined, stopReason: r.stop_reason ?? undefined, allergyOverride: r.allergy_override ?? undefined,
         stoppedAt: when(r.stopped_at), stoppedBy: r.stopped_by ?? undefined,
         history: rxEvents.filter(e => e.prescription_id === r.id).map(e => ({
           id: String(e.id), action: e.action, actorId: e.actor_id ?? undefined, detail: e.detail ?? undefined, at: ms(e.created_at) ?? 0, createdAt: when(e.created_at) ?? '',
@@ -495,7 +495,7 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     })),
     mealPlans: mealPlanRows.map(r => ({
       patientId: r.patient_id, meals: Array.isArray(r.meals) ? r.meals : [], targetKcal: r.target_kcal ?? undefined,
-      waterGoal: r.water_goal ?? 8, dietaryNote: r.dietary_note ?? undefined, setBy: r.set_by ?? undefined,
+      waterGoal: r.water_goal ?? 8, fluidMode: r.fluid_mode === 'limit' ? 'limit' : 'goal', dietaryNote: r.dietary_note ?? undefined, setBy: r.set_by ?? undefined,
     })),
     hydration: hydrationRows.map(r => ({ patientId: r.patient_id, day: r.day, glasses: r.glasses })),
     ratings: ratingRows.map(r => ({ patientId: r.patient_id, doctorId: r.doctor_id, rating: r.rating, comment: r.comment ?? undefined })),

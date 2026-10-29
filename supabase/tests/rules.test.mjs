@@ -155,6 +155,20 @@ check('patient cannot write to another patient\'s record', (await denied(ID.pat,
 const rx = (await as(ID.doc, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency) values ($1, $2, 'Lisinopril', '10mg', 'Once daily') returning id`, [ID.pat, ID.doc]))[0].id
 check('patient cannot prescribe', (await denied(ID.pat, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency) values ($1, $2, 'X', '1', 'x')`, [ID.pat, ID.doc])).blocked)
 check('non-treating doctor cannot prescribe', (await denied(ID.doc2, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency) values ($1, $2, 'X', '1', 'x')`, [ID.pat, ID.doc2])).blocked)
+// Allergy check (0019): James is allergic to penicillin. The prescriptions made here are rolled back so later checks see the same record.
+const amox = await denied(ID.doc, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency) values ($1, $2, 'Amoxicillin 500mg', '500mg', 'Three times daily')`, [ID.pat, ID.doc])
+check('a medicine matching a recorded allergy is refused, and says which allergy', amox.blocked && /allergy on record: Penicillin \(severe\)/.test(amox.why ?? ''), amox.why)
+check('nobody can ask the database about another patient\'s allergies directly', (await denied(ID.doc2, `select medication_allergy_conflict($1, 'amoxicillin')`, [ID.pat])).blocked
+  && (await denied(ID.doc, `select medication_allergy_conflict($1, 'amoxicillin')`, [ID.pat])).blocked)
+await db.exec('begin')
+const amoxOk = (await as(ID.doc, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency, allergy_override) values ($1, $2, 'Amoxicillin 500mg', '500mg', 'Three times daily', '  Tolerated amoxicillin in 2024 without reaction ') returning id, allergy_override`, [ID.pat, ID.doc]))[0]
+check('…the doctor can prescribe it with a reason, which is kept and audited', amoxOk?.allergy_override === 'Tolerated amoxicillin in 2024 without reaction'
+  && (await db.query(`select count(*)::int n from audit_log where action = 'Prescribed despite allergy' and resource_id = $1 and detail like '%Penicillin (severe)%'`, [amoxOk.id])).rows[0].n === 1)
+await db.exec('savepoint rewrite')
+check('…the reason cannot be rewritten afterwards', (await denied(ID.doc, `update prescriptions set allergy_override = 'changed later' where id = $1`, [amoxOk.id])).blocked)
+await db.exec('rollback to savepoint rewrite')
+check('a medicine with no matching allergy needs no reason, and a stray reason is not kept', (await as(ID.doc, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency, allergy_override) values ($1, $2, 'Paracetamol', '1g', 'As needed', 'not needed') returning allergy_override`, [ID.pat, ID.doc]))[0].allergy_override === null)
+await db.exec('rollback')
 check('patient logs a dose', (await as(ID.pat, `insert into dose_logs (patient_id, prescription_id, slot, day) values ($1, $2, 480, current_date) returning slot`, [ID.pat, rx])).length === 1)
 check('same dose cannot be logged twice', (await denied(ID.pat, `insert into dose_logs (patient_id, prescription_id, slot, day) values ($1, $2, 480, current_date)`, [ID.pat, rx])).blocked)
 check('other patient cannot log against that prescription', (await denied(ID.pat2, `insert into dose_logs (patient_id, prescription_id, slot, day) values ($1, $2, 480, current_date)`, [ID.pat2, rx])).blocked)
@@ -571,6 +585,10 @@ check('a doctor who does not treat the patient cannot change the plan', (await a
 check('the treating doctor sees what the patient ate and drank', (await as(ID.pat, `insert into meal_logs (patient_id, meal_id, day) values ($1, 'breakfast', current_date) returning meal_id`, [ID.pat])).length === 1
   && (await as(DOC, `select 1 from meal_logs where patient_id = $1`, [ID.pat])).length === 1 && (await as(DOC, `select glasses from hydration_logs where patient_id = $1`, [ID.pat]))[0].glasses === 6
   && (await as(ID.doc, `select 1 from meal_logs`)).length === 0)
+await as(DOC, `update meal_plans set fluid_mode = 'limit', water_goal = 6 where patient_id = $1`, [ID.pat])
+check('a fluid limit is saved, and the patient is told it is a maximum', (await as(ID.pat, `select fluid_mode from meal_plans`))[0]?.fluid_mode === 'limit'
+  && (await as(ID.pat, `select 1 from notifications where body like '%at most 6 glasses of fluid a day%'`)).length === 1
+  && (await denied(DOC, `update meal_plans set fluid_mode = 'lots' where patient_id = $1`, [ID.pat])).blocked)
 await as(DOC, `delete from meal_plans where patient_id = $1`, [ID.pat])
 check('removing the plan tells the patient', (await as(ID.pat, `select 1 from notifications where title = 'Your meal plan was removed'`)).length === 1)
 
@@ -800,7 +818,7 @@ await as(TREAT, `update prescriptions set active = true where id = $1`, [rxNew.i
 check('restarting clears the reason; status and the on/off switch always agree', (await one(`select status, stop_reason, stopped_at from prescriptions where id = $1`, [rxNew.id])).status === 'active'
   && (await one(`select stop_reason from prescriptions where id = $1`, [rxNew.id])).stop_reason === null
   && (await denied(ID.pat, `insert into prescription_events (prescription_id, patient_id, action) values ($1, $2, 'stopped')`, [rxNew.id, ID.pat])).blocked)
-const course = (await as(TREAT, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency, start_date, end_date) values ($1, $2, 'Amoxicillin', '500mg', 'Three times daily', current_date - 7, current_date - 1) returning id`, [ID.pat, TREAT]))[0].id
+const course = (await as(TREAT, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency, start_date, end_date) values ($1, $2, 'Doxycycline', '500mg', 'Three times daily', current_date - 7, current_date - 1) returning id`, [ID.pat, TREAT]))[0].id
 check('a course whose last day has passed is completed by the schedule, and the patient is told', (await db.query(`select complete_ended_prescriptions() n`)).rows[0].n === 1
   && (await one(`select status, active, stop_reason from prescriptions where id = $1`, [course])).status === 'completed'
   && (await as(ID.pat, `select 1 from notifications where title = 'Course finished'`)).length === 1

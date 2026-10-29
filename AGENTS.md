@@ -217,7 +217,7 @@ Test accounts (password `M7c24`): `test.patient@mcare.test` (Patient One: two we
 - **The database decides.** Access rules, clinical rules (grading, alerts), notifications and the audit trail belong to `supabase/migrations`, not to a screen. A screen may hide a button the person cannot use; it must never be the only thing stopping them. The browser cannot write the audit trail: audit inside the trigger or function that makes the change (`audit_event(...)`).
 - **Identity checks come from the helpers.** Use `my_role()`, `is_admin()`, `staff_can()`, `treats()`, `consults()`, `account_active()` in policies and functions: they already include the account status and two-step sign-in (`mfa_ok()`). A `security definer` function the app calls must check one of them itself (it bypasses row rules). A function acting for someone sets `set_config('mcare.on_behalf_of', <person>, true)` before auditing; one that writes its own audit entry for a batch sets `mcare.self_audited` so the row triggers stay quiet.
 - **Staying current.** A table that belongs to a patient needs the `zz_touch_patient` trigger, or open screens will not learn of its changes.
-- **Migrations.** Add a new numbered file (next: `0018_…`); never edit one that has been applied. New functions must have their default grants revoked ([§8 Database → Adding a change](#adding-a-change)).
+- **Migrations.** Add a new numbered file (next: `0020_…`; `0018` is kept for the `auth-upgrade` branch); never edit one that has been applied. New functions must have their default grants revoked ([§8 Database → Adding a change](#adding-a-change)).
 - **Sending.** Never send email, SMS or push from a screen: the database queues every channel ([§10](#10-notifications-and-delivery)).
 - **Errors** shown to people are sentences: every `api/actions.ts` request goes through `ok(…)`, which throws an `ApiError` whose message (`explain()`) can be shown as it is; `run()` in `AppContext` turns it into `{ ok: false, error }`.
 - **No warnings.** `npm run typecheck` treats unused variables, imports and parameters as errors (app and Edge Function); `npm run build` must print no warning (keep every file under 500 kB: split with `codeSplitting` in `vite.config.ts` or a dynamic `import()`); `npm run test:ui` fails on any console warning or error. Fix a warning where it starts; never silence it.
@@ -419,8 +419,9 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `types.ts` (1,120) | Every app type, enum-like union and label map (`AppSettings`, `VitalPlan`, `FREQUENCY_*`, `VitalReview`, `RecordView`, `ConditionDef` included). Grep `export (interface\|type) <Name>`. |
 | `vitals.ts` (615) | Grading (`evaluate`, `targetRange`), validation, risk and health score, `alertStory`, units, trends, insights, check-in cadence (`planHours`, `checkInStatus` follow the doctor's plan), `VITAL_GROUPS`. |
 | `schedule.ts` | `buildDaySchedule`: what is due when (doses, meals, vitals, appointments). |
+| `medicines.ts` | Prescribing checks: `allergyConflicts` (mirror of `allergy_drug_terms`, keep in step), `conflictLabel`, `alreadyTaking`. |
 | `messaging.ts` | `threadOf`, `partnersOf`, `conversationsOf`. |
-| `health.ts` | Conditions (`COMMON_CONDITIONS` for demo mode; live uses the catalogue), allergies, `suggestedVitals(conditions, catalogue)`, `healthGaps`. |
+| `health.ts` | Conditions (`COMMON_CONDITIONS` for demo mode; live uses the catalogue), allergies, `suggestedVitals(conditions, catalogue)`, `fluidRestrictionFor` (heart failure, kidney disease), `healthGaps`. |
 | `push.ts` | This device's push subscription. |
 | `ids.ts` | `newRef()` (form reference for once-only saves). |
 | `clipboard.ts` | `copyText()`: copies on https and on plain-http network addresses. |
@@ -710,8 +711,9 @@ The first ten files are the **baseline**. On 3 October 2026, before any hosted d
 | `0016_access_retention.sql` | Message read time; write limits (`rate_limit`); `record_views` and `log_record_view` (who opened a record); `export_my_record()`; retention as the admin sets it (`purge_deleted_documents` reads it, `apply_retention`, `run_retention_now`, the audit trail removable only by that job); the storage upload rule and MIME list (hosted); every `*_active_only` rule recreated as `(select account_active())`. |
 
 | `0017_clear_read_notifications.sql` | Policy `notifications_clear`: a person may delete their own notifications once read. A delivery row now outlives its notification (`notification_id` foreign key `on delete set null`), so what was sent stays on record and follows its own retention (`delivery_days`). |
+| `0019_fluid_limit_allergy_check.sql` | `meal_plans.fluid_mode` (`goal` or `limit`: a fluid restriction for heart failure and kidney disease; the patient is told "at most N glasses"). `allergy_drug_terms` (allergy group → medicine-name fragments, admin-managed) and `prescription_allergy_check`: a prescription matching a recorded allergy is refused unless `prescriptions.allergy_override` gives a reason, which is kept (never rewritten) and audited ("Prescribed despite allergy"). `0018` is left for the `auth-upgrade` branch (the runner tracks files by name). |
 
-**Next file number: `0018`.**
+**Next file number: `0020`** (`0018` is kept for the `auth-upgrade` branch).
 
 #### Function and trigger index
 
@@ -732,6 +734,7 @@ The first ten files are the **baseline**. On 3 October 2026, before any hosted d
 | `0015` | `condition_def_audit` `condition_link` `save_condition_def` `frequency_label` `set_vital_plan` `review_vitals`; view `patient_care_team` | `condition_def_audit` `condition_link` `zz_touch_topic` (condition_defs, condition_vitals) `zz_touch_patient` (vital_reviews) `vital_reviews_append_only` |
 | `0016` | `message_read_stamp` `rate_limit` `log_record_view` `export_my_record` `audit_log_guard` `apply_retention` `run_retention_now`; replaced: `log_patient_view` `purge_deleted_documents` `purge_expired_documents` | `message_read_stamp` `rate_limit` (messages, support_tickets, appointments, share_links, report_requests) `record_views_append_only` `audit_log_append_only` (now `audit_log_guard`) |
 | `0017` | policy `notifications_clear`; `notification_deliveries.notification_id` foreign key now `on delete set null` | |
+| `0019` | `medication_allergy_conflict` (internal) `prescription_allergy_check`; replaced: `meal_plan_changed` | `prescription_allergy_check` (prescriptions) `zz_touch_topic` (allergy_drug_terms) |
 
 #### Adding a change
 
@@ -841,7 +844,7 @@ erDiagram
 
 ### Tables, keys and constraints
 
-54 tables. Six were added after the baseline: `app_settings` (0012), `doctor_signatures` (0014), `condition_defs`, `condition_vitals`, `vital_reviews` (0015), `record_views` (0016); one view, `patient_care_team` (0015). The 48 of the baseline are in `0001_schema.sql`: `profiles` `doctors` `staff` `patients` `allergies` `conditions` `emergency_contacts` `consents` `account_invitations` `doctor_requests` `care_assignments` `care_team_members` `doctor_ratings` `vital_defs` `tracked_vitals` `thresholds` `threshold_changes` `readings` `alerts` `alert_remeasures` `alert_comments` `prescriptions` `prescription_events` `dose_logs` `meal_plans` `meal_logs` `hydration_logs` `appointments` `appointment_events` `doctor_hours` `doctor_time_off` `clinical_notes` `care_plans` `care_plan_items` `care_plan_events` `documents` `document_events` `share_links` `support_grants` `report_requests` `messages` `notifications` `push_subscriptions` `notification_deliveries` `support_tickets` `audit_log` `patient_changes` `system_changes`.
+55 tables. Seven were added after the baseline: `app_settings` (0012), `doctor_signatures` (0014), `condition_defs`, `condition_vitals`, `vital_reviews` (0015), `record_views` (0016), `allergy_drug_terms` (0019); one view, `patient_care_team` (0015). The 48 of the baseline are in `0001_schema.sql`: `profiles` `doctors` `staff` `patients` `allergies` `conditions` `emergency_contacts` `consents` `account_invitations` `doctor_requests` `care_assignments` `care_team_members` `doctor_ratings` `vital_defs` `tracked_vitals` `thresholds` `threshold_changes` `readings` `alerts` `alert_remeasures` `alert_comments` `prescriptions` `prescription_events` `dose_logs` `meal_plans` `meal_logs` `hydration_logs` `appointments` `appointment_events` `doctor_hours` `doctor_time_off` `clinical_notes` `care_plans` `care_plan_items` `care_plan_events` `documents` `document_events` `share_links` `support_grants` `report_requests` `messages` `notifications` `push_subscriptions` `notification_deliveries` `support_tickets` `audit_log` `patient_changes` `system_changes`.
 
 | Table | Primary key | Belongs to | Notes |
 | --- | --- | --- | --- |
@@ -863,7 +866,7 @@ erDiagram
 | `doctor_hours` | `id` | doctor | Unique per doctor, weekday and start; blocks on a day cannot overlap. |
 | `dose_logs` | `(prescription_id, slot, day)` | patient, prescription | A dose is logged once. |
 | `meal_logs` | `(patient_id, meal_id, day)` | patient | |
-| `meal_plans` | `patient_id` | patient, doctor (`set_by`) | Up to 8 meals, each 0 to 3000 kcal. |
+| `meal_plans` | `patient_id` | patient, doctor (`set_by`) | Up to 8 meals, each 0 to 3000 kcal. `fluid_mode`: `goal` (at least `water_goal` glasses) or `limit` (at most). |
 | `hydration_logs` | `(patient_id, day)` | patient | |
 | `account_invitations` | `id` | `invited_by`, `accepted_by` | One open invitation per email; expires after 14 days. |
 | `clinical_notes` | `id` | patient, author; `amends` | Amended at most once, so versions form one line. |
@@ -918,6 +921,7 @@ Triggers are used where a rule must hold however the row is written.
 | An alert changes | Fills in who and when; requires a reason to resolve; records how it ended; refuses edits to its reading and any change once resolved. Notifies the patient, audits. |
 | An alert comment is added | Stamps the author, time and patient; tells the patient; audits. |
 | A critical alert sits unacknowledged for 10 minutes | Escalates to admins and monitors (scheduled job `escalate_stale_alerts`). |
+| A prescription matches a recorded allergy | Refused with the allergy named, unless the doctor gives a reason; the reason is kept on the prescription and audited. |
 | A prescription is saved, stopped or restarted | Writes its history line, notifies the patient, audits, and (when saved) files a signed prescription document. |
 | A course passes its last day | Marked completed; the patient is told (scheduled job `complete_ended_prescriptions`). |
 | A target or critical range changes | Keeps the history, starts tracking the vital, tells the patient of a new target. |
@@ -1135,7 +1139,7 @@ Each layer assumes the one above it may be compromised.
 
 ### Who reaches what
 
-Row-level security is on for every table (54 in `public`). A table with no policy for a role returns nothing to it. The role table is in [§7 Data model → Who may do what](#who-may-do-what); the policies are in `0009_security.sql` and the migrations after it.
+Row-level security is on for every table (55 in `public`). A table with no policy for a role returns nothing to it. The role table is in [§7 Data model → Who may do what](#who-may-do-what); the policies are in `0009_security.sql` and the migrations after it.
 
 - **Relationships grant access, not roles.** A doctor reads a patient only while assigned (`treats()`) or on the care team (`consults()`); losing the relationship removes access in the same transaction.
 - **The restrictive rule** `<table>_active_only` on every table requires `account_active()`; since `0016` it is written `(select account_active())`, so Postgres works it out once per query instead of once per row.
@@ -1449,6 +1453,7 @@ Check `git status` too: work may have started since this was written.
 | Change | Files |
 | --- | --- |
 | **Sign in, sign up and every form step move like the welcome page** (branch `auth-motion-parity`). The logo flies (and resizes) from the welcome page onto the form and back, follows the pointer between the tour and the form on web, and is the way back to welcome; the icons around it spring out, drift with the pointer and act out the tour's feature at every size; every main button (`AuthButton`) is the Get Started pill: lean to the pointer, pointer light, ripple, pulsing ring once it can be pressed. The old 2px hover lift is gone, which also ends the pointer jitter the browser test had to work around (`signIn` in `ui.test.mjs` still moves the pointer away first; harmless). Under reduced motion: no flight, no lean (`reducedMotion()`), icons appear without the spring. Verified: typecheck clean; `test:ui` 70 of 71 (the one failure was another change to `authBackend.ts` saved mid-run, not this one); a separate browser check at 390/834/1366px: one logo on screen on every step, logo flight and button lean measured, sign-up fits a 1366×768 window, no console error. | `src/shared/auth/AuthShell.tsx`, `authKit.tsx`, `WelcomeScreen.tsx` |
+| **P0 clinical safety** (branch `p0-fluid-limit-allergy-check`). *Fluid limit*: a meal plan's water is a goal or a daily limit (`fluid_mode`, migration `0019`); a heart-failure or kidney-disease patient is never shown "drink 8 glasses": without a doctor's figure they are asked to check their limit, with one they see "at most N" and a warning when over; the doctor's form starts such a patient on a limit and warns on a goal; days over the limit show in red to the doctor. *Allergy check*: a prescription matching a recorded allergy is refused by the database unless the doctor gives a reason (kept, audited, shown on the prescription); the form warns first and notes a medicine already being taken. Verified: typecheck clean; `test:db` 418/0; `test:api` 177/0; `test:ui` 72/0 (new: the prescribing form stops a penicillin-allergic patient's amoxicillin until a reason is given). | `supabase/migrations/0019_fluid_limit_allergy_check.sql`, `src/shared/lib/medicines.ts` (new), `health.ts`, `types.ts`, `records.ts`, `actions.ts`, `AppContext.tsx`, `src/doctor/PatientMeds.tsx`, `PatientNutrition.tsx`, `useDoctor.ts`, `src/patient/MealsTab.tsx`, `usePatient.ts`, rules and browser tests |
 
 ### Recently finished
 
@@ -1501,7 +1506,7 @@ Check `git status` too: work may have started since this was written.
 | Prescriptions: prescribe, stop, restart, history, filed as a document; auto-complete at end date | Done |
 | Clinical notes (shared / internal, corrected by a new note) | Done |
 | Care plans (goals, interventions, steps, events) | Done |
-| Meal plans, meal and water logs | Done |
+| Meal plans, meal and water logs; fluid goal or limit | Done |
 | Vital definitions (admin) | Done, no browser test |
 
 #### Care coordination and communication

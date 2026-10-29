@@ -380,9 +380,18 @@ try {
     const r = (await row(service.from('readings').select('recorded_by, level').eq('patient_id', patId).eq('value', '76')))[0]
     if (r?.recorded_by !== docId) throw new Error(JSON.stringify(r))
   })
-  await step(d, 'the doctor prescribes; it is saved before it says so, and the patient is told', async () => {
+  await step(d, 'the doctor is stopped by a recorded allergy, then prescribes; it is saved before it says so, and the patient is told', async () => {
     await d.page.getByRole('button', { name: 'Meds', exact: true }).click()
+    // The patient is allergic to penicillin (recorded here; the basic seed has no allergies): amoxicillin needs a reason.
+    const allergy = await service.from('allergies').insert({ patient_id: patId, substance: 'Penicillin', severity: 'moderate' })
+    if (allergy.error) throw new Error(allergy.error.message)
     await d.page.getByRole('button', { name: '+ New Prescription' }).click()
+    await d.sheet().getByText('Penicillin (moderate)').first().waitFor({ timeout: 20000 })   // the open record learns of it by itself
+    await d.sheet().getByPlaceholder('e.g. Amlodipine 5mg').fill('TEST Amoxicillin 500mg')
+    await d.sheet().getByPlaceholder('e.g. 5mg').fill('500mg')
+    await d.sheet().getByRole('alert').getByText(/Allergy: Penicillin/).waitFor({ timeout: 10000 })
+    if (!(await d.sheet().getByRole('button', { name: 'Prescribe anyway' }).isDisabled())) throw new Error('an allergy match could be prescribed without a reason')
+    await d.sheet().getByPlaceholder('e.g. 5mg').fill('')
     await d.sheet().getByPlaceholder('e.g. Amlodipine 5mg').fill('TEST Enalapril 5mg')
     await d.sheet().getByPlaceholder('e.g. 5mg').fill('5mg')
     await d.sheet().getByPlaceholder(/With breakfast/).fill('TEST: with breakfast')

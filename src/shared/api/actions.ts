@@ -238,11 +238,11 @@ export const resolveAlert = async (id: string, reason: string, note?: string) =>
 
 /* ─── Medication and meals ──────────────────────────────────────────── */
 export const addPrescription = async (patientId: string, doctorId: string,
-  rx: Pick<Prescription, 'medication' | 'dosage' | 'frequency' | 'purpose' | 'route' | 'instructions' | 'startDate' | 'endDate' | 'clientRef'>) => {
+  rx: Pick<Prescription, 'medication' | 'dosage' | 'frequency' | 'purpose' | 'route' | 'instructions' | 'startDate' | 'endDate' | 'clientRef' | 'allergyOverride'>) => {
   await okOnce((await db()).from('prescriptions').insert({
     patient_id: patientId, doctor_id: doctorId, medication: rx.medication, dosage: rx.dosage, frequency: rx.frequency, purpose: rx.purpose,
     route: rx.route ?? null, instructions: blank(rx.instructions), ...(rx.startDate ? { start_date: rx.startDate } : {}), end_date: rx.endDate || null,
-    ...withRef(rx.clientRef),
+    allergy_override: blank(rx.allergyOverride), ...withRef(rx.clientRef),
   }))
 }
 /** Stops a medicine with the reason, or restarts it. The row itself is never rewritten or deleted. */
@@ -297,7 +297,7 @@ export const setHydration = async (patientId: string, day: string, glasses: numb
 /** The treating doctor's plan for a patient: one row per patient. The database checks it, tells the patient and audits it. */
 export const setMealPlan = async (plan: Omit<MealPlan, 'setBy'>) => {
   await ok((await db()).from('meal_plans').upsert({
-    patient_id: plan.patientId, meals: plan.meals, target_kcal: plan.targetKcal ?? null, water_goal: plan.waterGoal, dietary_note: blank(plan.dietaryNote),
+    patient_id: plan.patientId, meals: plan.meals, target_kcal: plan.targetKcal ?? null, water_goal: plan.waterGoal, fluid_mode: plan.fluidMode, dietary_note: blank(plan.dietaryNote),
   }))
 }
 /** Back to the standard plan. */

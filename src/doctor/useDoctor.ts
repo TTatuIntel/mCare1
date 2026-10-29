@@ -42,6 +42,8 @@ export interface NewPrescription {
   endDate?: string
   /** The form's reference (`useSave().ref`): a prescription sent twice is saved once. */
   ref?: string
+  /** Why it is prescribed despite a recorded allergy; the database refuses a match without one. */
+  allergyOverride?: string
 }
 
 export interface NewVisit {
@@ -141,6 +143,7 @@ export function useDoctor() {
       id: tempId('rx'), medication: rx.medication.trim(), dosage: rx.dosage.trim(), frequency: rx.frequency, purpose: rx.purpose.trim(),
       route: rx.route, instructions: rx.instructions?.trim() || undefined, startDate: rx.startDate || undefined, endDate: rx.endDate || undefined,
       prescribedAt: dateLabel(), doctorId: doctor.id, active: true, clientRef: rx.ref,
+      allergyOverride: rx.allergyOverride?.trim() || undefined,
     }),
     /** UPDATE prescriptions: stopped with its reason, kept in the record; never deleted. */
     stopMedicine: (patientId: string, rxId: string, reason: string) => app.setPrescriptionActive(patientId, rxId, false, reason),

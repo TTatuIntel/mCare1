@@ -378,6 +378,8 @@ export interface Prescription {
   startDate?: string
   endDate?: string
   stopReason?: string
+  /** Why the doctor prescribed it despite a recorded allergy (kept and audited by the database). */
+  allergyOverride?: string
   stoppedAt?: string
   stoppedBy?: string
   history?: RxEvent[]
@@ -832,14 +834,19 @@ export interface PlannedMeal {
   fat?: number
 }
 
+/** Water as a target to reach, or a fluid restriction not to pass. */
+export type FluidMode = 'goal' | 'limit'
+
 /** What the treating doctor set for a patient's meals. A patient without one follows the standard plan. */
 export interface MealPlan {
   patientId: string
   /** Empty = the standard meals. */
   meals: PlannedMeal[]
   targetKcal?: number
-  /** Glasses of water a day. */
+  /** Glasses a day: at least this many (`goal`), or at most (`limit`, a fluid restriction). */
   waterGoal: number
+  /** `limit` for a fluid restriction (heart failure, kidney disease); `goal` otherwise. */
+  fluidMode: FluidMode
   dietaryNote?: string
   setBy?: string
 }

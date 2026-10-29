@@ -73,6 +73,14 @@ export function suggestedVitals(conditions: string[], catalogue: CatalogueCondit
   return out
 }
 
+/**
+ * Conditions where too much fluid is harmful (heart failure, kidney disease): the doctor sets a daily
+ * fluid LIMIT, and the app never tells the patient to "drink 8 glasses". Returns the condition, or undefined.
+ */
+export function fluidRestrictionFor(conditions: string[]): string | undefined {
+  return conditions.find(c => /heart failure|kidney|renal|dialysis/i.test(c))
+}
+
 /** What still needs filling in, in the patient's words. Empty when the profile is complete. */
 export function healthGaps(p: PatientUser): string[] {
   const h = healthOf(p)

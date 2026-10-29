@@ -19,6 +19,7 @@ import { mfaGate, signOutBackend, type MfaGate } from '@/shared/api/authBackend'
 import * as api from '@/shared/api/actions'
 import { changeToken, isoClock, isoDay, loadRecords, searchAudit as searchAuditApi, type AuditWho, type Records } from '@/shared/api/records'
 import { evaluate, alertIsFor, stamp, dateLabel, dayKey, targetRange, ESCALATE_AFTER_MIN, CORRECTION_WINDOW_MIN, type VitalLevel } from '@/shared/lib/vitals'
+import { allergyConflicts, conflictLabel } from '@/shared/lib/medicines'
 import { apptDateLabel, apptTimeLabel, apptWhen, isOpenAppt } from '@/shared/lib/schedule'
 import { useDocumentStore, type DocumentApi } from '@/shared/documents/useDocumentStore'
 import { seedDocuments } from '@/shared/documents/docSeed'
@@ -877,6 +878,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   /* ─ prescriptions, notes, doses ─ */
   const addPrescription = (patientId: string, rx: Prescription): Saved => {
     if (rx.endDate && rx.endDate < (rx.startDate ?? dayKey())) return refused('The end date cannot be before the start date.')
+    // Same rule as the database (0019): a medicine matching a recorded allergy needs the doctor's reason.
+    const pt = findUser(patientId) as PatientUser | undefined
+    const hits = allergyConflicts(rx.medication, pt?.health?.allergies ?? [])
+    if (hits.length && (rx.allergyOverride?.trim().length ?? 0) < 3)
+      return refused(`${rx.medication.trim()} matches an allergy on record: ${conflictLabel(hits)}. To prescribe it anyway, give your reason.`)
     if (LIVE) return run(() => api.addPrescription(patientId, rx.doctorId, rx))   // the database notifies, audits and files the document
     const made: Prescription = { ...rx, status: 'active', active: true, startDate: rx.startDate ?? dayKey(),
       history: [{ id: uid('rxe'), action: 'prescribed', actorId: rx.doctorId, detail: `${rx.dosage} · ${rx.frequency}`, at: Date.now(), createdAt: stamp() }] }
@@ -884,6 +890,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     docStore.filePrescription(patientId, rx)
     notify(patientId, 'prescription', 'New prescription', `${rx.medication} — ${rx.frequency}`, 'medicine')
     logAudit('Prescribed', `${rx.medication} for ${findUser(patientId)?.name}`)
+    if (hits.length) logAudit('Prescribed despite allergy', `${rx.medication} · allergy: ${conflictLabel(hits)} · reason: ${rx.allergyOverride?.trim()}`)
     return done()
   }
   const setPrescriptionActive = (patientId: string, rxId: string, active: boolean, reason?: string): Saved => {
@@ -928,7 +935,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (LIVE) return run(() => api.setMealPlan(plan))   // the database checks it, tells the patient and audits it
     setMealPlans(prev => [...prev.filter(p => p.patientId !== plan.patientId), { ...plan, dietaryNote: plan.dietaryNote?.trim() || undefined, setBy: actorId() }])
     notify(plan.patientId, 'message', 'Your meal plan was updated',
-      `${findUser(actorId())?.name ?? 'Your doctor'} set your meals${plan.targetKcal ? ` · ${plan.targetKcal} kcal a day` : ''} · ${plan.waterGoal} glasses of water`, 'meals')
+      `${findUser(actorId())?.name ?? 'Your doctor'} set your meals${plan.targetKcal ? ` · ${plan.targetKcal} kcal a day` : ''} · ${plan.fluidMode === 'limit' ? `at most ${plan.waterGoal} glasses of fluid a day` : `${plan.waterGoal} glasses of water`}`, 'meals')
     logAudit('Set meal plan', `${findUser(plan.patientId)?.name} · ${plan.meals.length} meals`)
     return done()
   }

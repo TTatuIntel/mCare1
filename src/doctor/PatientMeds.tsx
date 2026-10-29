@@ -4,11 +4,12 @@ import { RX_ROUTE_LABELS } from '@/shared/lib/types'
 import type { PatientUser, Prescription, RxRoute } from '@/shared/lib/types'
 import { dayKey } from '@/shared/lib/vitals'
 import { buildDaySchedule, clock, TONE_PILL } from '@/shared/lib/schedule'
+import { allergyConflicts, alreadyTaking, conflictLabel } from '@/shared/lib/medicines'
 import { useDoctor } from './useDoctor'
 
 const FREQUENCIES = ['Once daily', 'Twice daily', 'Three times daily', 'Once at night', 'As needed', 'Weekly']
 const ROUTES = Object.keys(RX_ROUTE_LABELS) as RxRoute[]
-const emptyRx = () => ({ medication: '', dosage: '', frequency: 'Once daily', purpose: '', route: 'oral' as RxRoute, instructions: '', startDate: dayKey(), endDate: '' })
+const emptyRx = () => ({ medication: '', dosage: '', frequency: 'Once daily', purpose: '', route: 'oral' as RxRoute, instructions: '', startDate: dayKey(), endDate: '', allergyOverride: '' })
 const EVENT_LABEL: Record<string, string> = { prescribed: 'Prescribed', stopped: 'Stopped', completed: 'Course finished', restarted: 'Restarted' }
 const day = (iso?: string) => (iso ? new Date(`${iso}T00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '')
 
@@ -29,11 +30,15 @@ export function PatientMeds({ patient }: { patient: PatientUser }) {
   /* a new prescription */
   const [rx, setRx] = useState<ReturnType<typeof emptyRx> | null>(null)
   const rxSave = useSave()
+  // The database refuses a medicine that matches a recorded allergy unless the doctor gives a reason (0019); the form says so first.
+  const allergyHits = rx ? allergyConflicts(rx.medication, patient.health?.allergies ?? []) : []
+  const needsReason = allergyHits.length > 0 && rx!.allergyOverride.trim().length < 3
+  const duplicate = rx ? alreadyTaking(rx.medication, active) : undefined
   const rxIssue = rx && rx.endDate && rx.endDate < rx.startDate ? 'The last day cannot be before the first day.' : null
   const send = async () => {
-    if (!rx || !rx.medication.trim() || !rx.dosage.trim() || rxIssue) return
+    if (!rx || !rx.medication.trim() || !rx.dosage.trim() || rxIssue || needsReason) return
     // The sheet stays open, with the reason, if the prescription could not be saved.
-    if (!(await rxSave.run(() => prescribe(patient.id, { ...rx, endDate: rx.endDate || undefined, ref: rxSave.ref }))).ok) return
+    if (!(await rxSave.run(() => prescribe(patient.id, { ...rx, endDate: rx.endDate || undefined, allergyOverride: allergyHits.length ? rx.allergyOverride : undefined, ref: rxSave.ref }))).ok) return
     setRx(null)
     toast.show('Prescription sent to patient')
   }
@@ -88,6 +93,7 @@ export function PatientMeds({ patient }: { patient: PatientUser }) {
                     <p className="text-xs font-semibold text-gray-900">{x.medication} <span className="font-normal text-gray-500">· {x.dosage} · {x.frequency}</span></p>
                     <p className="text-[11px] text-gray-500">{x.purpose ? `${x.purpose} · ` : ''}{details(x)}</p>
                     <p className="text-[10px] text-gray-400">Prescribed by {nameOf(x.doctorId, 'a previous doctor')}</p>
+                    {x.allergyOverride && <p className="text-[10px] text-red-600 font-semibold">⚠ Prescribed despite an allergy: {x.allergyOverride}</p>}
                     {slots.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-1">
                         {slots.map(s => <Pill key={s.key} color={TONE_PILL[s.tone]}>{s.done ? '✓ ' : ''}{clock(s.slot)}{s.tone === 'late' ? ' missed' : ''}</Pill>)}
@@ -126,11 +132,24 @@ export function PatientMeds({ patient }: { patient: PatientUser }) {
       )}
 
       <BottomSheet open={!!rx} onClose={() => setRx(null)} title="New Prescription" subtitle={`For ${patient.name}`}
-        footer={<><SheetButton tone="ghost" onClick={() => setRx(null)}>Cancel</SheetButton><SheetButton disabled={!rx?.medication.trim() || !rx?.dosage.trim() || !!rxIssue || rxSave.busy} onClick={send}>{rxSave.busy ? 'Saving…' : 'Prescribe'}</SheetButton></>}>
+        footer={<><SheetButton tone="ghost" onClick={() => setRx(null)}>Cancel</SheetButton><SheetButton disabled={!rx?.medication.trim() || !rx?.dosage.trim() || !!rxIssue || needsReason || rxSave.busy} onClick={send}>{rxSave.busy ? 'Saving…' : allergyHits.length ? 'Prescribe anyway' : 'Prescribe'}</SheetButton></>}>
         {rx && (
           <>
             <AllergyBanner patient={patient} />
             <Field label="Medication *"><input value={rx.medication} onChange={e => setRx({ ...rx, medication: e.target.value })} placeholder="e.g. Amlodipine 5mg" className={inputCls} /></Field>
+            {allergyHits.length > 0 && (
+              <div role="alert" className="bg-red-50 border-2 border-red-200 rounded-xl p-3 mb-3 -mt-1">
+                <p className="text-xs font-bold text-red-700">⚠ Allergy: {conflictLabel(allergyHits)}</p>
+                <p className="text-[11px] text-red-700/80 mt-0.5 leading-snug">{rx.medication.trim()} matches an allergy on this patient's record. Choose another medicine, or give your reason to prescribe it anyway: it is kept with the prescription and audited.</p>
+                <Field label="Reason to prescribe anyway *">
+                  <input value={rx.allergyOverride} maxLength={300} onChange={e => setRx({ ...rx, allergyOverride: e.target.value })}
+                    placeholder="e.g. Tolerated it in 2024; allergy was a mild rash" className={inputCls} />
+                </Field>
+              </div>
+            )}
+            {duplicate && (
+              <p className="text-[11px] text-amber-800 bg-amber-50 rounded-xl px-3 py-2 mb-3 -mt-1">Already taking {duplicate.medication} · {duplicate.dosage} · {duplicate.frequency}. Stop that one first if this replaces it.</p>
+            )}
             <div className="grid grid-cols-2 gap-2">
               <Field label="Dose *"><input value={rx.dosage} onChange={e => setRx({ ...rx, dosage: e.target.value })} placeholder="e.g. 5mg" className={inputCls} /></Field>
               <Field label="How it is taken">
