@@ -1,6 +1,7 @@
 import { Fragment } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import { Avatar } from '@/shared/ui/primitives'
+import { SignOutButton } from '@/shared/ui/SignOutButton'
 
 /** Main navigation — identical in every portal: a bottom tab bar on mobile, an icon rail on tablet, a labelled sidebar on web. */
 
@@ -12,7 +13,7 @@ export function NavBar({ items, active, onSelect, onHome }: {
   /** The brand at the top of the rail and sidebar takes the user home. */
   onHome: () => void
 }) {
-  const { currentUser, setCurrentUser } = useApp()
+  const { currentUser } = useApp()
   return (
     <nav aria-label="Main"
       className="absolute bottom-0 left-0 right-0 z-10 bg-white/95 backdrop-blur-sm border-t border-gray-100 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] px-1
@@ -55,17 +56,25 @@ export function NavBar({ items, active, onSelect, onHome }: {
         })}
       </div>
 
+      {/* tablet rail: the way out, always in sight at the foot of the rail */}
+      {currentUser && (
+        <div className="hidden @2xl:block @5xl:hidden mt-auto pt-3 border-t border-gray-100">
+          <SignOutButton variant="rail" />
+        </div>
+      )}
+
       {/* web sidebar: who is signed in, their profile and the way out */}
       {currentUser && (
-        <div className="hidden @5xl:flex items-center gap-2.5 mt-auto pt-3 border-t border-gray-100">
-          <button onClick={() => onSelect('profile')} className="flex items-center gap-2.5 flex-1 min-w-0 text-left rounded-xl px-1 py-1 hover:bg-gray-50">
+        <div className="hidden @5xl:flex flex-col gap-2 mt-auto pt-3 border-t border-gray-100">
+          <button onClick={() => onSelect('profile')} className="flex items-center gap-2.5 w-full min-w-0 text-left rounded-xl px-1 py-1 hover:bg-gray-50">
             <Avatar name={currentUser.name} avatar={currentUser.avatar} size="sm" />
-            <span className="min-w-0">
+            <span className="min-w-0 flex-1">
               <span className="block text-xs font-bold text-gray-900 truncate">{currentUser.name}</span>
               <span className="block text-[10px] text-gray-400 capitalize">{currentUser.role} · Profile</span>
             </span>
+            <span className="text-gray-300 text-sm" aria-hidden="true">›</span>
           </button>
-          <button onClick={() => setCurrentUser(null)} className="text-[11px] font-semibold text-gray-500 hover:text-red-600 flex-shrink-0 px-1">Sign out</button>
+          <SignOutButton variant="sidebar" />
         </div>
       )}
     </nav>

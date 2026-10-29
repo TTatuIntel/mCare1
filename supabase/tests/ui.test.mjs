@@ -166,10 +166,20 @@ try {
   const fresh = await s.text()
   check('a new account shows no sample people or readings', !/James Mwangi|Amara Osei|Samuel Kariuki/.test(fresh) && /No readings yet/.test(fresh), fresh.slice(0, 200))
   check('before a doctor takes them on, a new patient has no meals or medicines to do, and is told why',
-    /Your daily plan starts with your doctor/.test(fresh) && !/Breakfast|Lunch|Dinner|Next meal|Next medicine/.test(fresh), fresh.slice(0, 300))
+    /medicines and meal plan start once a doctor is caring for you/.test(fresh) && !/Breakfast|Lunch|Dinner|Next meal|Next medicine/.test(fresh), fresh.slice(0, 300))
+  check('a new patient gets a getting-started reminder that knows what setup already did (details and next of kin done)',
+    /Getting started · 2\/4/i.test(fresh) && /Next: Log your first reading/.test(fresh), fresh.slice(0, 400))
+  await step(s, 'the getting-started reminder lists every step and can be closed', async () => {
+    await page.getByRole('button', { name: 'All steps' }).click()
+    await page.getByText('Ask for a doctor').waitFor({ timeout: 10000 })
+    await page.keyboard.press('Escape')
+    await page.getByRole('button', { name: 'Close getting started' }).click()
+    await page.getByRole('region', { name: 'Getting started' }).waitFor({ state: 'detached', timeout: 5000 })
+  })
   await step(s, 'empty screens say what to do instead of inventing data', async () => {
-    await s.home(); await page.getByRole('button', { name: /Meals$/ }).click(); await page.getByText('No meal plan yet').waitFor({ timeout: 10000 })
+    await s.home(); await page.getByRole('button', { name: /Find a doctor$/ }).click(); await page.getByRole('heading', { name: 'Care Team' }).waitFor({ timeout: 10000 })
     await s.nav('Meds'); await page.getByText('No active prescriptions').waitFor({ timeout: 10000 })
+    await page.getByRole('button', { name: 'Find a doctor →' }).click(); await page.getByRole('heading', { name: 'Care Team' }).waitFor({ timeout: 10000 })
     await s.nav('Appts'); await page.getByText('No appointments yet').waitFor({ timeout: 10000 })
     await s.nav('Chat'); await page.getByText('No doctor on your care team yet').waitFor({ timeout: 10000 })
   })
