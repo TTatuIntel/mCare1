@@ -13,6 +13,7 @@ import {
 } from '@/shared/lib/vitals'
 import { SelfClearBanner } from './VitalLogSheets'
 import { usePatient } from './usePatient'
+import { patientConditionsByVital } from '@/shared/lib/health'
 
 /* ─── One vital, in full ──────────────────────────────────────────────
    The page behind every tapped vital, read top to bottom: how am I now
@@ -43,7 +44,7 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
   /** Log this vital's whole group together. */
   onLogGroup: (groupId: string) => void
 }) {
-  const { currentUser, vitalDefs, alerts, now, canCorrect, correctReading, setUnitPref } = useApp()
+  const { currentUser, vitalDefs, alerts, now, canCorrect, correctReading, setUnitPref, conditionDefs } = useApp()
   const { doctor, vitalPlans, nameOf } = usePatient()
   const patient = currentUser as PatientUser
   const [range, setRange] = useState<{ preset: Preset; from: string; to: string }>({ preset: '30d', from: '', to: '' })
@@ -130,7 +131,8 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
   const change = u.change(pts)
   const inRangePct = pts.length ? Math.round((trend.inRange / pts.length) * 100) : 0
 
-  const insights = preset ? generateInsights(patient, vitalDefs, preset.days, now).filter(i => i.vitalId === def.id) : []
+  const trackedFor = patientConditionsByVital(patient, conditionDefs).get(def.id)
+  const insights = preset ? generateInsights(patient, vitalDefs, preset.days, now, patientConditionsByVital(patient, conditionDefs)).filter(i => i.vitalId === def.id) : []
   const correctionError = correcting ? validateReading(def, u.toCanonical(correcting.value), u.unit) : null
 
   // Doctor's changes to this vital's target that fall inside the period on show, newest first.
@@ -231,6 +233,11 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
             <p className="mt-2 text-[11px] text-blue-800 bg-blue-50 rounded-lg px-2.5 py-1.5">
               🩺 {nameOf(vitalPlans[def.id].assignedBy, 'Your doctor')} asked you to measure this {vitalPlans[def.id].frequency ? FREQUENCY_LABELS[vitalPlans[def.id].frequency!].toLowerCase() : 'as usual'}
               {vitalPlans[def.id].reason ? ` · ${vitalPlans[def.id].reason}` : ''}
+            </p>
+          )}
+          {!!trackedFor?.length && (
+            <p className="sheet-fade mt-2 text-[11px] text-teal-800 bg-teal-50 rounded-lg px-2.5 py-1.5">
+              <span aria-hidden="true">🎯</span> Tracked for your {trackedFor.join(' · ')}
             </p>
           )}
         </div>
@@ -409,7 +416,7 @@ export function VitalDetail({ vitalId, onSelect, onBack, onLog, onLogGroup }: {
 
             <div className="mt-3">
               <VitalChart points={pts} range={target} secondaryRange={diaTarget} from={axisFrom} to={axisTo} height={150} detailed
-                format={n => u.num(round1(n))} marks={targetChanges.map(c => c.at)} activeId={picked} onPick={setPicked} />
+                format={n => u.num(round1(n))} marks={targetChanges.map(c => c.at)} activeId={picked} onPick={setPicked} scrub unit={u.unit} />
               {axisFrom !== undefined && axisTo !== undefined && (
                 <div className="flex justify-between text-[9px] text-gray-400 mt-1 pl-6">
                   <span>{dateLabel(new Date(axisFrom))}</span>

@@ -324,7 +324,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
   const [medicationDefs, setMedicationDefs] = useState<MedicationDef[]>(() => LIVE ? [] : DEMO_MEDICATIONS)
   const [conditionDefs, setConditionDefs] = useState<ConditionDef[]>(() => LIVE ? [] : COMMON_CONDITIONS.map((c, i) => ({
-    code: c.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `c${i}`, name: c.name, icon: c.icon, active: true, vitals: c.vitals, ...DEMO_PATHWAYS[c.name] })))
+    code: c.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `c${i}`, name: c.name, icon: c.icon, active: true, vitals: c.vitals, keywords: c.keywords, ...DEMO_PATHWAYS[c.name] })))
   const [vitalReviews, setVitalReviews] = useState<VitalReview[]>([])
   const [recordViews, setRecordViews] = useState<RecordView[]>([])
   const [mfa, setMfa] = useState<{ step: Exclude<MfaGate, 'ok'>; account: AppUser; acceptedTerms: boolean } | null>(null)

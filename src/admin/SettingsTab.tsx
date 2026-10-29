@@ -167,6 +167,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
                 <span className="text-sm font-semibold text-gray-800">{c.name}</span>
                 {c.icd10 && <span className="ml-1.5 text-[10px] font-mono text-gray-400">{c.icd10}</span>}
                 <span className="block text-[11px] text-gray-400 truncate">{c.vitals.length ? c.vitals.map(vitalName).join(' · ') : 'No vitals suggested'}</span>
+                {!!c.keywords?.length && <span className="block text-[10px] text-gray-400 truncate">Also: {c.keywords.join(', ')}</span>}
               </button>
               {c.active && (c.reviewedAt ? <Pill color="green">Reviewed</Pill> : <Pill color="amber">Not reviewed</Pill>)}
               {!c.active && <Pill color="gray">Off</Pill>}
@@ -197,6 +198,7 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
                 })}
               </div>
             </Field>
+            <KeywordsField words={condition.keywords ?? []} onChange={keywords => setCondition({ ...condition, keywords })} />
             {condition.vitals.length > 0 && (
               <div className="flex flex-col gap-2">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Care pathway: starting plan per vital</p>
@@ -256,6 +258,34 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
         )}
       </BottomSheet>
     </div>
+  )
+}
+
+/** Other words patients type for a condition: chips, added by Enter or comma, removed with ✕. */
+function KeywordsField({ words, onChange }: { words: string[]; onChange: (w: string[]) => void }) {
+  const [draft, setDraft] = useState('')
+  const add = (raw: string) => {
+    const fresh = raw.split(',').map(w => w.trim().toLowerCase().replace(/\s+/g, ' ')).filter(w => w.length >= 2 && w.length <= 40 && !words.includes(w))
+    if (fresh.length) onChange([...words, ...new Set(fresh)].slice(0, 30))
+    setDraft('')
+  }
+  return (
+    <Field label="Words patients use for it">
+      <div className="flex flex-wrap gap-1.5">
+        {words.map(w => (
+          <span key={w} className="chip-in inline-flex items-center gap-1 text-xs pl-3 pr-1 py-1 rounded-full bg-teal-50 text-teal-800 border border-teal-100">
+            {w}
+            <button type="button" aria-label={`Remove ${w}`} onClick={() => onChange(words.filter(x => x !== w))}
+              className="w-5 h-5 rounded-full text-teal-700 hover:bg-teal-100">✕</button>
+          </span>
+        ))}
+      </div>
+      <input className={`${inputCls} mt-1.5`} value={draft} placeholder="e.g. high bp, htn — press Enter" aria-label="Add a word patients use"
+        onChange={e => e.target.value.endsWith(',') ? add(e.target.value) : setDraft(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(draft) } }}
+        onBlur={() => draft.trim() && add(draft)} />
+      <span className="block mt-1 text-[10px] text-gray-400">A condition a patient types that contains one of these suggests this condition's vitals.</span>
+    </Field>
   )
 }
 

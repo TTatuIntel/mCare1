@@ -31,8 +31,10 @@ export function Page({ title, meta, actions, status = 'ready', error, onRetry, l
   rootRef?: React.Ref<HTMLDivElement>
   children?: React.ReactNode
 }) {
+  // `stagger-in`: the cards arrive one after another when the screen opens, and again when a view inside it
+  // swaps them (index.css). Not on a filling page (a chat thread), which keeps its own layout still.
   return (
-    <div ref={rootRef} className={`flex flex-col gap-4 ${fill ? 'h-full min-h-0' : ''} ${flow ? 'card-flow' : ''}`}>
+    <div ref={rootRef} className={`flex flex-col gap-4 ${fill ? 'h-full min-h-0' : 'stagger-in'} ${flow ? 'card-flow' : ''}`}>
       {/* Fixed height, so the title sits in the same place whether or not the page has header buttons. */}
       <div className="flex items-center justify-between gap-2 h-9 mt-1 flex-shrink-0">
         <h1 className="text-xl font-bold text-gray-900 font-display">{title}</h1>

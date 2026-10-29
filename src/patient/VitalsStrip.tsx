@@ -4,6 +4,8 @@ import {
   evaluate, latestValid, targetRange, parseValue, displayUnitFor, formatReadingValue, toDisplayUnit,
   checkInStatus, shortDuration, type VitalLevel, type CheckIn,
 } from '@/shared/lib/vitals'
+import { conditionsByVital, healthOf } from '@/shared/lib/health'
+import { usePatient } from './usePatient'
 
 /* ─── Home-card vitals strip ──────────────────────────────────────────
    One cell per headline vital: the latest value in the patient's own
@@ -104,13 +106,15 @@ function checkInLabel(c: CheckIn, lastAt: number | undefined, now: number): stri
   return `${shortDuration(now - lastAt)} ago`
 }
 
-export function VitalsStrip({ patient, defs, ids, now, onOpen }: {
+export function VitalsStrip({ patient, defs, ids, now, onOpen, onLog }: {
   patient: PatientUser
   defs: VitalDef[]
   ids: string[]
   now: number
   /** Open the given vital's page. */
   onOpen: (vitalId: string) => void
+  /** Log a reading of the given vital, straight from its trend. */
+  onLog?: (vitalId: string) => void
 }) {
   const [active, setActive] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
@@ -306,6 +310,7 @@ export function VitalsStrip({ patient, defs, ids, now, onOpen }: {
           pos={pos}
           popRef={popRef}
           onOpen={() => onOpen(activeDef.id)}
+          onLog={onLog ? () => { setOpen(false); onLog(activeDef.id) } : undefined}
           onPointerEnter={e => { if (e.pointerType === 'mouse') window.clearTimeout(closeTimer.current) }}
           onPointerLeave={e => { if (e.pointerType === 'mouse') scheduleClose() }}
         />
@@ -323,7 +328,18 @@ function trendDir(pts: Point[], patient: PatientUser, def: VitalDef, unit: strin
   return Math.abs(change) < band * 0.08 ? 'flat' : change > 0 ? 'up' : 'down'
 }
 
-function TrendPopover({ open, patient, def, span, onSpan, now, pos, popRef, onOpen, onPointerEnter, onPointerLeave }: {
+/** The latest reading's level, on the dark glass. Labels match `LEVEL_STYLE`. */
+const GLASS_LEVEL: Record<VitalLevel, { label: string; cls: string }> = {
+  normal:   { label: '✓ Normal',   cls: 'bg-emerald-400/20 text-emerald-200' },
+  warning:  { label: '▲ Out',      cls: 'bg-amber-400/20 text-amber-200' },
+  critical: { label: '⚠ Critical', cls: 'bg-red-400/25 text-red-200' },
+}
+
+/** "Tue 14 Oct, 08:12": when a point on the trend was logged. */
+const pointTime = (at: number) =>
+  new Date(at).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+
+function TrendPopover({ open, patient, def, span, onSpan, now, pos, popRef, onOpen, onLog, onPointerEnter, onPointerLeave }: {
   open: boolean
   patient: PatientUser
   def: VitalDef
@@ -333,12 +349,25 @@ function TrendPopover({ open, patient, def, span, onSpan, now, pos, popRef, onOp
   pos: PopPos
   popRef: RefObject<HTMLDivElement | null>
   onOpen: () => void
+  onLog?: () => void
   onPointerEnter: (e: ReactPointerEvent) => void
   onPointerLeave: (e: ReactPointerEvent) => void
 }) {
+  const { conditionDefs } = usePatient()
   const unit = displayUnitFor(def, patient)
   const pts = seriesFor(patient, def, unit, span, now)
+  // The point under the pointer on the chart, for this vital and period only.
+  const [scrub, setScrub] = useState<{ key: string; i: number } | null>(null)
+  const scrubKey = `${def.id}-${span}`
+  // Counts openings, so the chart draws itself in again each time the trend comes up.
+  const opened = useRef({ was: false, n: 0 })
+  if (open && !opened.current.was) opened.current.n++
+  opened.current.was = open
+  const picked = scrub?.key === scrubKey ? pts[scrub.i] : undefined
+  // Why the patient tracks this: the conditions that call for it.
+  const why = conditionsByVital(healthOf(patient).conditions, conditionDefs.length ? conditionDefs : undefined).get(def.id)
   const last = latestValid(patient, def.id)
+  const lastLevel = last ? evaluate(patient, def, last.value) : null
   const c = checkInStatus(def.id, last?.at, now, patient)
   const t = targetRange(patient, def)
   const band = { min: toDisplayUnit(t.min, def.unit, unit), max: toDisplayUnit(t.max, def.unit, unit) }
@@ -374,33 +403,45 @@ function TrendPopover({ open, patient, def, span, onSpan, now, pos, popRef, onOp
       <div className="px-3 pt-2.5 pb-2">
         <div className="flex items-center justify-between gap-2">
           <p className="text-[11px] font-bold truncate">{def.icon} {def.name}</p>
-          <div className="flex bg-white/10 rounded-full p-0.5 flex-shrink-0" role="group" aria-label="Trend period">
+          {/* The white thumb slides to the chosen period. */}
+          <div className="relative grid grid-cols-2 bg-white/10 rounded-full p-0.5 flex-shrink-0" role="group" aria-label="Trend period">
+            <span aria-hidden="true"
+              className={`absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded-full bg-white shadow-sm transition-transform duration-300 ease-[cubic-bezier(.3,1.3,.5,1)] motion-reduce:transition-none ${span === 30 ? 'translate-x-full' : ''}`} />
             {([7, 30] as Span[]).map(s => (
               <button key={s} onClick={() => onSpan(s)} aria-pressed={span === s}
-                className={`text-[9px] font-bold px-2 py-0.5 rounded-full transition-colors ${span === s ? 'bg-white text-teal-900' : 'text-teal-200'}`}>
+                className={`relative text-[9px] font-bold px-2 py-0.5 rounded-full transition-colors duration-300 ${span === s ? 'text-teal-900' : 'text-teal-200'}`}>
                 {s === 7 ? '7D' : '30D'}
               </button>
             ))}
           </div>
         </div>
+        {why && <p className="text-[9px] text-teal-200/90 mt-0.5 truncate">For {why.join(' · ')}</p>}
 
-        <div className="flex items-baseline gap-1.5 mt-1.5">
-          <span className="text-lg font-black leading-none font-mono">
-            {last ? formatReadingValue(def, last.value, unit) : '—'}
+        {/* The latest reading, or the point under the pointer on the chart. */}
+        <div className="flex items-baseline gap-1.5 mt-1.5 min-h-[1.25rem]" aria-live="polite">
+          <span key={picked ? `p${picked.at}` : 'latest'} className="vital-pop-value text-lg font-black leading-none font-mono">
+            {picked ? fmtPt(picked) : last ? formatReadingValue(def, last.value, unit) : '—'}
           </span>
           <span className="text-[10px] text-teal-300">{unit}</span>
-          {change !== null && (
-            <span className="ml-auto text-[9px] font-bold text-teal-100 bg-white/10 rounded-full px-1.5 py-0.5">
-              {change > 0 ? '▲ +' : change < 0 ? '▼ ' : '● '}{change} in {span}d
-            </span>
-          )}
+          {picked ? (
+            <span className="ml-auto text-[9px] text-teal-100 truncate">{pointTime(picked.at)}</span>
+          ) : lastLevel ? (
+            <span className={`ml-auto text-[9px] font-bold rounded-full px-1.5 py-0.5 ${GLASS_LEVEL[lastLevel].cls}`}>{GLASS_LEVEL[lastLevel].label}</span>
+          ) : null}
         </div>
+        {change !== null && (
+          <p className="text-[9px] text-teal-200/80 mt-1">
+            {change > 0 ? '▲ +' : change < 0 ? '▼ ' : '● '}{change} {unit} over {span} days
+          </p>
+        )}
 
         <div className="mt-2">
           {pts.length === 0 ? (
             <p className="text-[10px] text-teal-200/80 py-3 text-center">No readings in the last {span} days.</p>
           ) : (
-            <TrendChart pts={pts} band={band} diaBand={diaBand} days={span} now={now} id={def.id} />
+            <TrendChart key={`${scrubKey}-${opened.current.n}`} pts={pts} band={band} diaBand={diaBand} days={span} now={now} id={def.id}
+              picked={picked ? scrub!.i : null}
+              onPick={i => setScrub(i === null ? null : { key: scrubKey, i })} />
           )}
           <div className="flex justify-between text-[9px] text-teal-300/70 mt-0.5">
             <span>{span}d ago</span>
@@ -432,11 +473,21 @@ function TrendPopover({ open, patient, def, span, onSpan, now, pos, popRef, onOp
           {c.state === 'none' || !last?.at
             ? `Log ${cadenceLabel(c.intervalHours)} to track this`
             : c.state === 'overdue'
-              ? `Overdue by ${shortDuration(now - c.dueAt!)} · log now`
+              ? `Overdue by ${shortDuration(now - c.dueAt!)}${onLog ? '' : ' · log now'}`
               : `Logged ${shortDuration(now - last.at)} ago · next in ${shortDuration(c.dueAt! - now)}`}
           <span className="text-teal-300/60"> · {cadenceLabel(c.intervalHours)}</span>
         </p>
-        <button onClick={onOpen} className="text-[9px] font-bold text-white bg-white/15 rounded-full px-2 py-0.5 flex-shrink-0">Open →</button>
+        <div className="flex gap-1 flex-shrink-0">
+          {onLog && (
+            <button onClick={onLog}
+              className={`text-[9px] font-bold rounded-full px-2 py-0.5 transition-colors ${c.state === 'overdue' || c.state === 'none' ? 'bg-white text-teal-900 hover:bg-teal-50' : 'bg-white/15 text-white hover:bg-white/25'}`}>
+              + Log
+            </button>
+          )}
+          <button onClick={onOpen} className="group/open text-[9px] font-bold text-white bg-white/15 rounded-full px-2 py-0.5 transition-colors hover:bg-white/25">
+            Open <span className="inline-block transition-transform group-hover/open:translate-x-0.5">→</span>
+          </button>
+        </div>
       </div>
 
       {/* caret pointing back at the hovered cell, on whichever edge faces it.
@@ -446,14 +497,23 @@ function TrendPopover({ open, patient, def, span, onSpan, now, pos, popRef, onOp
   )
 }
 
-/** Time-scaled line with the target band. Gaps in the line are real gaps in logging. */
-function TrendChart({ pts, band, diaBand, days, now, id }: {
+/**
+ * Time-scaled line with the target band. Gaps in the line are real gaps in
+ * logging. The line draws itself in from the left when the trend opens (or the
+ * period changes); moving a pointer or finger across it picks the nearest
+ * reading, marked by a crosshair, and `onPick` reports it (null when a mouse leaves; a tapped
+ * point stays until the next tap).
+ */
+function TrendChart({ pts, band, diaBand, days, now, id, picked, onPick }: {
   pts: Point[]
   band: { min: number; max: number }
   diaBand?: { min: number; max: number }
   days: Span
   now: number
   id: string
+  /** Index of the reading picked on the chart. */
+  picked: number | null
+  onPick: (i: number | null) => void
 }) {
   const W = 204, H = 50, P = 4
   const t0 = now - days * DAY
@@ -472,9 +532,23 @@ function TrendChart({ pts, band, diaBand, days, now, id }: {
   const lastPt = pts[pts.length - 1]
   const dot = (lv: VitalLevel) => (lv === 'critical' ? '#fca5a5' : lv === 'warning' ? '#fcd34d' : 'rgba(255,255,255,.75)')
   const area = pts.length > 1 ? `${hiPath} L${x(lastPt.at).toFixed(1)},${H} L${x(pts[0].at).toFixed(1)},${H} Z` : ''
+  const pick = picked === null ? undefined : pts[picked]
+
+  /** The reading nearest the pointer, along the time axis. */
+  const nearest = (e: ReactPointerEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect()
+    if (!r.width) return null
+    const vx = ((e.clientX - r.left) / r.width) * W
+    let best = 0
+    pts.forEach((p, i) => { if (Math.abs(x(p.at) - vx) < Math.abs(x(pts[best].at) - vx)) best = i })
+    return best
+  }
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full block" style={{ height: H }} aria-hidden="true">
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full block touch-none cursor-crosshair" style={{ height: H }} aria-hidden="true"
+      onPointerMove={e => onPick(nearest(e))}
+      onPointerDown={e => onPick(nearest(e))}
+      onPointerLeave={e => { if (e.pointerType === 'mouse') onPick(null) }}>
       <defs>
         <linearGradient id={`vp-${id}`} x1="0" x2="0" y1="0" y2="1">
           <stop offset="0" stopColor="#5eead4" stopOpacity=".28" />
@@ -484,14 +558,23 @@ function TrendChart({ pts, band, diaBand, days, now, id }: {
       {bands.map((b, i) => (
         <rect key={i} x={P} width={W - 2 * P} y={y(b.max)} height={Math.max(1, y(b.min) - y(b.max))} rx="3" fill="#34d399" opacity=".12" />
       ))}
-      {area && <path d={area} fill={`url(#vp-${id})`} />}
-      {loPath && <path d={loPath} fill="none" stroke="#99f6e4" strokeOpacity=".5" strokeWidth="1.3" strokeDasharray="3 2" strokeLinejoin="round" strokeLinecap="round" />}
-      <path d={hiPath} fill="none" stroke="#99f6e4" strokeWidth="1.7" strokeLinejoin="round" strokeLinecap="round" />
+      {area && <path className="chart-fill-in" d={area} fill={`url(#vp-${id})`} />}
+      {loPath && <path className="chart-fill-in" d={loPath} fill="none" stroke="#99f6e4" strokeOpacity=".5" strokeWidth="1.3" strokeDasharray="3 2" strokeLinejoin="round" strokeLinecap="round" />}
+      <path className="chart-draw" pathLength={1} d={hiPath} fill="none" stroke="#99f6e4" strokeWidth="1.7" strokeLinejoin="round" strokeLinecap="round" />
       {pts.map((p, i) => (
-        <circle key={i} cx={x(p.at)} cy={y(p.hi)} r={p.level === 'normal' ? 1.5 : 2.2} fill={dot(p.level)} />
+        <circle key={i} className="chart-dot-in" style={{ animationDelay: `${200 + (i / Math.max(1, pts.length - 1)) * 500}ms` }}
+          cx={x(p.at)} cy={y(p.hi)} r={p.level === 'normal' ? 1.5 : 2.2} fill={dot(p.level)} />
       ))}
-      <circle cx={x(lastPt.at)} cy={y(lastPt.hi)} r="5" fill={dot(lastPt.level)} opacity=".25" />
-      <circle cx={x(lastPt.at)} cy={y(lastPt.hi)} r="2.8" fill={dot(lastPt.level)} stroke="#042e2e" strokeWidth="1" />
+      {pick ? (
+        <g className="pointer-events-none">
+          <line x1={x(pick.at)} x2={x(pick.at)} y1={0} y2={H} stroke="white" strokeOpacity=".35" strokeWidth="1" strokeDasharray="2 2" />
+          {pick.lo !== undefined && <circle cx={x(pick.at)} cy={y(pick.lo)} r="2.4" fill="#99f6e4" stroke="#042e2e" strokeWidth="1" />}
+          <circle cx={x(pick.at)} cy={y(pick.hi)} r="3.6" fill={dot(pick.level)} stroke="#042e2e" strokeWidth="1.2" />
+        </g>
+      ) : <>
+        <circle className="chart-latest-halo" cx={x(lastPt.at)} cy={y(lastPt.hi)} r="5" fill={dot(lastPt.level)} opacity=".25" />
+        <circle cx={x(lastPt.at)} cy={y(lastPt.hi)} r="2.8" fill={dot(lastPt.level)} stroke="#042e2e" strokeWidth="1" />
+      </>}
     </svg>
   )
 }

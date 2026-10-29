@@ -459,7 +459,7 @@ export const runRetentionNow = async () => ok<RetentionRun>((await db()).rpc('ru
 /** Adds or changes a condition in the catalogue, with the vitals it calls for, in one transaction. */
 export const saveConditionDef = async (c: ConditionDef, reviewed = false) => {
   await ok((await db()).rpc('save_condition_def', { def: {
-    code: c.code, name: c.name.trim(), icon: c.icon, icd10: c.icd10 ?? '', active: c.active, reviewed,
+    code: c.code, name: c.name.trim(), icon: c.icon, icd10: c.icd10 ?? '', active: c.active, reviewed, keywords: c.keywords ?? [],
     vitals: c.vitals.map(id => { const p = c.vitalPlans?.[id]; return { vital_id: id, frequency: p?.frequency ?? null, target_min: p?.targetMin ?? null, target_max: p?.targetMax ?? null } }),
     fluid_limit_glasses: c.fluidLimitGlasses ?? null, diet_note: blank(c.dietNote),
     goals: (c.goals ?? []).map(g => ({ text: g.text, vital_id: g.vitalId ?? null })),

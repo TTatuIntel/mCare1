@@ -1180,6 +1180,13 @@ check('the conditions catalogue is read by everyone and changed only by an admin
   && (await as(TREAT, `update condition_defs set active = false where code = 'asthma' returning 1`)).length === 0
   && (await as(ID.admin, `insert into condition_defs (code, name, icon) values ('gout', 'Gout', '🦶') returning code`)).length === 1
   && (await one(`select count(*)::int n from audit_log where action = 'Added condition' and detail = 'Gout'`)).n === 1)
+check('a condition comes with the other words patients use for it', (await one(`select keywords from condition_defs where code = 'hypertension'`)).keywords.includes('high bp'))
+await as(ID.admin, `select save_condition_def($1)`, [JSON.stringify({ code: 'gout', name: 'Gout', icon: '🦶', vitals: ['temp'], keywords: [' Uric  Acid ', 'uric acid', 'x', ''] })])
+const goutWords = (await one(`select keywords from condition_defs where code = 'gout'`)).keywords
+await as(ID.admin, `select save_condition_def($1)`, [JSON.stringify({ code: 'gout', name: 'Gout', icon: '🦶', vitals: ['temp'] })])
+check('an admin sets them, cleaned (lower case, no repeats, no one-letter words), and a save that leaves them out keeps them',
+  goutWords.length === 1 && goutWords[0] === 'uric acid' && (await one(`select keywords from condition_defs where code = 'gout'`)).keywords[0] === 'uric acid'
+  && (await denied(TREAT, `select save_condition_def('{"code":"gout","name":"Gout","keywords":["x2"]}')`)).blocked)
 
 // Settings.
 check('everyone signed in reads the settings; only an admin changes them, through the function', (await as(ID.pat, `select 1 from app_settings`)).length === 2

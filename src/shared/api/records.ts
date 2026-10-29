@@ -488,6 +488,7 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     conditionDefs: conditionRows.map(c => ({
       code: c.code, name: c.name, icon: c.icon ?? '🩺', icd10: c.icd10 ?? undefined, active: c.active,
       vitals: conditionVitalRows.filter(v => v.condition_code === c.code).map(v => v.vital_id as string),
+      keywords: (c.keywords as string[] | null) ?? [],
       vitalPlans: Object.fromEntries(conditionVitalRows.filter(v => v.condition_code === c.code).map(v => [v.vital_id, {
         frequency: v.frequency ?? undefined, targetMin: num(v.target_min), targetMax: num(v.target_max),
       }])),

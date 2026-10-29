@@ -635,6 +635,8 @@ export interface ConditionDef {
   active: boolean
   /** The vitals this condition calls for, in order. */
   vitals: string[]
+  /** Other words patients use for it ("high bp"); a typed condition containing one suggests this condition's vitals. */
+  keywords?: string[]
   /* ── The care pathway: a starting plan the treating doctor reviews and applies (migration 0020) ── */
   /** Per vital: how often to measure it and a target (base units), when the pathway suggests one. */
   vitalPlans?: Record<string, PathwayVital>

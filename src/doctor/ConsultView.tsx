@@ -73,7 +73,7 @@ export function ConsultView({ patient, member, onBack }: { patient: PatientUser;
               <p className="text-[11px] text-teal-700 font-semibold">Target {target.min}–{target.max} {def!.unit}</p>
             </div>
             <p className="text-[10px] text-gray-400 mb-1">Last 30 days · {trend.points.length} reading{trend.points.length === 1 ? '' : 's'} · average <span className="font-mono">{trend.average}</span> · {trend.inRange} in range</p>
-            <VitalChart points={trend.points} range={target} height={64} />
+            <VitalChart points={trend.points} range={target} height={64} scrub unit={def.unit} />
           </div>
         )
       })}
