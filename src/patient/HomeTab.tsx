@@ -12,6 +12,7 @@ import { countdown, toneOf, TONE_PILL, type ScheduleItem } from '@/shared/lib/sc
 import { VitalsStrip } from './VitalsStrip'
 import { useDaySchedule } from './useDaySchedule'
 import { ReminderSheet } from './ReminderSheet'
+import { GettingStarted, startSteps } from './GettingStarted'
 
 /* ─── "Up next" ticker in the hero card ───────────────────────────────
    Cycles through next medicine / meal / vitals check. The active dot's
@@ -92,29 +93,25 @@ export function HomeTab({ go, openVital, onLog }: {
     key: 'vitals', kind: 'vitals', refId: 'vitals', slot: 0, icon: '🩺', title: 'Log your vitals',
     sub: 'Next check', inMin: vitals.dueIn, done: false, tone: toneOf(vitals.dueIn),
   } : undefined
+  // Opens the vitals form (or the Vitals page when nothing is tracked yet)
+  const logFirst = () => (vitalsOpenItem ? setOpenItem(vitalsOpenItem) : go('vitals'))
 
 
   return (
     <div className="flex flex-col gap-4 card-flow">
       <PortalHeader onNavigate={(t, about) => go(t, about?.type === 'conversation' ? about.id : undefined)} onProfile={() => go('profile')} />
 
-      {/* the health-profile setup was skipped: one tap goes back to it */}
-      {patient.profileSetup === 'skipped' && (
+      {/* the health-profile setup was skipped: one tap goes back to it (before a doctor, the checklist below says so) */}
+      {enrolled && patient.profileSetup === 'skipped' && (
         <NoticeCard tone="teal" pulse={false} title="Finish your health profile" action="Set up →" onAction={resumeSetup}>
           <p className="text-[11px] text-teal-800">It takes about 2 minutes and helps your care team look after you.</p>
         </NoticeCard>
       )}
 
-      {/* no treating doctor yet: medicines and meals start once one takes the patient on */}
-      {!enrolled && (
-        <NoticeCard tone="teal" pulse={false} title={awaitingDoctor ? 'Waiting for your doctor' : 'Your daily plan starts with your doctor'}
-          action={awaitingDoctor ? 'Care team →' : 'Find a doctor →'} onAction={() => go('care')}>
-          <p className="text-[11px] text-teal-800">
-            {awaitingDoctor ? 'Your request is being reviewed. ' : ''}Once a doctor is caring for you, your medicines and meal plan will appear here. Until then you can log your vitals.
-          </p>
-        </NoticeCard>
-      )}
-
+      {/* no treating doctor yet: medicines and meals start once one takes the patient on; until then, the first steps */}
+      {!enrolled && <GettingStarted patientId={patient.id} waiting={awaitingDoctor} steps={startSteps(patient, {
+        setup: resumeSetup, log: logFirst, profile: () => go('profile'), care: () => go('care'),
+      })} />}
       {/* active alerts for me */}
       <AlertSummaryCard alerts={myAlerts} onOpenAll={() => go('alerts')} onLog={onLog} />
 
@@ -124,7 +121,9 @@ export function HomeTab({ go, openVital, onLog }: {
         value={score ?? '—'}
         suffix="/100"
         caption={(() => {
-          if (score === null) return 'Log your vitals to see your score'
+          if (score === null) return patient.readings.length === 0
+            ? <button onClick={logFirst} className="underline underline-offset-2 text-emerald-200">Log your first reading to see your score →</button>
+            : 'Log your vitals to see your score'
           const off = patient.trackedVitalIds.filter(id => { const d = vitalDefs.find(v => v.id === id); const r = latestValid(patient, id); return d && r && evaluate(patient, d, r.value) !== 'normal' }).length
           return off === 0 ? 'All readings on target' : `${off} reading${off > 1 ? 's' : ''} need${off > 1 ? '' : 's'} attention`
         })()}
@@ -164,7 +163,9 @@ export function HomeTab({ go, openVital, onLog }: {
         { icon: '⚠️', label: 'Alerts', onClick: () => go('alerts'), badge: myAlerts.length },
         { icon: '🩺', label: 'Care Team', onClick: () => go('care') },
         { icon: '📄', label: 'Records', onClick: () => go('docs'), badge: unseenDocs(patient.id) },
-        { icon: '🍽️', label: 'Meals', onClick: () => go('meals') },
+        enrolled
+          ? { icon: '🍽️', label: 'Meals', onClick: () => go('meals') }
+          : { icon: '👩‍⚕️', label: 'Find a doctor', onClick: () => go('care') },
       ]} />
 
       {/* doctor's latest note */}

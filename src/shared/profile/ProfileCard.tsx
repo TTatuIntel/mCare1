@@ -8,6 +8,7 @@ import { MailboxSheet } from '@/shared/email/Mailbox'
 import { EditProfileSheet, ChangePasswordSheet, ThemeFontSheet, HelpSupportSheet, DeactivateAccountSheet } from './AccountSheets'
 import { NotificationsSheet } from './NotificationsSheet'
 import { SecuritySheet } from './SecuritySheet'
+import { SignOutButton } from '@/shared/ui/SignOutButton'
 
 /* ─── ProfileCard ───────────────────────────────────────────────────── */
 /**
@@ -16,7 +17,7 @@ import { SecuritySheet } from './SecuritySheet'
  * Pass children to inject role-specific sections between details and sign-out.
  */
 export function ProfileCard({ children }: { children?: React.ReactNode }) {
-  const { currentUser, setCurrentUser, live } = useApp()
+  const { currentUser, live } = useApp()
   const [showEdit, setShowEdit]         = useState(false)
   const [showPw, setShowPw]             = useState(false)
   const [showTheme, setShowTheme]       = useState(false)
@@ -129,12 +130,7 @@ export function ProfileCard({ children }: { children?: React.ReactNode }) {
       {children}
 
       {/* sign out — identical across all roles */}
-      <button
-        onClick={() => setCurrentUser(null)}
-        className="w-full py-3 rounded-2xl text-red-500 font-bold text-sm bg-red-50 border-2 border-red-100 active:bg-red-100 transition-colors"
-      >
-        Sign Out
-      </button>
+      <SignOutButton variant="card" />
     </div>
   )
 }

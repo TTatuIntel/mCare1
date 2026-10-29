@@ -5,6 +5,7 @@
  *   '@/shared/state/AppContext', '@/shared/lib/types', '@/shared/lib/vitals', '@/shared/documents/*'
  */
 export * from './ui/primitives'
+export { SignOutButton } from './ui/SignOutButton'
 export * from './ui/BottomSheet'
 export * from './ui/Page'
 export * from './ui/controls'

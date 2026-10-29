@@ -73,6 +73,28 @@ export function suggestedVitals(conditions: string[], catalogue: CatalogueCondit
   return out
 }
 
+/** Which specialties look after which conditions (lower-case keywords matched against both). */
+const SPECIALTY_FOR: [conditionWord: string, specialtyWord: string][] = [
+  ['blood pressure', 'cardio'], ['heart', 'cardio'], ['cholesterol', 'cardio'], ['stroke', 'neuro'],
+  ['diabetes', 'endocrin'], ['thyroid', 'endocrin'], ['asthma', 'pulmon'], ['copd', 'pulmon'],
+  ['asthma', 'respir'], ['copd', 'respir'], ['kidney', 'nephro'], ['epilep', 'neuro'], ['arthritis', 'rheumat'],
+  ['hiv', 'infect'], ['sickle', 'haemat'], ['sickle', 'hemat'], ['depress', 'psych'], ['anxiety', 'psych'],
+]
+const GENERALIST = ['internal', 'general', 'family']
+
+/**
+ * How well a doctor's specialty fits the patient's conditions: 2 a specialist for one of them (with that
+ * condition), 1 a generalist, 0 no fit. Only a hint for ordering the doctor list; the care team decides.
+ */
+export function specialtyFit(specialty: string | undefined, conditions: string[]): { score: number; condition?: string } {
+  const s = (specialty ?? '').toLowerCase()
+  for (const c of conditions) {
+    const name = c.toLowerCase()
+    if (SPECIALTY_FOR.some(([cw, sw]) => name.includes(cw) && s.includes(sw))) return { score: 2, condition: c }
+  }
+  return { score: GENERALIST.some(g => s.includes(g)) ? 1 : 0 }
+}
+
 /** What still needs filling in, in the patient's words. Empty when the profile is complete. */
 export function healthGaps(p: PatientUser): string[] {
   const h = healthOf(p)
