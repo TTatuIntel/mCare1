@@ -426,6 +426,17 @@ try {
     const rx = (await row(service.from('prescriptions').select('status, stop_reason, stopped_by').eq('patient_id', patId).eq('stop_reason', 'TEST: dry cough')))[0]
     if (rx?.status !== 'discontinued' || rx.stopped_by !== docId) throw new Error(JSON.stringify(rx))
   })
+  await step(d, 'the doctor prescribes from the catalogue: usual dose, its "check before taking" rule, a dose time', async () => {
+    await d.page.getByRole('button', { name: '+ New Prescription' }).click()
+    await d.sheet().getByPlaceholder('e.g. Amlodipine 5mg').fill('Amlodipine')
+    await d.sheet().getByRole('group', { name: 'Usual doses' }).getByRole('button', { name: '5 mg', exact: true }).click()
+    if (!(await d.sheet().getByRole('checkbox', { name: 'Check a vital before each dose' }).isChecked())) throw new Error('the catalogue hold rule was not offered')
+    await d.sheet().getByLabel('Dose 1 time').fill('07:30')
+    await d.sheet().getByRole('button', { name: 'Prescribe', exact: true }).click()
+    await d.sheet().waitFor({ state: 'detached', timeout: 15000 })   // the sheet closes only once it is saved
+    const rx = (await row(service.from('prescriptions').select('medication_code, dosage, times, hold_if').eq('patient_id', patId).eq('medication', 'Amlodipine')))[0]
+    if (rx?.medication_code !== 'amlodipine' || rx.dosage !== '5 mg' || rx.times?.join() !== '450' || rx.hold_if?.vital_id !== 'bp' || Number(rx.hold_if?.below) !== 100) throw new Error(JSON.stringify(rx))
+  })
   await step(d, 'an internal note is saved for the doctor and never reaches the patient', async () => {
     await d.page.getByRole('button', { name: 'Notes', exact: true }).click()
     await d.page.getByRole('tab', { name: 'Internal' }).click()

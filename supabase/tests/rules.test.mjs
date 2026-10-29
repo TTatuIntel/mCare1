@@ -169,6 +169,27 @@ check('…the reason cannot be rewritten afterwards', (await denied(ID.doc, `upd
 await db.exec('rollback to savepoint rewrite')
 check('a medicine with no matching allergy needs no reason, and a stray reason is not kept', (await as(ID.doc, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency, allergy_override) values ($1, $2, 'Paracetamol', '1g', 'As needed', 'not needed') returning allergy_override`, [ID.pat, ID.doc]))[0].allergy_override === null)
 await db.exec('rollback')
+
+// Medicine catalogue and structured prescriptions (0021). Rolled back afterwards, like the allergy checks.
+check('the medicine catalogue is read by everyone signed in and changed only by an admin', (await as(ID.pat, `select 1 from medication_defs where code = 'furosemide'`)).length === 1
+  && (await as(ID.doc, `update medication_defs set active = false where code = 'furosemide' returning 1`)).length === 0
+  && (await denied(ID.doc, `insert into medication_defs (code, name) values ('fake', 'Fake')`)).blocked)
+const rxStruct = (extra) => `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency${extra.cols}) values ($1, $2, 'Furosemide 40 mg', '40 mg', 'Twice daily'${extra.vals}) returning id, times, hold_if`
+check('impossible dose times or hold rules are refused', (await denied(ID.doc, rxStruct({ cols: ', times', vals: `, '{1500}'` }), [ID.pat, ID.doc])).blocked
+  && (await denied(ID.doc, rxStruct({ cols: ', times', vals: `, '{480,480}'` }), [ID.pat, ID.doc])).blocked
+  && (await denied(ID.doc, rxStruct({ cols: ', hold_if', vals: `, '{"vital_id":"nope","below":1}'` }), [ID.pat, ID.doc])).blocked
+  && (await denied(ID.doc, rxStruct({ cols: ', hold_if', vals: `, '{"vital_id":"bp","below":120,"above":100}'` }), [ID.pat, ID.doc])).blocked
+  && (await denied(ID.doc, rxStruct({ cols: ', hold_if', vals: `, '{"vital_id":"bp"}'` }), [ID.pat, ID.doc])).blocked)
+await db.exec('begin')
+await db.query(`delete from tracked_vitals where patient_id = $1 and vital_id = 'wt'`, [ID.pat])
+const furo = (await as(ID.doc, rxStruct({ cols: ', medication_code, times, with_meal, hold_if', vals: `, 'furosemide', '{1080,480}', 'with', '{"vital_id":"bp","below":95,"note":"x"}'` }), [ID.pat, ID.doc]))[0]
+check('a structured prescription keeps its dose times in order and a clean hold rule', furo.times.join() === '480,1080' && JSON.stringify(furo.hold_if) === '{"below": 95, "vital_id": "bp"}' || (furo.hold_if?.below === 95 && furo.hold_if?.vital_id === 'bp' && !('note' in furo.hold_if)), JSON.stringify(furo))
+check('a catalogue medicine starts tracking the vitals it needs, and the patient is told', (await db.query(`select 1 from tracked_vitals where patient_id = $1 and vital_id = 'wt'`, [ID.pat])).rows.length === 1
+  && (await as(ID.pat, `select body from notifications where title = 'New vitals to track'`)).some(n => /Weight/.test(n.body)))
+await db.exec('savepoint struct')
+check('…and its structure cannot be rewritten afterwards', (await denied(ID.doc, `update prescriptions set times = '{600}' where id = $1`, [furo.id])).blocked)
+await db.exec('rollback to savepoint struct')
+await db.exec('rollback')
 check('patient logs a dose', (await as(ID.pat, `insert into dose_logs (patient_id, prescription_id, slot, day) values ($1, $2, 480, current_date) returning slot`, [ID.pat, rx])).length === 1)
 check('same dose cannot be logged twice', (await denied(ID.pat, `insert into dose_logs (patient_id, prescription_id, slot, day) values ($1, $2, 480, current_date)`, [ID.pat, rx])).blocked)
 check('other patient cannot log against that prescription', (await denied(ID.pat2, `insert into dose_logs (patient_id, prescription_id, slot, day) values ($1, $2, 480, current_date)`, [ID.pat2, rx])).blocked)

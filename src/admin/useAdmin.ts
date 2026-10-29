@@ -122,6 +122,9 @@ export function useAdmin() {
     conditionDefs: app.conditionDefs,
     /** RPC save_condition_def (full admin only) */
     saveConditionDef: app.saveConditionDef,
+    /** The medicine catalogue (0021), with an on/off switch per medicine. */
+    medicationDefs: app.medicationDefs,
+    setMedicationActive: app.setMedicationActive,
     /** GET record_views (staff who view logs): who opened which patient's record. */
     recordViews: app.recordViews,
 

@@ -5,7 +5,7 @@ import type {
   AccountStatus, SupportTicket, ResetToken, ResetChannel, AuthProvider, VitalsReportInclude, EmailContent, SentEmail, SentSms,
   MealPlan, HydrationLog, DoctorRating, Outcome, Invitation, UserRole, ReportNote,
   CarePlan, CarePlanDraft, CarePlanItemStatus, CarePlanStatus, CareAssignment, CareTeamMember, PastPatient, DeliveryReport, TimeOff, WorkBlock, DayAvailability, AdminReport,
-  AppSettings, ConditionDef, PathwayPlan, RecordView, RecordViewContext, RetentionSettings, SecuritySettings, VitalFrequency, VitalReview,
+  AppSettings, ConditionDef, MedicationDef, PathwayPlan, RecordView, RecordViewContext, RetentionSettings, SecuritySettings, VitalFrequency, VitalReview,
 } from '@/shared/lib/types'
 import { DEFAULT_SETTINGS, FREQUENCY_LABELS } from '@/shared/lib/types'
 import { COMMON_CONDITIONS, DEMO_PATHWAYS } from '@/shared/lib/health'
@@ -19,7 +19,7 @@ import { mfaGate, signOutBackend, type MfaGate } from '@/shared/api/authBackend'
 import * as api from '@/shared/api/actions'
 import { changeToken, isoClock, isoDay, loadRecords, searchAudit as searchAuditApi, type AuditWho, type Records } from '@/shared/api/records'
 import { evaluate, alertIsFor, stamp, dateLabel, dayKey, targetRange, ESCALATE_AFTER_MIN, CORRECTION_WINDOW_MIN, type VitalLevel } from '@/shared/lib/vitals'
-import { allergyConflicts, conflictLabel } from '@/shared/lib/medicines'
+import { allergyConflicts, conflictLabel, DEMO_MEDICATIONS, structureIssue } from '@/shared/lib/medicines'
 import { apptDateLabel, apptTimeLabel, apptWhen, isOpenAppt } from '@/shared/lib/schedule'
 import { useDocumentStore, type DocumentApi } from '@/shared/documents/useDocumentStore'
 import { seedDocuments } from '@/shared/documents/docSeed'
@@ -265,6 +265,10 @@ interface Ctx extends DocumentApi {
   runRetentionNow: () => Saved<api.RetentionRun>
   /** The conditions catalogue and the vitals each calls for. */
   conditionDefs: ConditionDef[]
+  /** The medicine catalogue (migration 0021): offered when prescribing. */
+  medicationDefs: MedicationDef[]
+  /** Admin: offer or withdraw a catalogue medicine. */
+  setMedicationActive: (code: string, active: boolean) => Saved
   /** `reviewed`: the admin confirms the pathway is clinically right (stamped; any later change clears it). */
   saveConditionDef: (def: ConditionDef, reviewed?: boolean) => Saved
   // Monitoring plans, reviews, access log
@@ -318,6 +322,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [timeOff, setTimeOff] = useState<TimeOff[]>([])
   const [careTeam, setCareTeam] = useState<CareTeamMember[]>([])
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
+  const [medicationDefs, setMedicationDefs] = useState<MedicationDef[]>(() => LIVE ? [] : DEMO_MEDICATIONS)
   const [conditionDefs, setConditionDefs] = useState<ConditionDef[]>(() => LIVE ? [] : COMMON_CONDITIONS.map((c, i) => ({
     code: c.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `c${i}`, name: c.name, icon: c.icon, active: true, vitals: c.vitals, ...DEMO_PATHWAYS[c.name] })))
   const [vitalReviews, setVitalReviews] = useState<VitalReview[]>([])
@@ -478,7 +483,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setReportRequests(r.reportRequests); setClinicalNotes(r.clinicalNotes); setSupportTickets(r.supportTickets); setAudit(r.audit)
     setMealPlans(r.mealPlans); setHydrationLogs(r.hydration); setRatings(r.ratings); setInvitations(r.invitations)
     setCarePlans(r.carePlans); setCareAssignments(r.careAssignments); setPastPatients(r.pastPatients); setTimeOff(r.timeOff); setCareTeam(r.careTeam)
-    setSettings(r.settings); setConditionDefs(r.conditionDefs); setVitalReviews(r.vitalReviews); setRecordViews(r.recordViews)
+    setSettings(r.settings); setConditionDefs(r.conditionDefs); setMedicationDefs(r.medicationDefs); setVitalReviews(r.vitalReviews); setRecordViews(r.recordViews)
     docStore.hydrateDocuments(r.documents, r.docEvents, r.shareLinks, r.supportGrants)
   }
   /**
@@ -494,7 +499,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     users: [], vitalDefs: [], alerts: [], appointments: [], messages: [], notifications: [], doses: [], mealsDone: [], reportRequests: [],
     clinicalNotes: [], supportTickets: [], audit: [], mealPlans: [], hydration: [], ratings: [], documents: [], docEvents: [], shareLinks: [], supportGrants: [], invitations: [],
     carePlans: [], careAssignments: [], pastPatients: [], timeOff: [], careTeam: [],
-    settings: DEFAULT_SETTINGS, conditionDefs: [], vitalReviews: [], recordViews: [],
+    settings: DEFAULT_SETTINGS, conditionDefs: [], medicationDefs: [], vitalReviews: [], recordViews: [],
   }
 
   /** Signs out locally. `notice` says why, when the person did not choose to. */
@@ -886,8 +891,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const hits = allergyConflicts(rx.medication, pt?.health?.allergies ?? [])
     if (hits.length && (rx.allergyOverride?.trim().length ?? 0) < 3)
       return refused(`${rx.medication.trim()} matches an allergy on record: ${conflictLabel(hits)}. To prescribe it anyway, give your reason.`)
+    // Same checks as the database (0021): dose times and the hold rule.
+    const structure = structureIssue(rx, vitalDefs)
+    if (structure) return refused(structure)
     if (LIVE) return run(() => api.addPrescription(patientId, rx.doctorId, rx))   // the database notifies, audits and files the document
-    const made: Prescription = { ...rx, status: 'active', active: true, startDate: rx.startDate ?? dayKey(),
+    // A catalogue medicine starts tracking the vitals it needs (0021 prescription_monitoring), and the patient is told.
+    const wanted = medicationDefs.find(m => m.code === rx.medicationCode)?.monitorVitals.filter(id => vitalDefs.some(v => v.id === id && v.active)) ?? []
+    const added = wanted.filter(id => !pt?.trackedVitalIds.includes(id))
+    if (added.length) {
+      patchPatient(patientId, p => ({ ...p, trackedVitalIds: [...p.trackedVitalIds, ...added.filter(id => !p.trackedVitalIds.includes(id))] }))
+      notify(patientId, 'prescription', 'New vitals to track', `With ${rx.medication}, please also log: ${added.map(id => vitalDefs.find(v => v.id === id)?.name ?? id).join(', ')}`, 'vitals')
+    }
+    const made: Prescription = { ...rx, times: rx.times?.length ? [...rx.times].sort((a, b) => a - b) : undefined, status: 'active', active: true, startDate: rx.startDate ?? dayKey(),
       history: [{ id: uid('rxe'), action: 'prescribed', actorId: rx.doctorId, detail: `${rx.dosage} · ${rx.frequency}`, at: Date.now(), createdAt: stamp() }] }
     patchPatient(patientId, p => ({ ...p, prescriptions: [made, ...p.prescriptions] }))
     docStore.filePrescription(patientId, rx)
@@ -1904,6 +1919,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return done()
   }
   const treatsNow = (patientId: string) => currentUser?.role === 'doctor' && (findUser(patientId) as PatientUser | undefined)?.assignedDoctorId === currentUser.id
+  const setMedicationActive = (code: string, active: boolean): Saved => {
+    if (LIVE) return run(() => api.setMedicationActive(code, active))
+    if (!isAdminNow()) return refused('Only an admin can change the medicine list.')
+    setMedicationDefs(prev => prev.map(m => m.code === code ? { ...m, active } : m))
+    logAudit(active ? 'Offered medicine' : 'Withdrew medicine', medicationDefs.find(m => m.code === code)?.name ?? code)
+    return done()
+  }
   const applyPathway = async (patientId: string, plan: PathwayPlan): Saved => {
     if (LIVE) return run(async () => { await api.applyPathway(patientId, plan) })   // one transaction; audited and told once
     if (!treatsNow(patientId)) return refused("Only the patient's treating doctor can set up their care.")
@@ -2034,7 +2056,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setPasswordAfterVerification, recoveryChannels, requestAdminPasswordHelp, socialAuth,
       supportTickets, createSupportTicket, resolveSupportTicket,
       signOut, mfa: mfa ? { step: mfa.step, account: mfa.account } : null, completeMfa, cancelMfa,
-      settings, saveSecuritySettings, saveRetentionSettings, runRetentionNow, conditionDefs, saveConditionDef, applyPathway,
+      settings, saveSecuritySettings, saveRetentionSettings, runRetentionNow, conditionDefs, saveConditionDef, applyPathway, medicationDefs, setMedicationActive,
       setVitalPlan, vitalReviews, reviewVitals, recordViews, logRecordView, exportMyRecord, adminUpdateProfile, resetTwoStep,
     }}>
       {children}

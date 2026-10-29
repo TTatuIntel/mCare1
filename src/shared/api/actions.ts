@@ -239,11 +239,14 @@ export const resolveAlert = async (id: string, reason: string, note?: string) =>
 
 /* ─── Medication and meals ──────────────────────────────────────────── */
 export const addPrescription = async (patientId: string, doctorId: string,
-  rx: Pick<Prescription, 'medication' | 'dosage' | 'frequency' | 'purpose' | 'route' | 'instructions' | 'startDate' | 'endDate' | 'clientRef' | 'allergyOverride'>) => {
+  rx: Pick<Prescription, 'medication' | 'dosage' | 'frequency' | 'purpose' | 'route' | 'instructions' | 'startDate' | 'endDate' | 'clientRef' | 'allergyOverride' | 'medicationCode' | 'times' | 'withMeal' | 'holdIf' | 'conditionCode'>) => {
   await okOnce((await db()).from('prescriptions').insert({
     patient_id: patientId, doctor_id: doctorId, medication: rx.medication, dosage: rx.dosage, frequency: rx.frequency, purpose: rx.purpose,
     route: rx.route ?? null, instructions: blank(rx.instructions), ...(rx.startDate ? { start_date: rx.startDate } : {}), end_date: rx.endDate || null,
-    allergy_override: blank(rx.allergyOverride), ...withRef(rx.clientRef),
+    allergy_override: blank(rx.allergyOverride), medication_code: rx.medicationCode ?? null, times: rx.times?.length ? rx.times : null,
+    with_meal: rx.withMeal ?? null, condition_code: rx.conditionCode ?? null,
+    hold_if: rx.holdIf ? { vital_id: rx.holdIf.vitalId, below: rx.holdIf.below ?? null, above: rx.holdIf.above ?? null } : null,
+    ...withRef(rx.clientRef),
   }))
 }
 /** Stops a medicine with the reason, or restarts it. The row itself is never rewritten or deleted. */
@@ -461,6 +464,10 @@ export const saveConditionDef = async (c: ConditionDef, reviewed = false) => {
     fluid_limit_glasses: c.fluidLimitGlasses ?? null, diet_note: blank(c.dietNote),
     goals: (c.goals ?? []).map(g => ({ text: g.text, vital_id: g.vitalId ?? null })),
   } }))
+}
+/** An admin offers or withdraws a catalogue medicine (prescriptions already made keep their name). */
+export const setMedicationActive = async (code: string, active: boolean) => {
+  await ok((await db()).from('medication_defs').update({ active }).eq('code', code))
 }
 /** The treating doctor applies a reviewed care pathway: monitoring, targets, fluid limit, diet note and a draft care plan, in one transaction. */
 export const applyPathway = async (patientId: string, plan: PathwayPlan) =>

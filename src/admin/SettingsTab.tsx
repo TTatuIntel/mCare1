@@ -21,7 +21,7 @@ const numOrUndef = (s: string) => (s.trim() === '' ? undefined : Number(s))
    What an administrator decides for the whole service. The database checks every value
    again and audits each change with before and after (save_settings). */
 export default function SettingsTab({ onBack }: { onBack: () => void }) {
-  const { admin, settings, saveSecuritySettings, saveRetentionSettings, runRetentionNow, conditionDefs, saveConditionDef, vitalDefs } = useAdmin()
+  const { admin, settings, saveSecuritySettings, saveRetentionSettings, runRetentionNow, conditionDefs, saveConditionDef, vitalDefs, medicationDefs, setMedicationActive } = useAdmin()
   const [security, setSecurity] = useState<SecuritySettings>(settings.security)
   const [retention, setRetention] = useState<Record<keyof RetentionSettings, string>>(() => toText(settings.retention))
   const [condition, setCondition] = useState<ConditionDef | null>(null)
@@ -123,6 +123,30 @@ export default function SettingsTab({ onBack }: { onBack: () => void }) {
             `Removed ${r.documents} document${r.documents === 1 ? '' : 's'}, ${r.audit} audit entr${r.audit === 1 ? 'y' : 'ies'}, ${r.notifications} notification${r.notifications === 1 ? '' : 's'}, ${r.deliveries} message record${r.deliveries === 1 ? '' : 's'}`)}
             className="text-xs font-semibold text-teal-700 border border-teal-200 px-4 py-2 rounded-full disabled:opacity-50">Apply now</button>
         </div>
+      </section>
+
+      {/* Medicine catalogue: offered when prescribing (free text still works for anything else) */}
+      <section className="bg-white rounded-2xl p-4 shadow-sm flex flex-col gap-2 span-all" aria-label="Medicines">
+        <div>
+          <h2 className="text-sm font-bold text-gray-800">Medicines</h2>
+          <p className="text-xs text-gray-500 mt-0.5">The catalogue doctors prescribe from: each medicine's class, usual doses, the vitals to watch (prescribing it starts tracking them) and the usual "check before taking" rule. Switch one off to stop offering it; prescriptions already made keep it.</p>
+        </div>
+        <ul className="divide-y divide-gray-100">
+          {medicationDefs.map(m => (
+            <li key={m.code} className="py-2 flex items-center gap-3">
+              <span className="flex-1 min-w-0">
+                <span className="text-sm font-semibold text-gray-800">{m.name}</span>
+                <span className="ml-1.5 text-[11px] text-gray-400">{m.drugClass}</span>
+                <span className="block text-[11px] text-gray-400 truncate">
+                  {[m.usualDoses.join(', '), m.monitorVitals.length ? `watch ${m.monitorVitals.map(vitalName).join(', ')}` : '', m.holdIf ? `hold ${m.holdIf.below !== undefined ? `below ${m.holdIf.below}` : ''}${m.holdIf.above !== undefined ? ` above ${m.holdIf.above}` : ''} (${vitalName(m.holdIf.vitalId)})` : ''].filter(Boolean).join(' · ')}
+                </span>
+              </span>
+              {!m.active && <Pill color="gray">Off</Pill>}
+              <Toggle on={m.active} disabled={act.busy} label={`Offer ${m.name}`}
+                onChange={() => act.run(() => setMedicationActive(m.code, !m.active), `${m.name} ${m.active ? 'switched off' : 'switched on'}`)} />
+            </li>
+          ))}
+        </ul>
       </section>
 
       {/* Conditions catalogue */}

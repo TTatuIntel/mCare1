@@ -378,6 +378,16 @@ export interface Prescription {
   startDate?: string
   endDate?: string
   stopReason?: string
+  /** The catalogue medicine, when it was chosen from the catalogue (migration 0021). */
+  medicationCode?: string
+  /** Dose times, minutes after midnight, in order. Absent: the frequency's usual times. */
+  times?: number[]
+  /** How it goes with meals. */
+  withMeal?: MealLink
+  /** Check this vital before each dose; do not take it when the reading is past the limit. */
+  holdIf?: HoldRule
+  /** The condition it treats, when the catalogue knows it. */
+  conditionCode?: string
   /** Why the doctor prescribed it despite a recorded allergy (kept and audited by the database). */
   allergyOverride?: string
   stoppedAt?: string
@@ -857,6 +867,30 @@ export interface PlannedMeal {
   protein?: number
   carbs?: number
   fat?: number
+}
+
+/** How a medicine goes with meals. */
+export type MealLink = 'before' | 'with' | 'after' | 'any'
+export const MEAL_LINK_LABELS: Record<MealLink, string> = { before: 'Before food', with: 'With food', after: 'After food', any: 'With or without food' }
+
+/** "Check blood pressure before each dose; hold it below 100." */
+export interface HoldRule { vitalId: string; below?: number; above?: number }
+
+/** A medicine in the catalogue (admin-managed reference data, migration 0021). */
+export interface MedicationDef {
+  code: string
+  name: string
+  drugClass: string
+  forms: string[]
+  usualDoses: string[]
+  route?: RxRoute
+  withMeal?: MealLink
+  /** Vitals to track while taking it; prescribing it starts tracking them. */
+  monitorVitals: string[]
+  /** The usual "check before taking" rule, offered when prescribing. */
+  holdIf?: HoldRule
+  note?: string
+  active: boolean
 }
 
 /** Water as a target to reach, or a fluid restriction not to pass. */

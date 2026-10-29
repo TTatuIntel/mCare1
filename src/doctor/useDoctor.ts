@@ -22,7 +22,7 @@
 import { useApp, isActiveAlert } from '@/shared/state/AppContext'
 import { useLoadStatus } from '@/shared/state/useLoadStatus'
 import { partnersOf } from '@/shared/lib/messaging'
-import type { Appointment, DoctorUser, MealPlan, PatientUser, RxRoute } from '@/shared/lib/types'
+import type { Appointment, DoctorUser, HoldRule, MealLink, MealPlan, PatientUser, RxRoute } from '@/shared/lib/types'
 import { proposePathway } from '@/shared/lib/pathways'
 import * as api from '@/shared/api/actions'
 import { dateLabel } from '@/shared/lib/vitals'
@@ -45,6 +45,11 @@ export interface NewPrescription {
   ref?: string
   /** Why it is prescribed despite a recorded allergy; the database refuses a match without one. */
   allergyOverride?: string
+  /** Structure (migration 0021): the catalogue medicine, dose times (minutes after midnight), the meal link, a hold rule. */
+  medicationCode?: string
+  times?: number[]
+  withMeal?: MealLink
+  holdIf?: HoldRule
 }
 
 export interface NewVisit {
@@ -74,6 +79,8 @@ export function useDoctor() {
     now: app.now,
     /** GET vital_defs */
     vitalDefs: app.vitalDefs,
+    /** The medicine catalogue, offered when prescribing (inactive ones are not offered). */
+    medicationDefs: app.medicationDefs.filter(m => m.active),
 
     /** GET patients, profiles (assigned to this doctor) */
     patients,
@@ -145,6 +152,7 @@ export function useDoctor() {
       route: rx.route, instructions: rx.instructions?.trim() || undefined, startDate: rx.startDate || undefined, endDate: rx.endDate || undefined,
       prescribedAt: dateLabel(), doctorId: doctor.id, active: true, clientRef: rx.ref,
       allergyOverride: rx.allergyOverride?.trim() || undefined,
+      medicationCode: rx.medicationCode || undefined, times: rx.times?.length ? rx.times : undefined, withMeal: rx.withMeal, holdIf: rx.holdIf,
     }),
     /** UPDATE prescriptions: stopped with its reason, kept in the record; never deleted. */
     stopMedicine: (patientId: string, rxId: string, reason: string) => app.setPrescriptionActive(patientId, rxId, false, reason),
