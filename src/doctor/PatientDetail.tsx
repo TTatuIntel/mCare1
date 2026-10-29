@@ -12,6 +12,7 @@ import { AlertCard } from './AlertCard'
 import { PatientDocs } from './PatientDocs'
 import { PatientNutrition } from './PatientNutrition'
 import { PatientVitals } from './PatientVitals'
+import { PathwayCard } from './PathwaySheet'
 import { PatientMeds } from './PatientMeds'
 import { PatientNotes } from './PatientNotes'
 import { PatientCarePlan } from './PatientCarePlan'
@@ -114,6 +115,7 @@ export function PatientDetail({ patientId, onBack, initial = 'overview', initial
           </div>
 
           <HealthSummary patient={patient} />
+          <PathwayCard patient={patient} />
           <CareTeamCard patient={patient} canManage />
 
           <button onClick={() => setSection('visits')} className="bg-white rounded-2xl px-4 py-3 shadow-sm flex items-center gap-3 text-left">

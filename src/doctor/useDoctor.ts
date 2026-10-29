@@ -22,7 +22,8 @@
 import { useApp, isActiveAlert } from '@/shared/state/AppContext'
 import { useLoadStatus } from '@/shared/state/useLoadStatus'
 import { partnersOf } from '@/shared/lib/messaging'
-import type { Appointment, DoctorUser, MealPlan, PatientUser, RxRoute } from '@/shared/lib/types'
+import type { Appointment, DoctorUser, HoldRule, MealLink, MealPlan, PatientUser, RxRoute } from '@/shared/lib/types'
+import { proposePathway } from '@/shared/lib/pathways'
 import * as api from '@/shared/api/actions'
 import { dateLabel } from '@/shared/lib/vitals'
 
@@ -42,6 +43,13 @@ export interface NewPrescription {
   endDate?: string
   /** The form's reference (`useSave().ref`): a prescription sent twice is saved once. */
   ref?: string
+  /** Why it is prescribed despite a recorded allergy; the database refuses a match without one. */
+  allergyOverride?: string
+  /** Structure (migration 0021): the catalogue medicine, dose times (minutes after midnight), the meal link, a hold rule. */
+  medicationCode?: string
+  times?: number[]
+  withMeal?: MealLink
+  holdIf?: HoldRule
 }
 
 export interface NewVisit {
@@ -71,6 +79,8 @@ export function useDoctor() {
     now: app.now,
     /** GET vital_defs */
     vitalDefs: app.vitalDefs,
+    /** The medicine catalogue, offered when prescribing (inactive ones are not offered). */
+    medicationDefs: app.medicationDefs.filter(m => m.active),
 
     /** GET patients, profiles (assigned to this doctor) */
     patients,
@@ -141,6 +151,8 @@ export function useDoctor() {
       id: tempId('rx'), medication: rx.medication.trim(), dosage: rx.dosage.trim(), frequency: rx.frequency, purpose: rx.purpose.trim(),
       route: rx.route, instructions: rx.instructions?.trim() || undefined, startDate: rx.startDate || undefined, endDate: rx.endDate || undefined,
       prescribedAt: dateLabel(), doctorId: doctor.id, active: true, clientRef: rx.ref,
+      allergyOverride: rx.allergyOverride?.trim() || undefined,
+      medicationCode: rx.medicationCode || undefined, times: rx.times?.length ? rx.times : undefined, withMeal: rx.withMeal, holdIf: rx.holdIf,
     }),
     /** UPDATE prescriptions: stopped with its reason, kept in the record; never deleted. */
     stopMedicine: (patientId: string, rxId: string, reason: string) => app.setPrescriptionActive(patientId, rxId, false, reason),
@@ -189,6 +201,10 @@ export function useDoctor() {
     /* ── monitoring plan, reviews, access log ── */
     /** RPC set_vital_plan: how often the patient measures a vital (null: the usual schedule), and why. The patient is told. */
     setVitalPlan: app.setVitalPlan,
+    /** The care pathway proposed from a patient's conditions (the catalogue's starting values, merged). A suggestion only. */
+    proposalFor: (p: PatientUser) => proposePathway(p, app.conditionDefs, app.vitalDefs),
+    /** RPC apply_pathway: monitoring, targets, fluid limit, diet note and a draft care plan in one step; audited, the patient told once. */
+    applyPathway: app.applyPathway,
     /** GET vital_reviews: each review of a patient's readings, newest first. */
     reviewsOf: (patientId: string) => app.vitalReviews.filter(r => r.patientId === patientId).sort((a, b) => b.reviewedThrough - a.reviewedThrough),
     /** Valid readings a patient logged since the last review (all of them before the first). */

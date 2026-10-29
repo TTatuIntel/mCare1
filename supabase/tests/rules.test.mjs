@@ -155,6 +155,41 @@ check('patient cannot write to another patient\'s record', (await denied(ID.pat,
 const rx = (await as(ID.doc, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency) values ($1, $2, 'Lisinopril', '10mg', 'Once daily') returning id`, [ID.pat, ID.doc]))[0].id
 check('patient cannot prescribe', (await denied(ID.pat, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency) values ($1, $2, 'X', '1', 'x')`, [ID.pat, ID.doc])).blocked)
 check('non-treating doctor cannot prescribe', (await denied(ID.doc2, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency) values ($1, $2, 'X', '1', 'x')`, [ID.pat, ID.doc2])).blocked)
+// Allergy check (0019): James is allergic to penicillin. The prescriptions made here are rolled back so later checks see the same record.
+const amox = await denied(ID.doc, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency) values ($1, $2, 'Amoxicillin 500mg', '500mg', 'Three times daily')`, [ID.pat, ID.doc])
+check('a medicine matching a recorded allergy is refused, and says which allergy', amox.blocked && /allergy on record: Penicillin \(severe\)/.test(amox.why ?? ''), amox.why)
+check('nobody can ask the database about another patient\'s allergies directly', (await denied(ID.doc2, `select medication_allergy_conflict($1, 'amoxicillin')`, [ID.pat])).blocked
+  && (await denied(ID.doc, `select medication_allergy_conflict($1, 'amoxicillin')`, [ID.pat])).blocked)
+await db.exec('begin')
+const amoxOk = (await as(ID.doc, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency, allergy_override) values ($1, $2, 'Amoxicillin 500mg', '500mg', 'Three times daily', '  Tolerated amoxicillin in 2024 without reaction ') returning id, allergy_override`, [ID.pat, ID.doc]))[0]
+check('…the doctor can prescribe it with a reason, which is kept and audited', amoxOk?.allergy_override === 'Tolerated amoxicillin in 2024 without reaction'
+  && (await db.query(`select count(*)::int n from audit_log where action = 'Prescribed despite allergy' and resource_id = $1 and detail like '%Penicillin (severe)%'`, [amoxOk.id])).rows[0].n === 1)
+await db.exec('savepoint rewrite')
+check('…the reason cannot be rewritten afterwards', (await denied(ID.doc, `update prescriptions set allergy_override = 'changed later' where id = $1`, [amoxOk.id])).blocked)
+await db.exec('rollback to savepoint rewrite')
+check('a medicine with no matching allergy needs no reason, and a stray reason is not kept', (await as(ID.doc, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency, allergy_override) values ($1, $2, 'Paracetamol', '1g', 'As needed', 'not needed') returning allergy_override`, [ID.pat, ID.doc]))[0].allergy_override === null)
+await db.exec('rollback')
+
+// Medicine catalogue and structured prescriptions (0021). Rolled back afterwards, like the allergy checks.
+check('the medicine catalogue is read by everyone signed in and changed only by an admin', (await as(ID.pat, `select 1 from medication_defs where code = 'furosemide'`)).length === 1
+  && (await as(ID.doc, `update medication_defs set active = false where code = 'furosemide' returning 1`)).length === 0
+  && (await denied(ID.doc, `insert into medication_defs (code, name) values ('fake', 'Fake')`)).blocked)
+const rxStruct = (extra) => `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency${extra.cols}) values ($1, $2, 'Furosemide 40 mg', '40 mg', 'Twice daily'${extra.vals}) returning id, times, hold_if`
+check('impossible dose times or hold rules are refused', (await denied(ID.doc, rxStruct({ cols: ', times', vals: `, '{1500}'` }), [ID.pat, ID.doc])).blocked
+  && (await denied(ID.doc, rxStruct({ cols: ', times', vals: `, '{480,480}'` }), [ID.pat, ID.doc])).blocked
+  && (await denied(ID.doc, rxStruct({ cols: ', hold_if', vals: `, '{"vital_id":"nope","below":1}'` }), [ID.pat, ID.doc])).blocked
+  && (await denied(ID.doc, rxStruct({ cols: ', hold_if', vals: `, '{"vital_id":"bp","below":120,"above":100}'` }), [ID.pat, ID.doc])).blocked
+  && (await denied(ID.doc, rxStruct({ cols: ', hold_if', vals: `, '{"vital_id":"bp"}'` }), [ID.pat, ID.doc])).blocked)
+await db.exec('begin')
+await db.query(`delete from tracked_vitals where patient_id = $1 and vital_id = 'wt'`, [ID.pat])
+const furo = (await as(ID.doc, rxStruct({ cols: ', medication_code, times, with_meal, hold_if', vals: `, 'furosemide', '{1080,480}', 'with', '{"vital_id":"bp","below":95,"note":"x"}'` }), [ID.pat, ID.doc]))[0]
+check('a structured prescription keeps its dose times in order and a clean hold rule', furo.times.join() === '480,1080' && JSON.stringify(furo.hold_if) === '{"below": 95, "vital_id": "bp"}' || (furo.hold_if?.below === 95 && furo.hold_if?.vital_id === 'bp' && !('note' in furo.hold_if)), JSON.stringify(furo))
+check('a catalogue medicine starts tracking the vitals it needs, and the patient is told', (await db.query(`select 1 from tracked_vitals where patient_id = $1 and vital_id = 'wt'`, [ID.pat])).rows.length === 1
+  && (await as(ID.pat, `select body from notifications where title = 'New vitals to track'`)).some(n => /Weight/.test(n.body)))
+await db.exec('savepoint struct')
+check('…and its structure cannot be rewritten afterwards', (await denied(ID.doc, `update prescriptions set times = '{600}' where id = $1`, [furo.id])).blocked)
+await db.exec('rollback to savepoint struct')
+await db.exec('rollback')
 check('patient logs a dose', (await as(ID.pat, `insert into dose_logs (patient_id, prescription_id, slot, day) values ($1, $2, 480, current_date) returning slot`, [ID.pat, rx])).length === 1)
 check('same dose cannot be logged twice', (await denied(ID.pat, `insert into dose_logs (patient_id, prescription_id, slot, day) values ($1, $2, 480, current_date)`, [ID.pat, rx])).blocked)
 check('other patient cannot log against that prescription', (await denied(ID.pat2, `insert into dose_logs (patient_id, prescription_id, slot, day) values ($1, $2, 480, current_date)`, [ID.pat2, rx])).blocked)
@@ -571,6 +606,10 @@ check('a doctor who does not treat the patient cannot change the plan', (await a
 check('the treating doctor sees what the patient ate and drank', (await as(ID.pat, `insert into meal_logs (patient_id, meal_id, day) values ($1, 'breakfast', current_date) returning meal_id`, [ID.pat])).length === 1
   && (await as(DOC, `select 1 from meal_logs where patient_id = $1`, [ID.pat])).length === 1 && (await as(DOC, `select glasses from hydration_logs where patient_id = $1`, [ID.pat]))[0].glasses === 6
   && (await as(ID.doc, `select 1 from meal_logs`)).length === 0)
+await as(DOC, `update meal_plans set fluid_mode = 'limit', water_goal = 6 where patient_id = $1`, [ID.pat])
+check('a fluid limit is saved, and the patient is told it is a maximum', (await as(ID.pat, `select fluid_mode from meal_plans`))[0]?.fluid_mode === 'limit'
+  && (await as(ID.pat, `select 1 from notifications where body like '%at most 6 glasses of fluid a day%'`)).length === 1
+  && (await denied(DOC, `update meal_plans set fluid_mode = 'lots' where patient_id = $1`, [ID.pat])).blocked)
 await as(DOC, `delete from meal_plans where patient_id = $1`, [ID.pat])
 check('removing the plan tells the patient', (await as(ID.pat, `select 1 from notifications where title = 'Your meal plan was removed'`)).length === 1)
 
@@ -800,7 +839,7 @@ await as(TREAT, `update prescriptions set active = true where id = $1`, [rxNew.i
 check('restarting clears the reason; status and the on/off switch always agree', (await one(`select status, stop_reason, stopped_at from prescriptions where id = $1`, [rxNew.id])).status === 'active'
   && (await one(`select stop_reason from prescriptions where id = $1`, [rxNew.id])).stop_reason === null
   && (await denied(ID.pat, `insert into prescription_events (prescription_id, patient_id, action) values ($1, $2, 'stopped')`, [rxNew.id, ID.pat])).blocked)
-const course = (await as(TREAT, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency, start_date, end_date) values ($1, $2, 'Amoxicillin', '500mg', 'Three times daily', current_date - 7, current_date - 1) returning id`, [ID.pat, TREAT]))[0].id
+const course = (await as(TREAT, `insert into prescriptions (patient_id, doctor_id, medication, dosage, frequency, start_date, end_date) values ($1, $2, 'Doxycycline', '500mg', 'Three times daily', current_date - 7, current_date - 1) returning id`, [ID.pat, TREAT]))[0].id
 check('a course whose last day has passed is completed by the schedule, and the patient is told', (await db.query(`select complete_ended_prescriptions() n`)).rows[0].n === 1
   && (await one(`select status, active, stop_reason from prescriptions where id = $1`, [course])).status === 'completed'
   && (await as(ID.pat, `select 1 from notifications where title = 'Course finished'`)).length === 1
@@ -1218,6 +1257,49 @@ check('the plan is saved with who asked and why, the patient is told, and it is 
   && (await one(`select count(*)::int n from audit_log where action = 'Set monitoring plan' and patient_id = $1`, [ID.pat])).n === 1
   && (await one(`select count(*)::int n from audit_log where action in ('Started tracking a vital', 'Changed a tracked vital') and patient_id = $1 and created_at > now() - interval '1 minute'`, [ID.pat])).n === 0)
 check('the patient sees their plan', (await as(ID.pat, `select frequency from tracked_vitals where vital_id = 'gluc'`))[0].frequency === 'twice_daily')
+
+// Care pathways (0020): the catalogue carries a starting plan; the treating doctor applies a reviewed bundle in one step.
+check('the catalogue carries starting values for the doctor to review', (await one(`select fluid_limit_glasses, reviewed_at from condition_defs where code = 'heart_failure'`)).fluid_limit_glasses === 6
+  && (await one(`select reviewed_at from condition_defs where code = 'heart_failure'`)).reviewed_at === null
+  && Number((await one(`select target_max from condition_vitals where condition_code = 'hypertension' and vital_id = 'bp'`)).target_max) === 130
+  && (await as(ID.pat, `select 1 from condition_goals where condition_code = 'heart_failure'`)).length === 2)
+const bundle = JSON.stringify({ conditions: ['heart_failure', 'hypertension'], care_plan_title: 'Heart failure and blood pressure', fluid_limit_glasses: 6, diet_note: 'Low salt',
+  vitals: [{ vital_id: 'wt', frequency: 'daily', condition_code: 'heart_failure', reason: 'Daily weight' }, { vital_id: 'bp', frequency: 'daily', target_min: 90, target_max: 130, condition_code: 'hypertension' }],
+  goals: [{ text: 'Weigh every morning', vital_id: 'wt' }] })
+check('only the treating doctor applies a pathway', (await denied(DOC, `select apply_pathway($1, $2)`, [ID.pat, bundle])).blocked
+  && (await denied(ID.pat, `select apply_pathway($1, $2)`, [ID.pat, bundle])).blocked
+  && (await denied(ID.admin, `select apply_pathway($1, $2)`, [ID.pat, bundle])).blocked
+  && (await denied(ID.asst, `select apply_pathway($1, $2)`, [ID.pat, bundle])).blocked)
+check('an impossible target or an unknown vital is refused, and nothing is half-saved', (await denied(TREAT, `select apply_pathway($1, $2)`, [ID.pat, JSON.stringify({ vitals: [{ vital_id: 'bp', target_min: 140, target_max: 120 }] })])).blocked
+  && (await denied(TREAT, `select apply_pathway($1, $2)`, [ID.pat, JSON.stringify({ vitals: [{ vital_id: 'wt', frequency: 'daily' }, { vital_id: 'nope' }] })])).blocked
+  && (await one(`select frequency from tracked_vitals where patient_id = $1 and vital_id = 'wt'`, [ID.pat]))?.frequency !== 'daily')
+await db.exec('begin')   // rolled back below: later checks see the record as it was
+const pw = (await as(TREAT, `select apply_pathway($1, $2) r`, [ID.pat, bundle]))[0].r
+const cpRow = await one(`select status, title, (select count(*)::int from care_plan_items i where i.plan_id = p.id and i.kind = 'goal') goals from care_plans p where id = $1`, [pw.care_plan_id])
+check('applying sets the monitoring plan, the target, the fluid limit and a draft care plan in one step', pw.vitals === 2 && pw.targets === 1
+  && (await one(`select frequency, assigned_by from tracked_vitals where patient_id = $1 and vital_id = 'wt'`, [ID.pat])).assigned_by === TREAT
+  && Number((await one(`select target_max from thresholds where patient_id = $1 and vital_id = 'bp'`, [ID.pat])).target_max) === 130
+  && (await one(`select fluid_mode, water_goal, dietary_note from meal_plans where patient_id = $1`, [ID.pat])).fluid_mode === 'limit'
+  && cpRow.status === 'draft' && cpRow.goals === 1, JSON.stringify({ pw, cpRow }))
+check('…audited once with the bundle, and the patient told once (a draft care plan stays out of their sight)',
+  (await one(`select count(*)::int n from audit_log where action = 'Applied care pathway' and patient_id = $1 and after_state ? 'vitals'`, [ID.pat])).n === 1
+  && (await as(ID.pat, `select body from notifications where title = 'Your care was set up'`)).some(n => /High blood pressure, Heart failure/.test(n.body) && /fluid limit 6/.test(n.body))
+  && (await as(ID.pat, `select 1 from care_plans where id = $1`, [pw.care_plan_id])).length === 0)
+await db.exec('rollback')
+
+// The admin keeps the pathway; a change to its clinical content needs a fresh review.
+check('only an admin changes a pathway', (await denied(TREAT, `select save_condition_def($1)`, [JSON.stringify({ code: 'hypertension', name: 'High blood pressure', vitals: [] })])).blocked)
+await db.exec('begin')
+await as(ID.admin, `select save_condition_def($1)`, [JSON.stringify({ code: 'hypertension', name: 'High blood pressure', icon: '🫀', icd10: 'I10', active: true, reviewed: true, diet_note: 'Low salt',
+  vitals: [{ vital_id: 'bp', frequency: 'daily', target_min: 90, target_max: 130 }, 'hr'], goals: [{ text: 'BP on target', vital_id: 'bp' }] })])
+const reviewed = await one(`select reviewed_by, diet_note from condition_defs where code = 'hypertension'`)
+check('the admin marks a pathway reviewed; the review is stamped and audited', reviewed.reviewed_by === ID.admin && reviewed.diet_note === 'Low salt'
+  && (await one(`select count(*)::int n from condition_vitals where condition_code = 'hypertension'`)).n === 2
+  && (await one(`select count(*)::int n from audit_log where action = 'Reviewed condition pathway' and resource_id = 'hypertension'`)).n === 1)
+await as(ID.admin, `select save_condition_def($1)`, [JSON.stringify({ code: 'hypertension', name: 'High blood pressure', icon: '🫀', icd10: 'I10', active: true, diet_note: 'Low salt',
+  vitals: [{ vital_id: 'bp', frequency: 'daily', target_min: 90, target_max: 140 }, 'hr'], goals: [{ text: 'BP on target', vital_id: 'bp' }] })])
+check('…changing a target afterwards clears the review', (await one(`select reviewed_at from condition_defs where code = 'hypertension'`)).reviewed_at === null)
+await db.exec('rollback')
 
 // Reviews of readings.
 check('only the treating doctor marks readings reviewed', (await denied(DOC, `select review_vitals($1)`, [ID.pat])).blocked && (await denied(ID.pat, `select review_vitals($1)`, [ID.pat])).blocked)

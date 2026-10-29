@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useDoctor } from './useDoctor'
 import { Pill, BottomSheet, SheetButton, Field, inputCls, useToast, useSave, SaveError, EmptyState } from '@/shared'
-import type { PatientUser, PlannedMeal } from '@/shared/lib/types'
+import type { FluidMode, PatientUser, PlannedMeal } from '@/shared/lib/types'
+import { fluidRestrictionFor } from '@/shared/lib/health'
 import { dayKey } from '@/shared/lib/vitals'
 import { DAILY_MEALS, clock } from '@/shared/lib/schedule'
 
@@ -14,7 +15,7 @@ const MAX_MEALS = 8
 const DAYS_SHOWN = 7
 
 type MealRow = { id: string; name: string; time: string; kcal: string; foods: string }
-type Form = { targetKcal: string; waterGoal: string; dietaryNote: string; meals: MealRow[] }
+type Form = { targetKcal: string; waterGoal: string; fluidMode: FluidMode; dietaryNote: string; meals: MealRow[] }
 
 const toTime = (at: number) => `${String(Math.floor(at / 60)).padStart(2, '0')}:${String(at % 60).padStart(2, '0')}`
 const toMinutes = (time: string) => { const [h, m] = time.split(':').map(Number); return h * 60 + m }
@@ -29,7 +30,12 @@ export function PatientNutrition({ patient }: { patient: PatientUser }) {
   const plan = mealPlanOf(patient.id)
   const personal = !!plan?.meals.length
   const meals = personal ? plan!.meals : DAILY_MEALS
-  const waterGoal = plan?.waterGoal ?? 8
+  // Heart failure / kidney disease: water is a daily LIMIT the doctor sets, never the standard "8 glasses".
+  const caution = fluidRestrictionFor(patient.health?.conditions ?? [])
+  const fluidMode: FluidMode = plan?.fluidMode ?? 'goal'
+  const waterGoal = plan ? plan.waterGoal : caution ? 0 : 8
+  const isLimit = fluidMode === 'limit'
+  const over = (glasses: number) => isLimit && waterGoal > 0 && glasses > waterGoal
   const today = dayKey()
   const [form, setForm] = useState<Form | null>(null)
   const [confirmClear, setConfirmClear] = useState(false)
@@ -50,7 +56,9 @@ export function PatientNutrition({ patient }: { patient: PatientUser }) {
   const openForm = () => {
     saving.clear()
     setForm({
-      targetKcal: plan?.targetKcal ? String(plan.targetKcal) : '', waterGoal: String(waterGoal),
+      targetKcal: plan?.targetKcal ? String(plan.targetKcal) : '',
+      // A new plan for a patient who needs a fluid limit starts as one (6 glasses ≈ 1.5 L): the doctor checks the figure.
+      fluidMode: plan?.fluidMode ?? (caution ? 'limit' : 'goal'), waterGoal: String(waterGoal || (caution ? 6 : 8)),
       dietaryNote: plan?.dietaryNote ?? '', meals: meals.map(toRow),
     })
   }
@@ -61,7 +69,7 @@ export function PatientNutrition({ patient }: { patient: PatientUser }) {
     const kcal = form.targetKcal.trim() === '' ? null : Number(form.targetKcal)
     if (kcal !== null && (!Number.isInteger(kcal) || kcal < 500 || kcal > 6000)) return 'Daily energy target must be between 500 and 6000 kcal.'
     const water = Number(form.waterGoal)
-    if (!Number.isInteger(water) || water < 1 || water > 30) return 'Water goal must be between 1 and 30 glasses.'
+    if (!Number.isInteger(water) || water < 1 || water > 30) return `The ${form.fluidMode === 'limit' ? 'fluid limit' : 'water goal'} must be between 1 and 30 glasses.`
     for (const m of form.meals) {
       if (!m.name.trim()) return 'Give each meal a name.'
       if (!/^\d{2}:\d{2}$/.test(m.time)) return `Set a time for ${m.name.trim()}.`
@@ -79,7 +87,7 @@ export function PatientNutrition({ patient }: { patient: PatientUser }) {
     const saved = await saving.run(() => setMealPlan({
       patientId: patient.id, meals: planned,
       targetKcal: form.targetKcal.trim() ? Number(form.targetKcal) : undefined,
-      waterGoal: Number(form.waterGoal), dietaryNote: form.dietaryNote.trim() || undefined,
+      waterGoal: Number(form.waterGoal), fluidMode: form.fluidMode, dietaryNote: form.dietaryNote.trim() || undefined,
     }))
     if (!saved.ok) return
     setForm(null)
@@ -112,10 +120,18 @@ export function PatientNutrition({ patient }: { patient: PatientUser }) {
             <p className="text-sm font-bold text-gray-900 font-mono">{plan?.targetKcal ? `${plan.targetKcal} kcal` : '—'}</p>
           </div>
           <div className="bg-gray-50 rounded-xl px-3 py-2">
-            <p className="text-[10px] text-gray-400 uppercase tracking-wide">Water goal</p>
-            <p className="text-sm font-bold text-gray-900 font-mono">{waterGoal} glasses</p>
+            <p className="text-[10px] text-gray-400 uppercase tracking-wide">{isLimit ? 'Fluid limit' : 'Water goal'}</p>
+            <p className={`text-sm font-bold font-mono ${waterGoal ? 'text-gray-900' : 'text-amber-700'}`}>
+              {waterGoal ? `${isLimit ? 'at most ' : ''}${waterGoal} glasses` : 'Not set'}
+            </p>
           </div>
         </div>
+        {caution && !isLimit && (
+          <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 mb-3 leading-snug">
+            ⚠ {caution} is on record. Too much fluid can be harmful: consider setting a daily fluid limit.
+            {!plan && ' Until you do, the patient is asked to check their limit with you rather than shown a water goal.'}
+          </p>
+        )}
         {meals.map(m => (
           <div key={m.id} className="flex items-start gap-2 py-2 border-b border-gray-50 last:border-0">
             <span className="text-base" aria-hidden="true">{m.icon}</span>
@@ -145,10 +161,10 @@ export function PatientNutrition({ patient }: { patient: PatientUser }) {
           {[
             { v: `${eatenToday.filter(e => meals.some(m => m.id === e.mealId)).length}/${meals.length}`, l: 'Meals logged' },
             { v: `${kcalToday}`, l: plan?.targetKcal ? `of ${plan.targetKcal} kcal` : 'kcal' },
-            { v: `${waterOn(today)}/${waterGoal}`, l: 'Glasses of water' },
+            { v: waterGoal ? `${waterOn(today)}/${waterGoal}` : `${waterOn(today)}`, l: over(waterOn(today)) ? 'Over the fluid limit' : isLimit ? 'Glasses (limit)' : 'Glasses of water', warn: over(waterOn(today)) },
           ].map(x => (
-            <div key={x.l} className="bg-gray-50 rounded-xl py-2.5 text-center">
-              <p className="text-base font-black text-teal-700 font-mono">{x.v}</p>
+            <div key={x.l} className={`rounded-xl py-2.5 text-center ${'warn' in x && x.warn ? 'bg-red-50' : 'bg-gray-50'}`}>
+              <p className={`text-base font-black font-mono ${'warn' in x && x.warn ? 'text-red-600' : 'text-teal-700'}`}>{x.v}</p>
               <p className="text-[10px] text-gray-400 leading-tight">{x.l}</p>
             </div>
           ))}
@@ -172,7 +188,7 @@ export function PatientNutrition({ patient }: { patient: PatientUser }) {
             <div key={r.day} className="flex items-center gap-2 py-1.5 text-xs border-b border-gray-50 last:border-0">
               <span className="flex-1 text-gray-700">{r.label}</span>
               <span className="text-gray-500 font-mono">{r.eaten} meal{r.eaten === 1 ? '' : 's'}</span>
-              <span className="text-teal-700 font-mono w-20 text-right">{r.water} glass{r.water === 1 ? '' : 'es'}</span>
+              <span className={`font-mono w-20 text-right ${over(r.water) ? 'text-red-600 font-bold' : 'text-teal-700'}`}>{r.water} glass{r.water === 1 ? '' : 'es'}{over(r.water) ? ' ⚠' : ''}</span>
             </div>
           ))}
         </div>
@@ -188,10 +204,22 @@ export function PatientNutrition({ patient }: { patient: PatientUser }) {
               <Field label="Energy target (kcal a day)">
                 <input value={form.targetKcal} inputMode="numeric" placeholder="e.g. 1800" onChange={e => setForm({ ...form, targetKcal: e.target.value })} className={inputCls} />
               </Field>
-              <Field label="Water goal (glasses) *">
+              <Field label={form.fluidMode === 'limit' ? 'Fluid limit (glasses, at most) *' : 'Water goal (glasses) *'}>
                 <input value={form.waterGoal} inputMode="numeric" onChange={e => setForm({ ...form, waterGoal: e.target.value })} className={inputCls} />
               </Field>
             </div>
+            <Field label="Water is">
+              <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Water is">
+                {([['goal', 'A goal to reach'], ['limit', 'A limit not to pass']] as const).map(([id, label]) => (
+                  <button key={id} type="button" role="radio" aria-checked={form.fluidMode === id} onClick={() => setForm({ ...form, fluidMode: id })}
+                    className={`py-2 rounded-xl text-xs font-semibold border-2 ${form.fluidMode === id ? 'border-teal-600 bg-teal-50 text-teal-800' : 'border-gray-100 bg-gray-50 text-gray-600'}`}>{label}</button>
+                ))}
+              </div>
+            </Field>
+            {caution && form.fluidMode === 'goal' && (
+              <p className="text-[11px] text-amber-800 bg-amber-50 rounded-xl px-3 py-2 -mt-1 mb-3">⚠ {caution} is on record: a fluid limit is usually safer than a goal.</p>
+            )}
+            <p className="text-[10px] text-gray-400 -mt-1 mb-3">One glass ≈ 250 ml{form.fluidMode === 'limit' && Number(form.waterGoal) > 0 ? ` · this limit ≈ ${(Number(form.waterGoal) * 0.25).toFixed(2).replace(/\.?0+$/, '')} L a day, all drinks included` : ''}.</p>
             <Field label="Dietary note for the patient">
               <textarea value={form.dietaryNote} rows={2} maxLength={1000} placeholder="e.g. Keep salt low; no grapefruit with your medication."
                 onChange={e => setForm({ ...form, dietaryNote: e.target.value })} className={`${inputCls} resize-none`} />
@@ -223,7 +251,7 @@ export function PatientNutrition({ patient }: { patient: PatientUser }) {
       </BottomSheet>
 
       <BottomSheet open={confirmClear} onClose={() => setConfirmClear(false)} title="Use the standard plan?"
-        subtitle={`${patient.name} goes back to the standard meals and the default water goal. What they already logged is kept.`}
+        subtitle={`${patient.name} goes back to the standard meals and ${caution ? 'no fluid figure (they are asked to check their limit with you)' : 'the default water goal'}. What they already logged is kept.`}
         footer={<><SheetButton tone="ghost" onClick={() => setConfirmClear(false)}>Keep plan</SheetButton><SheetButton tone="danger" disabled={saving.busy} onClick={backToStandard}>{saving.busy ? 'Removing…' : 'Remove plan'}</SheetButton></>}>
         <SaveError message={saving.error} />
       </BottomSheet>

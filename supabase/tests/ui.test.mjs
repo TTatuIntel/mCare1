@@ -380,6 +380,23 @@ try {
     const plan = await row(service.from('meal_plans').select('set_by, target_kcal, meals').eq('patient_id', patId).single())
     if (plan?.set_by !== docId || plan.target_kcal !== 1800 || plan.meals.length !== 4) throw new Error(JSON.stringify(plan))
   })
+  await step(d, 'the doctor sets up care from the patient\'s conditions in one step, after reviewing it', async () => {
+    // The basic seed records no conditions: the patient's high blood pressure is added here.
+    const cond = await service.from('conditions').insert({ patient_id: patId, name: 'High blood pressure' })
+    if (cond.error) throw new Error(cond.error.message)
+    await d.page.getByRole('button', { name: 'Overview', exact: true }).click()
+    const card = d.page.getByRole('region', { name: 'Care from conditions' })
+    await card.getByText('High blood pressure').waitFor({ timeout: 20000 })   // the open record learns of it by itself
+    await card.getByRole('button', { name: 'Review and set up' }).click()
+    await d.sheet().getByText(/not been clinically reviewed/).waitFor({ timeout: 5000 })
+    // The goal is left out here so the care-plan step below works with its own plan (the draft is covered by the rule tests).
+    await d.sheet().getByRole('checkbox', { name: /Home blood pressure on target/ }).uncheck()
+    await d.sheet().getByRole('button', { name: 'Apply' }).click()
+    await d.page.getByText(/Care set up/).waitFor({ timeout: 15000 })
+    const tv = await row(service.from('tracked_vitals').select('frequency, condition_code').eq('patient_id', patId).eq('vital_id', 'bp').single())
+    const told = await row(patient.from('notifications').select('title'))
+    if (tv?.frequency !== 'daily' || tv.condition_code !== 'hypertension' || !told.some(n => n.title === 'Your care was set up')) throw new Error(JSON.stringify({ tv }))
+  })
   await step(d, 'the doctor records a reading on the patient\'s record', async () => {
     await d.page.getByRole('button', { name: 'Vitals', exact: true }).click()
     await d.page.getByRole('button', { name: '+ Record a reading' }).click()
@@ -390,9 +407,18 @@ try {
     const r = (await row(service.from('readings').select('recorded_by, level').eq('patient_id', patId).eq('value', '76')))[0]
     if (r?.recorded_by !== docId) throw new Error(JSON.stringify(r))
   })
-  await step(d, 'the doctor prescribes; it is saved before it says so, and the patient is told', async () => {
+  await step(d, 'the doctor is stopped by a recorded allergy, then prescribes; it is saved before it says so, and the patient is told', async () => {
     await d.page.getByRole('button', { name: 'Meds', exact: true }).click()
+    // The patient is allergic to penicillin (recorded here; the basic seed has no allergies): amoxicillin needs a reason.
+    const allergy = await service.from('allergies').insert({ patient_id: patId, substance: 'Penicillin', severity: 'moderate' })
+    if (allergy.error) throw new Error(allergy.error.message)
     await d.page.getByRole('button', { name: '+ New Prescription' }).click()
+    await d.sheet().getByText('Penicillin (moderate)').first().waitFor({ timeout: 20000 })   // the open record learns of it by itself
+    await d.sheet().getByPlaceholder('e.g. Amlodipine 5mg').fill('TEST Amoxicillin 500mg')
+    await d.sheet().getByPlaceholder('e.g. 5mg').fill('500mg')
+    await d.sheet().getByRole('alert').getByText(/Allergy: Penicillin/).waitFor({ timeout: 10000 })
+    if (!(await d.sheet().getByRole('button', { name: 'Prescribe anyway' }).isDisabled())) throw new Error('an allergy match could be prescribed without a reason')
+    await d.sheet().getByPlaceholder('e.g. 5mg').fill('')
     await d.sheet().getByPlaceholder('e.g. Amlodipine 5mg').fill('TEST Enalapril 5mg')
     await d.sheet().getByPlaceholder('e.g. 5mg').fill('5mg')
     await d.sheet().getByPlaceholder(/With breakfast/).fill('TEST: with breakfast')
@@ -409,6 +435,17 @@ try {
     await d.page.getByText(/stopped · patient told/).waitFor({ timeout: 15000 })
     const rx = (await row(service.from('prescriptions').select('status, stop_reason, stopped_by').eq('patient_id', patId).eq('stop_reason', 'TEST: dry cough')))[0]
     if (rx?.status !== 'discontinued' || rx.stopped_by !== docId) throw new Error(JSON.stringify(rx))
+  })
+  await step(d, 'the doctor prescribes from the catalogue: usual dose, its "check before taking" rule, a dose time', async () => {
+    await d.page.getByRole('button', { name: '+ New Prescription' }).click()
+    await d.sheet().getByPlaceholder('e.g. Amlodipine 5mg').fill('Amlodipine')
+    await d.sheet().getByRole('group', { name: 'Usual doses' }).getByRole('button', { name: '5 mg', exact: true }).click()
+    if (!(await d.sheet().getByRole('checkbox', { name: 'Check a vital before each dose' }).isChecked())) throw new Error('the catalogue hold rule was not offered')
+    await d.sheet().getByLabel('Dose 1 time').fill('07:30')
+    await d.sheet().getByRole('button', { name: 'Prescribe', exact: true }).click()
+    await d.sheet().waitFor({ state: 'detached', timeout: 15000 })   // the sheet closes only once it is saved
+    const rx = (await row(service.from('prescriptions').select('medication_code, dosage, times, hold_if').eq('patient_id', patId).eq('medication', 'Amlodipine')))[0]
+    if (rx?.medication_code !== 'amlodipine' || rx.dosage !== '5 mg' || rx.times?.join() !== '450' || rx.hold_if?.vital_id !== 'bp' || Number(rx.hold_if?.below) !== 100) throw new Error(JSON.stringify(rx))
   })
   await step(d, 'an internal note is saved for the doctor and never reaches the patient', async () => {
     await d.page.getByRole('button', { name: 'Notes', exact: true }).click()

@@ -3,7 +3,7 @@
  * at setup, which vitals each condition calls for, and how complete a
  * patient's profile is.
  */
-import type { AllergySeverity, BiologicalSex, BloodType, HealthProfile, PatientUser } from './types'
+import type { ConditionDef, AllergySeverity, BiologicalSex, BloodType, HealthProfile, PatientUser } from './types'
 import { calcAge } from './vitals'
 
 export type HealthSection = 'about' | 'conditions' | 'allergies'
@@ -59,6 +59,29 @@ export const SEVERITIES: { id: AllergySeverity; label: string }[] = [
 
 export const RELATIONSHIPS = ['Spouse', 'Partner', 'Parent', 'Child', 'Sibling', 'Guardian', 'Friend', 'Other']
 
+/**
+ * Demo mode's copy of the care-pathway starting values the database seeds (migration 0020), by condition name.
+ * Live mode reads them from the catalogue. Suggestions for the doctor, not yet clinically reviewed.
+ */
+export const DEMO_PATHWAYS: Record<string, Pick<ConditionDef, 'vitalPlans' | 'fluidLimitGlasses' | 'dietNote' | 'goals'>> = {
+  'High blood pressure': { vitalPlans: { bp: { frequency: 'daily', targetMin: 90, targetMax: 130 } }, dietNote: 'Low salt (under 5 g a day): plenty of vegetables, fruit and whole grains.',
+    goals: [{ text: 'Home blood pressure on target most days', vitalId: 'bp' }] },
+  'Type 2 diabetes': { vitalPlans: { gluc: { frequency: 'twice_daily', targetMin: 80, targetMax: 130 }, wt: { frequency: 'weekly' } },
+    dietNote: 'Regular meals; limit sugar, sweet drinks and refined starch.', goals: [{ text: 'Glucose before meals on target most days', vitalId: 'gluc' }] },
+  'Type 1 diabetes': { vitalPlans: { gluc: { frequency: 'twice_daily', targetMin: 80, targetMax: 130 } },
+    dietNote: 'Regular meals; limit sugar, sweet drinks and refined starch.', goals: [{ text: 'Glucose before meals on target most days', vitalId: 'gluc' }] },
+  'Heart failure': { vitalPlans: { wt: { frequency: 'daily' }, bp: { frequency: 'daily' } }, fluidLimitGlasses: 6,
+    dietNote: 'Low salt (under 5 g a day). All drinks count towards the daily fluid limit.',
+    goals: [{ text: 'Weigh every morning; tell the doctor of a gain of 2 kg in 3 days', vitalId: 'wt' }, { text: 'Stay within the daily fluid limit' }] },
+  'Chronic kidney disease': { vitalPlans: { bp: { frequency: 'daily', targetMin: 90, targetMax: 130 }, wt: { frequency: 'weekly' } },
+    dietNote: 'Low salt; potassium, phosphate and protein as the doctor advises.', goals: [{ text: 'Blood pressure on target most days', vitalId: 'bp' }] },
+  'Asthma': { vitalPlans: { spo2: { frequency: 'daily' } }, goals: [{ text: 'Know the oxygen level that means calling the doctor', vitalId: 'spo2' }] },
+  'COPD': { vitalPlans: { spo2: { frequency: 'daily' } }, goals: [{ text: 'Know the oxygen level that means calling the doctor', vitalId: 'spo2' }] },
+  'Heart disease': { vitalPlans: { bp: { frequency: 'daily' } } },
+  'Stroke (past)': { vitalPlans: { bp: { frequency: 'daily' } } },
+  'High cholesterol': { dietNote: 'Limit saturated fat and fried food; more fibre.' },
+}
+
 /** A condition as the forms list it: from the live catalogue (condition_defs), or COMMON_CONDITIONS in demo mode. */
 export type CatalogueCondition = { name: string; icon: string; vitals: string[] }
 
@@ -93,6 +116,14 @@ export function specialtyFit(specialty: string | undefined, conditions: string[]
     if (SPECIALTY_FOR.some(([cw, sw]) => name.includes(cw) && s.includes(sw))) return { score: 2, condition: c }
   }
   return { score: GENERALIST.some(g => s.includes(g)) ? 1 : 0 }
+}
+
+/**
+ * Conditions where too much fluid is harmful (heart failure, kidney disease): the doctor sets a daily
+ * fluid LIMIT, and the app never tells the patient to "drink 8 glasses". Returns the condition, or undefined.
+ */
+export function fluidRestrictionFor(conditions: string[]): string | undefined {
+  return conditions.find(c => /heart failure|kidney|renal|dialysis/i.test(c))
 }
 
 /** What still needs filling in, in the patient's words. Empty when the profile is complete. */

@@ -20,11 +20,12 @@ import { useApp } from '@/shared/state/AppContext'
 import { useLoadStatus } from '@/shared/state/useLoadStatus'
 import { partnersOf } from '@/shared/lib/messaging'
 import type {
-  AppUser, Appointment, DoctorUser, EmergencyContact, HealthProfile, MealPlan, Outcome, PatientUser, AvatarSpec, PlannedMeal,
+  AppUser, Appointment, DoctorUser, EmergencyContact, FluidMode, HealthProfile, MealPlan, Outcome, PatientUser, AvatarSpec, PlannedMeal,
 } from '@/shared/lib/types'
 import * as api from '@/shared/api/actions'
 import { dateLabel, dayKey } from '@/shared/lib/vitals'
 import { DAILY_MEALS } from '@/shared/lib/schedule'
+import { fluidRestrictionFor } from '@/shared/lib/health'
 
 /** What a patient may know about a clinician: directory details only — never credentials or other patients. */
 export type PublicDoctor = Pick<DoctorUser,
@@ -64,7 +65,11 @@ export interface TodaysMeals {
   /** True when the treating doctor set this plan for the patient. */
   personal: boolean
   targetKcal?: number
+  /** Glasses a day: a goal to reach, or (`fluidMode: 'limit'`) a maximum. 0 = no figure: ask the doctor. */
   waterGoal: number
+  fluidMode: FluidMode
+  /** A condition that needs a fluid limit the doctor has not set yet (heart failure, kidney disease). */
+  fluidCaution?: string
   dietaryNote?: string
 }
 
@@ -89,11 +94,15 @@ export function usePatient() {
   // (no standard meals, and medicines only ever come from that doctor's prescriptions).
   const enrolled = !!patient.assignedDoctorId
   const plan: MealPlan | undefined = app.mealPlans.find(p => p.patientId === patient.id)
+  const fluidCaution = fluidRestrictionFor(patient.health?.conditions ?? [])
   const todaysMeals: TodaysMeals = {
     meals: plan?.meals.length ? plan.meals : enrolled ? DAILY_MEALS : [],
     personal: !!plan?.meals.length,
     targetKcal: plan?.targetKcal,
-    waterGoal: plan?.waterGoal ?? 8,
+    // Heart failure or kidney disease without a doctor's figure: no "drink 8 glasses", the doctor sets the limit.
+    waterGoal: plan ? plan.waterGoal : fluidCaution ? 0 : 8,
+    fluidMode: plan?.fluidMode ?? 'goal',
+    fluidCaution: plan?.fluidMode === 'limit' ? undefined : fluidCaution,
     dietaryNote: plan?.dietaryNote,
   }
 
