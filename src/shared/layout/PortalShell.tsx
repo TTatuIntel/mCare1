@@ -60,7 +60,7 @@ export type NavItem = {
  * side rail on tablet, sidebar on web), a scrolling content area kept to a
  * readable width, and a "← Home" link on screens that aren't in the nav.
  */
-export function PortalShell({ screen, animKey, nav, onSelect, homeId, fill, hideBack, narrow, floating, notice, children }: {
+export function PortalShell({ screen, animKey, nav, onSelect, homeId, fill, hideBack, narrow, floating, children }: {
   /** Current screen id. */
   screen: string
   /** Replays the enter animation when it changes; defaults to `screen`. */
@@ -80,8 +80,6 @@ export function PortalShell({ screen, animKey, nav, onSelect, homeId, fill, hide
    * `group/fab` with `data-compact`, true while the screen scrolls down, so the button can fold to its icon.
    */
   floating?: React.ReactNode
-  /** A notice that floats over the screen, just under the header's bell (full width on mobile, top right on tablet and web), instead of taking space in it. */
-  notice?: React.ReactNode
   children: React.ReactNode
 }) {
   const inNav = nav.some(n => n.id === screen)
@@ -118,14 +116,6 @@ export function PortalShell({ screen, animKey, nav, onSelect, homeId, fill, hide
         </div>
         {/* Stays put while the screen scrolls: above the tab bar on mobile, in the corner on tablet and web. */}
         {floating && <div data-compact={compact} className="group/fab absolute z-[5] right-4 bottom-24 @2xl:right-8 @2xl:bottom-8">{floating}</div>}
-        {/* Just under the header's bell and avatar, lined up with the content's right edge. */}
-        {notice && (
-          <div className="pointer-events-none absolute z-[6] inset-x-0 top-16 px-4 @2xl:top-24 @2xl:px-8">
-            <div className={`mx-auto w-full ${narrow ? 'max-w-2xl' : 'max-w-5xl'} flex justify-end`}>
-              <div className="pointer-events-auto w-full @2xl:w-96">{notice}</div>
-            </div>
-          </div>
-        )}
       </div>
       <NavBar items={nav.map(n => ({ ...n, badge: n.badge || undefined }))} active={inNav ? screen : homeId} onSelect={onSelect} onHome={() => onSelect(homeId)} />
       <IdleSignOut />

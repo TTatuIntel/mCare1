@@ -120,13 +120,11 @@ const NOTICE_TONES = {
   green: { box: 'bg-emerald-50 border-emerald-100', title: 'text-emerald-700', dot: 'bg-emerald-500', action: 'text-emerald-700' },
 } as const
 
-export function NoticeCard({ tone, title, action, onAction, onClose, pulse = true, children }: {
+export function NoticeCard({ tone, title, action, onAction, pulse = true, children }: {
   tone: keyof typeof NOTICE_TONES
   title: React.ReactNode
   action?: string
   onAction?: () => void
-  /** Shows a close (×) button. */
-  onClose?: () => void
   pulse?: boolean
   children?: React.ReactNode
 }) {
@@ -138,12 +136,7 @@ export function NoticeCard({ tone, title, action, onAction, onClose, pulse = tru
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${t.dot} ${pulse ? 'animate-pulse' : ''}`} />
           <p className={`text-xs font-semibold ${t.title}`}>{title}</p>
         </div>
-        <div className="flex items-center gap-1 flex-shrink-0">
-          {action && <button onClick={onAction} className={`text-[11px] font-bold ${t.action}`}>{action}</button>}
-          {onClose && (
-            <button onClick={onClose} aria-label="Close" className={`-mr-1 w-7 h-7 rounded-full flex items-center justify-center text-base leading-none hover:bg-black/5 ${t.title}`}>×</button>
-          )}
-        </div>
+        {action && <button onClick={onAction} className={`text-[11px] font-bold flex-shrink-0 ${t.action}`}>{action}</button>}
       </div>
       {children && <div className="mt-2 flex flex-col gap-1.5">{children}</div>}
     </div>
