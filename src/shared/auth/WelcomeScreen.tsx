@@ -4,6 +4,7 @@ import MCareLogo from '@/shared/layout/MCareLogo'
 import { AuthButton, AuthDivider, AuthIcon, AuthRights, AuthSwitch, OWNER } from './authKit'
 import { SocialButtons, socialSignInAvailable } from './SocialAuth'
 import { backendConfigured } from '@/shared/api/supabase'
+import { reducedMotion } from '@/shared/layout/motion'
 
 const SUPPORT_EMAIL = 'support@matendocare.com'
 
@@ -81,6 +82,73 @@ function AboutSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   )
 }
 
+<<<<<<< Updated upstream
+=======
+/* ─── Get Started ───────────────────────────────────────────────────── */
+
+/** How far (px) the button leans towards a mouse pointer over it. */
+const LEAN_X = 6, LEAN_Y = 3
+
+/**
+ * The way in. At rest: a glow breathes under it, a ring pulses out from it, a
+ * sheen crosses it and the arrow nudges forward. Under a mouse: it leans
+ * towards the pointer, a light follows the pointer across it, and the arrow
+ * flies out of its tile and back in. Pressed: a ripple spreads from the touch.
+ */
+function GetStartedButton({ onClick }: { onClick: () => void }) {
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [ripples, setRipples] = useState<{ id: number; x: number; y: number }[]>([])
+
+  const track = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const wrap = wrapRef.current
+    if (!wrap) return
+    const r = e.currentTarget.getBoundingClientRect()
+    const x = e.clientX - r.left, y = e.clientY - r.top
+    wrap.style.setProperty('--mx', `${x}px`)
+    wrap.style.setProperty('--my', `${y}px`)
+    if (e.pointerType !== 'mouse' || reducedMotion()) return
+    wrap.style.transform = `translate(${((x / r.width - 0.5) * 2 * LEAN_X).toFixed(1)}px, ${((y / r.height - 0.5) * 2 * LEAN_Y).toFixed(1)}px)`
+  }
+
+  return (
+    <div ref={wrapRef} className="relative mx-auto mt-7 w-fit transition-transform duration-200 ease-out">
+      <span aria-hidden className="auth-glow absolute inset-x-6 -bottom-1.5 h-8 rounded-full bg-teal-500/60 blur-xl" />
+      <span aria-hidden className="auth-cta-ring pointer-events-none absolute inset-0 rounded-full ring-2 ring-teal-500/60" />
+      <button type="button" onClick={onClick}
+        onPointerMove={track}
+        onPointerLeave={() => { if (wrapRef.current) wrapRef.current.style.transform = '' }}
+        onPointerDown={e => {
+          track(e)
+          const r = e.currentTarget.getBoundingClientRect()
+          setRipples(rs => [...rs, { id: e.timeStamp, x: e.clientX - r.left, y: e.clientY - r.top }])
+        }}
+        className="group relative w-full overflow-hidden rounded-full bg-teal-700 py-1.5 pl-6 pr-1.5 flex items-center gap-4 text-white text-[15px] font-bold ring-1 ring-inset ring-white/20 shadow-lg shadow-teal-700/30 transition-all duration-300 hover:bg-teal-800 hover:shadow-xl hover:shadow-teal-700/40 active:scale-[.96] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-teal-500/40">
+        <span aria-hidden className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/15 to-transparent" />
+        <span aria-hidden className="auth-sheen absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent" />
+        {/* A soft light under the pointer. */}
+        <span aria-hidden className="absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+          style={{ background: 'radial-gradient(90px circle at var(--mx, 50%) var(--my, 50%), rgba(255,255,255,.3), transparent 70%)' }} />
+        {ripples.map(rp => (
+          <span key={rp.id} aria-hidden onAnimationEnd={() => setRipples(rs => rs.filter(x => x.id !== rp.id))}
+            className="auth-ripple pointer-events-none absolute -ml-3 -mt-3 h-6 w-6 rounded-full bg-white/40" style={{ left: rp.x, top: rp.y }} />
+        ))}
+        {/* The pill hugs its label and arrow: no wider than what it says. */}
+        <span className="relative whitespace-nowrap transition-[letter-spacing] duration-300 group-hover:tracking-wide">Get Started</span>
+        <span className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/15 ring-1 ring-inset ring-white/25 backdrop-blur-sm transition-all duration-300 group-hover:bg-white group-hover:text-teal-700 group-active:scale-90">
+          {/* One arrow leaves to the right as its twin arrives from the left. */}
+          <span className="flex transition-transform duration-300 ease-out group-hover:translate-x-9">
+            <span className="auth-nudge flex"><AuthIcon name="arrow" className="w-4 h-4" /></span>
+          </span>
+          <span aria-hidden className="absolute flex -translate-x-9 transition-transform duration-300 ease-out group-hover:translate-x-0">
+            <AuthIcon name="arrow" className="w-4 h-4" />
+          </span>
+        </span>
+      </button>
+    </div>
+  )
+}
+
+>>>>>>> Stashed changes
 /* ─── Welcome ───────────────────────────────────────────────────────── */
 
 /**

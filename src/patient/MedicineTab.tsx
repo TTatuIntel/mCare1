@@ -25,8 +25,12 @@ export function MedicineTab({ go }: { go: (t: string) => void }) {
 
       {activePrescriptions.length === 0 ? (
         <EmptyState icon="💊" title="No active prescriptions"
+<<<<<<< Updated upstream
           text={enrolled ? 'Your doctor will prescribe medications here.' : 'Your medicines will appear here once a doctor is caring for you.'}
           {...(enrolled ? {} : { action: 'Find a doctor →', onAction: () => go('care') })} />
+=======
+          text={enrolled ? 'Your doctor will prescribe medications here.' : 'Your medicines will appear here once a doctor is caring for you.'} />
+>>>>>>> Stashed changes
       ) : (
         <>
           {/* next dose — same countdown as the Home reminders */}

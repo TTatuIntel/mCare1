@@ -14,6 +14,7 @@ import { MealsTab } from './MealsTab'
 import { CareTeamTab } from './CareTeamTab'
 import { MyAlertsTab } from './MyAlertsTab'
 import { QuickLogFab } from './QuickLogFab'
+import { PlanNotice } from './PlanNotice'
 import { useVitalLog } from './VitalLogSheets'
 
 /* ─── Root ──────────────────────────────────────────────────────────── */
@@ -56,7 +57,8 @@ export default function PatientApp() {
     ? <QuickLogFab onLogOne={log.logOne} onLogGroup={log.logGroup} onLogAll={log.logAll} due={vitalsDue} /> : undefined
 
   return (
-    <PortalShell screen={tab} nav={NAV.map(n => ({ ...n, badge: badge[n.id] }))} onSelect={go} homeId="home" fill={tab === 'messages'} narrow={tab === 'profile'} floating={fab}>
+    <PortalShell screen={tab} nav={NAV.map(n => ({ ...n, badge: badge[n.id] }))} onSelect={go} homeId="home" fill={tab === 'messages'} narrow={tab === 'profile'} floating={fab}
+      notice={tab === 'home' ? <PlanNotice go={go} /> : undefined}>
       {log.sheets}
       {tab ==='home'     && <HomeTab go={go} openVital={openVital} onLog={log.logOne} />}
       {tab ==='vitals'   && <VitalsTab vitalId={vital?.id ?? null} onOpenVital={openVital} onCloseVital={closeVital} go={go} />}

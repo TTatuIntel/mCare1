@@ -166,6 +166,7 @@ try {
   const fresh = await s.text()
   check('a new account shows no sample people or readings', !/James Mwangi|Amara Osei|Samuel Kariuki/.test(fresh) && /No readings yet/.test(fresh), fresh.slice(0, 200))
   check('before a doctor takes them on, a new patient has no meals or medicines to do, and is told why',
+<<<<<<< Updated upstream
     /medicines and meal plan start once a doctor is caring for you/.test(fresh) && !/Breakfast|Lunch|Dinner|Next meal|Next medicine/.test(fresh), fresh.slice(0, 300))
   check('a new patient gets a getting-started reminder that knows what setup already did (details and next of kin done)',
     /Getting started · 2\/4/i.test(fresh) && /Next: Log your first reading/.test(fresh), fresh.slice(0, 400))
@@ -178,6 +179,19 @@ try {
   })
   await step(s, 'empty screens say what to do instead of inventing data', async () => {
     await s.home(); await page.getByRole('button', { name: /Find a doctor$/ }).click(); await page.getByRole('heading', { name: 'Care Team' }).waitFor({ timeout: 10000 })
+=======
+    /Your daily plan starts with your doctor/.test(fresh) && !/Breakfast|Lunch|Dinner|Next meal|Next medicine/.test(fresh), fresh.slice(0, 300))
+  await step(s, 'that notice floats over Home, and once closed it stays closed', async () => {
+    const notice = page.getByRole('status').filter({ hasText: 'Your daily plan starts with your doctor' })
+    await notice.getByRole('button', { name: 'Close' }).click()
+    await notice.waitFor({ state: 'detached', timeout: 5000 })
+    await page.reload()
+    await page.getByText('Health Score').waitFor({ timeout: 25000 })
+    if (await page.getByText('Your daily plan starts with your doctor').count()) throw new Error('the closed notice came back after a reload')
+  })
+  await step(s, 'empty screens say what to do instead of inventing data', async () => {
+    await s.home(); await page.getByRole('button', { name: /Meals$/ }).click(); await page.getByText('No meal plan yet').waitFor({ timeout: 10000 })
+>>>>>>> Stashed changes
     await s.nav('Meds'); await page.getByText('No active prescriptions').waitFor({ timeout: 10000 })
     await page.getByRole('button', { name: 'Find a doctor →' }).click(); await page.getByRole('heading', { name: 'Care Team' }).waitFor({ timeout: 10000 })
     await s.nav('Appts'); await page.getByText('No appointments yet').waitFor({ timeout: 10000 })

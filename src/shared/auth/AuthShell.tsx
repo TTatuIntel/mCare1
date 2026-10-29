@@ -186,6 +186,7 @@ function FlyingLogo({ size = 'lg', onHome }: { size?: 'md' | 'lg'; onHome?: () =
   useLayoutEffect(() => {
     const outer = xRef.current, inner = yRef.current
     if (!outer || !inner) return
+<<<<<<< Updated upstream
     const to = inner.getBoundingClientRect()
     // A logo in a layout hidden at this size (width 0) neither takes the hand-off nor gives one.
     if (to.width) {
@@ -199,6 +200,18 @@ function FlyingLogo({ size = 'lg', onHome }: { size?: 'md' | 'lg'; onHome?: () =
           inner.animate({ translate: [`0 ${dy}px`, '0 0'], scale: [ratio, Math.max(ratio, 1) * 1.12, 1] },
             { duration: FLY_MS, easing: 'cubic-bezier(.3,0,.2,1)' })
         }
+=======
+    const from = lastLogoSpot
+    lastLogoSpot = undefined
+    const to = outer.getBoundingClientRect()
+    const still = reducedMotion()
+    // to.width is 0 while this size's layout is hidden (mobile and tablet).
+    if (from && to.width && !still && performance.now() - from.at < FLY_FROM_MAX_AGE_MS) {
+      const dx = from.x - to.left, dy = from.y - to.top
+      if (Math.abs(dx) + Math.abs(dy) > 2) {
+        outer.animate({ translate: [`${dx}px 0`, '0 0'] }, { duration: FLY_MS, easing: 'cubic-bezier(.65,0,.35,1)' })
+        inner.animate({ translate: [`0 ${dy}px`, '0 0'], scale: [1, 1.12, 1] }, { duration: FLY_MS, easing: 'cubic-bezier(.3,0,.2,1)' })
+>>>>>>> Stashed changes
       }
     }
     // Still in the page here, so a logo caught mid-flight hands on where it had got to.
