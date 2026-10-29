@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Avatar, Page, Pill, BottomSheet, SheetButton, SaveError, useSave, useToast, EmptyState, CarePlanCard } from '@/shared'
 import { usePatient, type PublicDoctor } from './usePatient'
 import { DoctorProfileSheet } from './DoctorProfileSheet'
+import { healthOf, specialtyFit } from '@/shared/lib/health'
 
 /* ─── Care Team ─────────────────────────────────────────────────────── */
 export function CareTeamTab({ go }: { go: (t: string, target?: string) => void }) {
@@ -28,7 +29,12 @@ export function CareTeamTab({ go }: { go: (t: string, target?: string) => void }
   const req = patient.doctorRequest
   const requestedDoctor = req ? doctorById(req.doctorId) : undefined
   // The doctors a patient can ask for: everyone on the roster except the one they already have.
-  const choices = approvedDoctors.filter(d => d.id !== patient.assignedDoctorId)
+  // Doctors whose specialty fits the patient's conditions come first (a hint only; the care team decides).
+  const conditions = healthOf(patient).conditions
+  const fit = (d: PublicDoctor) => specialtyFit(d.specialty, conditions)
+  const ranked = [...approvedDoctors].sort((a, b) => fit(b).score - fit(a).score)
+  const choices = ranked.filter(d => d.id !== patient.assignedDoctorId)
+  const fitNote = (d: PublicDoctor) => { const f = fit(d); return f.score === 2 ? `For your ${f.condition!.toLowerCase()}` : null }
 
   return (
     <Page title="Care Team" status={status} error={error} onRetry={reload}>
@@ -148,13 +154,14 @@ export function CareTeamTab({ go }: { go: (t: string, target?: string) => void }
           <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-3">
             Available Doctors ({approvedDoctors.length})
           </p>
-          {approvedDoctors.map(d => (
+          {ranked.map(d => (
             <button key={d.id} onClick={() => setProfileDoctor(d)}
               className="w-full flex items-center gap-3 py-2.5 border-b border-gray-50 last:border-0 text-left">
               <Avatar name={d.name} avatar={d.avatar} size="xs" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-gray-900 truncate">{d.name}</p>
                 <p className="text-[10px] text-gray-400 truncate">{d.specialty} · {d.hospital}</p>
+                {fitNote(d) && <p className="text-[10px] text-teal-700 font-semibold truncate">✓ {fitNote(d)}</p>}
               </div>
               {d.id === patient.assignedDoctorId
                 ? <Pill color="green">Your Doctor</Pill>
@@ -183,6 +190,7 @@ export function CareTeamTab({ go }: { go: (t: string, target?: string) => void }
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-bold text-gray-900 truncate">{d.name}</p>
                 <p className="text-xs text-gray-500 truncate">{d.specialty} · {d.hospital}</p>
+                {fitNote(d) && <p className="text-[10px] text-teal-700 font-semibold truncate">✓ {fitNote(d)}</p>}
               </div>
             </button>
           ))}

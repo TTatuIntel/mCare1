@@ -39,6 +39,7 @@ What the person sees or says, and where it lives. Screen titles are the `Page` /
 | Says / sees | Code |
 | --- | --- |
 | Home, health score, "up next", reminders, recent readings | `patient/HomeTab.tsx`, `VitalsStrip.tsx`, `ReminderSheet.tsx` |
+| "Getting started", new patient without a doctor, "Find a doctor" | `patient/GettingStarted.tsx` (steps), `HomeTab.tsx`; `enrolled` in `usePatient.ts` |
 | "Vitals" page | `patient/VitalsTab.tsx` |
 | One vital's page ("Vital"), chart, history, fix a typo | `patient/VitalDetail.tsx`, `shared/ui/VitalHistory.tsx`, `shared/ui/vitals.tsx` |
 | Log a reading, "Log all", re-measure banner | `patient/VitalLogSheets.tsx` |
@@ -116,6 +117,7 @@ What the person sees or says, and where it lives. Screen titles are the `Page` /
 | Splash, logo at start | `index.html` `#boot-splash`, `shared/layout/SplashScreen.tsx` |
 | Logo | `shared/layout/MCareLogo.tsx`, `brand.ts` |
 | Bottom bar, side bar, menu, nav | `shared/layout/NavBar.tsx`, `PortalShell.tsx` |
+| Sign out, log out | `shared/ui/SignOutButton.tsx` (sidebar on web, foot of the rail on tablet, home header and Profile on phone) |
 | "Can't reach mCare" / offline / "could not save" banner | `shared/layout/PortalShell.tsx` |
 | Popup, sheet, dialog, modal | `shared/ui/BottomSheet.tsx` |
 | Toast, "saved" message | `useToast` in `shared/ui/BottomSheet.tsx` |
@@ -333,7 +335,8 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `PatientApp.tsx` | Root: `NAV` (home, vitals, medicine, messages, appts), `SCREENS`, badges, `go()`, the floating log button. |
 | `usePatient.ts` (256) | The portal's data hook: the signed-in patient's record, doctors (`doctor`, `consultingDoctors`, `doctorById`), `messagePartners`, `vitalPlans`, `reviews`, `recordViews`, `exportMyRecord`, `conditionDefs`, and every patient action. |
 | `useDaySchedule.ts` | Today's doses/meals with a `toggle`. |
-| `HomeTab.tsx` | Home: health score, up-next, reminders, recent readings, doctor's note, open alerts. |
+| `HomeTab.tsx` | Home: health score, up-next, reminders, recent readings, doctor's note, open alerts; before a doctor, the getting-started reminder and a "Find a doctor" tile. |
+| `GettingStarted.tsx` | `startSteps`, `GettingStarted`: a new patient's first steps (health details, first reading, next of kin, ask for a doctor) as a small reminder floating over Home (no room in the page; "All steps" sheet; closed until tomorrow on that device) until a doctor takes them on. |
 | `VitalsStrip.tsx` (497) | Home-card vitals strip. |
 | `ReminderSheet.tsx` | Reminder detail sheet. |
 | `VitalsTab.tsx` (673) | Vitals overview by group, logging entry points. |
@@ -346,7 +349,7 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `MedicineTab.tsx` | Prescriptions, dose ticks, stopped history. |
 | `MealsTab.tsx` | Meal plan, meal and water logs. |
 | `AppointmentsTab.tsx` | Request, list, cancel, accept a proposed time. |
-| `CareTeamTab.tsx` | Treating and consulting doctors, care plans, directory, request a doctor. |
+| `CareTeamTab.tsx` | Treating and consulting doctors, care plans, directory (doctors fitting the patient's conditions first), request a doctor. |
 | `DoctorProfileSheet.tsx` | A doctor's profile and rating. |
 | `MessagesTab.tsx` | Private threads with the treating doctor and each consulting doctor; former doctors read-only. |
 | `DocsTab.tsx` | The patient's documents. |
@@ -424,12 +427,13 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `medicines.ts` | Prescribing checks: `allergyConflicts` (mirror of `allergy_drug_terms`, keep in step), `conflictLabel`, `alreadyTaking`. |
 | `pathways.ts` | Care pathways: `proposePathway` (a patient's conditions → one proposed plan: every vital, the most frequent measuring, the strictest target, the smallest fluid limit; clashes listed), `planFrom`, `planIssue`. A suggestion: `apply_pathway` decides. |
 | `messaging.ts` | `threadOf`, `partnersOf`, `conversationsOf`. |
-| `health.ts` | Conditions (`COMMON_CONDITIONS` for demo mode; live uses the catalogue), allergies, `suggestedVitals(conditions, catalogue)`, `fluidRestrictionFor` (heart failure, kidney disease), `healthGaps`. |
+| `health.ts` | Conditions (`COMMON_CONDITIONS` for demo mode; live uses the catalogue), allergies, `suggestedVitals(conditions, catalogue)`, `fluidRestrictionFor` (heart failure, kidney disease), `healthGaps`, `specialtyFit` (orders the doctor list; a hint only). |
 | `push.ts` | This device's push subscription. |
 | `ids.ts` | `newRef()` (form reference for once-only saves). |
 | `clipboard.ts` | `copyText()`: copies on https and on plain-http network addresses. |
 | `photo.ts` | `readSquarePhoto` (avatar crop/downscale). |
 | **ui/** | |
+| `SignOutButton.tsx` | The one sign-out button (`sidebar`, `rail`, `card`, `icon` for the phone header with a second-tap confirm), animated on hover and press. |
 | `primitives.tsx` | `Avatar`, `Pill`, `Toggle`, `SectionHead`, `InfoRow`, `PageTitle` (old), `AddButton`, `BackHeader`. |
 | `BottomSheet.tsx` | `BottomSheet`, `Field`, `inputCls`, `SheetButton`, `useSave`, `SaveError`, `useToast`. |
 | `Page.tsx` | `Page`, `EmptyState`, `ErrorState`. |
@@ -1460,7 +1464,7 @@ Check `git status` too: work may have started since this was written.
 
 | Change | Files |
 | --- | --- |
-| **Sign in, sign up and every form step move like the welcome page** (branch `auth-motion-parity`). The logo flies (and resizes) from the welcome page onto the form and back, follows the pointer between the tour and the form on web, and is the way back to welcome; the icons around it spring out, drift with the pointer and act out the tour's feature at every size; every main button (`AuthButton`) is the Get Started pill: lean to the pointer, pointer light, ripple, pulsing ring once it can be pressed. The old 2px hover lift is gone, which also ends the pointer jitter the browser test had to work around (`signIn` in `ui.test.mjs` still moves the pointer away first; harmless). Under reduced motion: no flight, no lean (`reducedMotion()`), icons appear without the spring. Verified: typecheck clean; `test:ui` 70 of 71 (the one failure was another change to `authBackend.ts` saved mid-run, not this one); a separate browser check at 390/834/1366px: one logo on screen on every step, logo flight and button lean measured, sign-up fits a 1366×768 window, no console error. | `src/shared/auth/AuthShell.tsx`, `authKit.tsx`, `WelcomeScreen.tsx` |
+| **A clear start before a doctor, and a sign-out you can see** (branch `onboarding-before-doctor`). Home for a patient with no treating doctor: a small "Getting started" reminder floating over the page instead of the notice (next step, progress, "All steps" sheet; the patient can close it until tomorrow; ticks what setup already did); the Meals tile becomes "Find a doctor"; the health score says "Log your first reading"; Meds' empty page links to the care team; Care Team lists doctors whose specialty fits the patient's conditions first ("✓ For your type 2 diabetes", a hint only). Sign out: an animated red button at the foot of the web sidebar and, new, of the tablet rail (which had none); on phones a red icon in the home header (first tap asks "Sign out?", second signs out); the same button on Profile. Display only, no migration. Verified: typecheck clean; `test:ui` 74/0 (new: the reminder knows what setup did, lists every step, can be closed; the "Find a doctor" tile and the Meds link open Care Team). | `src/patient/GettingStarted.tsx` (new), `HomeTab.tsx`, `MedicineTab.tsx`, `PatientApp.tsx`, `CareTeamTab.tsx`, `src/shared/lib/health.ts`, `src/shared/ui/SignOutButton.tsx` (new), `src/shared/index.ts`, `src/shared/layout/NavBar.tsx`, `src/shared/profile/ProfileCard.tsx`, `supabase/tests/ui.test.mjs` |
 | **P0 clinical safety** (branch `p0-fluid-limit-allergy-check`). *Fluid limit*: a meal plan's water is a goal or a daily limit (`fluid_mode`, migration `0019`); a heart-failure or kidney-disease patient is never shown "drink 8 glasses": without a doctor's figure they are asked to check their limit, with one they see "at most N" and a warning when over; the doctor's form starts such a patient on a limit and warns on a goal; days over the limit show in red to the doctor. *Allergy check*: a prescription matching a recorded allergy is refused by the database unless the doctor gives a reason (kept, audited, shown on the prescription); the form warns first and notes a medicine already being taken. Verified: typecheck clean; `test:db` 418/0; `test:api` 177/0; `test:ui` 72/0 (new: the prescribing form stops a penicillin-allergic patient's amoxicillin until a reason is given). | `supabase/migrations/0019_fluid_limit_allergy_check.sql`, `src/shared/lib/medicines.ts` (new), `health.ts`, `types.ts`, `records.ts`, `actions.ts`, `AppContext.tsx`, `src/doctor/PatientMeds.tsx`, `PatientNutrition.tsx`, `useDoctor.ts`, `src/patient/MealsTab.tsx`, `usePatient.ts`, rules and browser tests |
 | **P1 care pathways** (branch `p1-care-pathways`, on top of P0). Each condition in the catalogue carries a starting plan: how often to measure each vital and a target, a daily fluid limit, a diet note and starter care-plan goals (migration `0020`, seeded and marked *not reviewed*). On the patient overview, "Care from conditions" proposes one plan from all the patient's conditions (every vital, the most frequent measuring, the strictest target, the smallest fluid limit; clashing targets are shown and left to the doctor; unreviewed values are flagged); the doctor edits and applies it in one step (`apply_pathway`: one transaction, audited once, the patient told once; goals become a draft care plan the doctor starts). Admins edit each pathway in Settings → Conditions and mark it clinically reviewed; any later change clears the review. The clinical starting values need a clinician's sign-off before real use. Verified: typecheck clean; `test:db` 426/0; `test:api` 179/0; `test:ui` 73/0 (new: the doctor reviews and applies the pathway for a patient's high blood pressure). | `supabase/migrations/0020_care_pathways.sql`, `src/shared/lib/pathways.ts` (new), `src/doctor/PathwaySheet.tsx` (new), `PatientDetail.tsx`, `useDoctor.ts`, `src/admin/SettingsTab.tsx`, `src/shared/lib/types.ts`, `health.ts` (`DEMO_PATHWAYS`), `records.ts`, `actions.ts`, `AppContext.tsx`, the three test suites |
 
@@ -1468,6 +1472,7 @@ Check `git status` too: work may have started since this was written.
 
 | Change | Commit |
 | --- | --- |
+| **Sign in, sign up and every form step move like the welcome page**. The logo flies (and resizes) from the welcome page onto the form and back, follows the pointer between the tour and the form on web, and is the way back to welcome; the icons around it spring out, drift with the pointer and act out the tour's feature at every size; every main button (`AuthButton`) is the Get Started pill: lean to the pointer, pointer light, ripple, pulsing ring once it can be pressed. The old 2px hover lift is gone, which also ends the pointer jitter the browser test had to work around (`signIn` in `ui.test.mjs` still moves the pointer away first; harmless). Under reduced motion: no flight, no lean (`reducedMotion()`), icons appear without the spring. Verified: typecheck clean; `test:ui` 70 of 71 (the one failure was another change to `authBackend.ts` saved mid-run, not this one); a separate browser check at 390/834/1366px: one logo on screen on every step, logo flight and button lean measured, sign-up fits a 1366×768 window, no console error. | `9d805c1` (on `main`) |
 | **No daily plan before a doctor**. A patient without a treating doctor (`assignedDoctorId`) no longer gets the standard meal plan: Home shows "Your daily plan starts with your doctor" (or "Waiting for your doctor" while a request is pending) with a link to the care team, the up-next ticker and reminders leave out medicines and meals, Meals says "No meal plan yet", and Meds explains that medicines arrive with a doctor. Vitals logging is unchanged. Display only: there is no data to protect (the standard plan is an app default; medicines exist only as a doctor's prescriptions). Typecheck clean; `test:ui` 72/0 (one new check). Files: `usePatient.ts` (`enrolled`), `HomeTab.tsx`, `MealsTab.tsx`, `MedicineTab.tsx`, `PatientApp.tsx`, `ui.test.mjs`. | branch `hide-schedule-until-enrolled` (merged to `main`) |
 | **Delete read notifications.** In the notification panel each read notification has a red bin; "Clear read (N)" removes every read one. Unread ones have no bin and the database refuses to delete them. Email/SMS/push delivery records stay. Files: `0017_clear_read_notifications.sql`, `actions.ts` (`deleteNotification`, `clearReadNotifications`), `AppContext.tsx`, `NotificationBell.tsx`, `server.mjs` (outbox label), all three test suites. | branch `features-merge` (PR into `main`) |
 | **No console errors after sign-out.** The sign-in page's "is mCare reachable?" check asked with the session that had just ended, so the backend refused it (a 401 in the console) right after "Sign out". It now asks with the public key only (`checkBackend`), so it never depends on who is signed in. | `262241f` (merged to `main` in `ff542cc`) |

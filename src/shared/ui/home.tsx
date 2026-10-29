@@ -7,6 +7,7 @@ import { greeting } from '@/shared/lib/vitals'
 import type { AppNotification } from '@/shared/lib/types'
 import { Avatar } from './primitives'
 import { NotificationBell } from './NotificationBell'
+import { SignOutButton } from './SignOutButton'
 
 export const HERO_GRADIENT = 'linear-gradient(135deg,#064f4f 0%,#0a6e6e 55%,#0d9e82 100%)'
 
@@ -30,6 +31,8 @@ export function PortalHeader({ title, eyebrow, onNavigate, onProfile }: {
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
         <NotificationBell onNavigate={onNavigate} />
+        {/* phones have no sidebar or rail: the way out sits in the header (tablet and web keep it in the nav) */}
+        <span className="@2xl:hidden"><SignOutButton variant="icon" /></span>
         <button onClick={onProfile} aria-label="Profile">
           <Avatar name={currentUser.name} avatar={currentUser.avatar} size="sm" />
         </button>
