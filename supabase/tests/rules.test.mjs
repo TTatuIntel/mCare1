@@ -1493,9 +1493,9 @@ await as(VS, `select cancel_sos($1)`, [vsSos])
 
 // Items 2 and 3: nudges.
 const vsHr1 = await vlog('hr', '105')
+await ago(`update readings set taken_at = now() - interval '1 hour' where patient_id = $1 and vital_id = 'hr' and id <> $2`, [VS, vsHr1.id])
 await ago(`update readings set taken_at = now() - interval '20 minutes' where id = $1`, [vsHr1.id])
 await db.query(`select nudge_vitals()`); await db.query(`select nudge_vitals()`)
-console.log('DEBUG', JSON.stringify(vsHr1), JSON.stringify((await db.query("select title, created_at from notifications where user_id = $1 order by created_at desc limit 4", [VS])).rows), JSON.stringify((await db.query("select vital_id, level, taken_at from readings where patient_id = $1 and vital_id = 'hr' order by taken_at", [VS])).rows), JSON.stringify((await db.query("select vital_id, status from alerts where patient_id = $1 and status <> 'resolved'", [VS])).rows))
 check('a single out-of-range reading not re-measured: the patient is reminded once', vsHr1.level === 'warning' && (await told(VS, 'Please measure your Heart Rate again')).length === 1)
 await as(ID.doc, `select set_vital_plan($1, 'temp', 'daily', 'Fever watch')`, [VS])
 await ago(`update tracked_vitals set assigned_at = now() - interval '31 hours' where patient_id = $1 and vital_id = 'temp'`, [VS])
