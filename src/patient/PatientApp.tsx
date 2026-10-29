@@ -60,7 +60,7 @@ export default function PatientApp() {
       {log.sheets}
       {tab ==='home'     && <HomeTab go={go} openVital={openVital} onLog={log.logOne} />}
       {tab ==='vitals'   && <VitalsTab vitalId={vital?.id ?? null} onOpenVital={openVital} onCloseVital={closeVital} go={go} />}
-      {tab ==='medicine' && <MedicineTab />}
+      {tab ==='medicine' && <MedicineTab go={go} />}
       {tab ==='messages' && <MessagesTab go={go} target={target} />}
       {tab ==='appts'    && <AppointmentsTab target={target} go={go} />}
       {tab ==='docs'     && <DocsTab go={go} openDoc={target} />}
