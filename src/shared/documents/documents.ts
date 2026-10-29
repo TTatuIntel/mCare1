@@ -11,7 +11,7 @@ import type {
   AppUser, AdminUser, DoctorUser, PatientUser, VitalDef, AppAlert,
   MedicalDocument, DocCategory, DocBody, DocSourceLink, SupportGrant, VitalsReportRow, VitalsReportInclude, ReportNote,
 } from '@/shared/lib/types'
-import { evaluate, latestValid, targetRange, vitalTrend, stamp, parseValue, alertIsFor, alertStory, resolvedHowLabel } from '@/shared/lib/vitals'
+import { levelOf, latestValid, targetRange, vitalTrend, stamp, parseValue, alertIsFor, alertStory, resolvedHowLabel } from '@/shared/lib/vitals'
 import { SUPPORTED_SUMMARY, formatByExt, extOf, verifyContent, FORMATS } from './fileFormats'
 
 /* ─── Categories ─────────────────────────────────────────────────────── */
@@ -335,8 +335,8 @@ export function buildVitalsReport(
       .map(r => ({ r, p: parseValue(def, r.value) }))
       .filter((x): x is { r: typeof x.r; p: NonNullable<typeof x.p> } => !!x.p)
       .sort((a, b) => a.r.at! - b.r.at!)
-    const points = series.slice(-60).map(({ r, p }) => ({ at: r.at!, v: p.primary, v2: p.secondary, level: evaluate(patient, def, r.value) }))
-    const level = latest ? evaluate(patient, def, latest.value) : 'none'
+    const points = series.slice(-60).map(({ r, p }) => ({ at: r.at!, v: p.primary, v2: p.secondary, level: levelOf(patient, def, r) }))
+    const level = latest ? levelOf(patient, def, latest) : 'none'
     const isBp = def.id === 'bp' && series.some(x => x.p.secondary !== undefined)
     const dia = series.map(x => x.p.secondary).filter((x): x is number => x !== undefined)
     const avg = (xs: number[]) => xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0

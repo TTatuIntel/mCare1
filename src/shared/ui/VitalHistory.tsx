@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import type { PatientUser, VitalDef, VitalReading } from '@/shared/lib/types'
-import { evaluate, parseValue, readingTime, dateLabel, formatReadingValue, toDisplayUnit, type VitalLevel } from '@/shared/lib/vitals'
+import { levelOf, parseValue, readingTime, dateLabel, formatReadingValue, toDisplayUnit, type VitalLevel } from '@/shared/lib/vitals'
 import { levelStyle } from './vitals'
 
 /* ─── A vital's history ───────────────────────────────────────────────
@@ -58,7 +58,7 @@ const FILTERS: { key: Filter; label: string; dot?: string }[] = [
 ]
 
 const factsOf = (patient: PatientUser, def: VitalDef, r: VitalReading): Facts =>
-  ({ r, t: readingTime(r), level: r.invalid ? null : evaluate(patient, def, r.value) })
+  ({ r, t: readingTime(r), level: r.invalid ? null : levelOf(patient, def, r) })
 
 /** Whether a reading passes a filter — the same rule the chips, the list and a chart beside them all use. */
 export const readingMatches = (filter: ReadingFilter, patient: PatientUser, def: VitalDef, r: VitalReading) =>
@@ -164,7 +164,7 @@ export function VitalHistory({
   const items: Row[] = rows.map(r => ({
     r,
     t: readingTime(r),
-    level: r.invalid ? null : evaluate(patient, def, r.value),
+    level: r.invalid ? null : levelOf(patient, def, r),
     n: parseValue(def, r.value)?.primary ?? null,
     delta: deltas.get(r.id) ?? null,
   }))

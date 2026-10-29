@@ -12,14 +12,14 @@
  * Reading lives in ./records.
  */
 import type {
-  PathwayPlan,
+  PathwayPlan, ClinicalSettings, DiaThreshold, ReadingContext, ReadingSource,
   AccountStatus, AdminReport, DeliveryReport, NotifyPrefs, AlertCommentKind, Appointment, ApprovalStatus, AssistantPerm, AvatarSpec, CarePlanDraft, CarePlanItemStatus, CarePlanStatus,
   ConditionDef, DayAvailability, EmergencyContact, FontSizePref, HealthProfile, MealPlan, NoteType, NoteVisibility, Prescription, RecordViewContext,
   RetentionSettings, SecuritySettings, ThemePref, UserRole, VitalDef, VitalFrequency, WorkBlock,
 } from '@/shared/lib/types'
 import type { VitalLevel } from '@/shared/lib/vitals'
 import { getSupabase } from './supabase'
-import { fromVitalDef, isoClock, isoDay } from './records'
+import { fromClinical, fromVitalDef, isoClock, isoDay } from './records'
 
 export class ApiError extends Error {}
 
@@ -177,10 +177,13 @@ export interface SavedReading {
   followsAlert: boolean
 }
 
-export async function logReading(patientId: string, vitalId: string, value: string, note?: string, ref?: string): Promise<SavedReading> {
+/** When it was measured (glucose: fasting, after a meal…) and where it came from; the database grades with the context. */
+export interface ReadingExtras { context?: ReadingContext; source?: ReadingSource }
+export async function logReading(patientId: string, vitalId: string, value: string, note?: string, ref?: string, extras: ReadingExtras = {}): Promise<SavedReading> {
   const supabase = await db()
   const saved = await okOnce(
-    supabase.from('readings').insert({ patient_id: patientId, vital_id: vitalId, value, note: blank(note), ...withRef(ref) }).select('id, level').single())
+    supabase.from('readings').insert({ patient_id: patientId, vital_id: vitalId, value, note: blank(note), context: extras.context ?? null,
+      source: extras.source === 'device' ? 'device' : 'manual', ...withRef(ref) }).select('id, level').single())
   const row = saved.fresh ? saved.data as { id: string; level: VitalLevel }
     : await ok<{ id: string; level: VitalLevel }>(supabase.from('readings').select('id, level').eq('client_ref', ref!).single())
   // The alert, if any, was decided by the database in the same transaction as the reading.
@@ -201,6 +204,15 @@ export const sendAlertNow = async (readingId: string) => { await ok((await db())
 
 export const setThreshold = async (patientId: string, vitalId: string, range: { min: number; max: number }) => {
   await ok((await db()).from('thresholds').upsert({ patient_id: patientId, vital_id: vitalId, target_min: range.min, target_max: range.max }))
+}
+/** Blood pressure: the doctor's personal diastolic target and critical band (null = back to the standard). */
+export async function setDiaThreshold(patientId: string, vitalId: string, dia: DiaThreshold | null, fallbackTarget: { min: number; max: number }) {
+  const supabase = await db()
+  const cols = { dia_target_min: dia?.target?.min ?? null, dia_target_max: dia?.target?.max ?? null,
+    dia_critical_min: dia?.critical?.min ?? null, dia_critical_max: dia?.critical?.max ?? null }
+  const existing = await ok<{ vital_id: string }[]>(supabase.from('thresholds').select('vital_id').eq('patient_id', patientId).eq('vital_id', vitalId))
+  if (existing.length) await ok(supabase.from('thresholds').update(cols).eq('patient_id', patientId).eq('vital_id', vitalId))
+  else if (dia) await ok(supabase.from('thresholds').insert({ patient_id: patientId, vital_id: vitalId, target_min: fallbackTarget.min, target_max: fallbackTarget.max, ...cols }))
 }
 export async function setCriticalThreshold(patientId: string, vitalId: string, range: { min: number; max: number } | null, fallbackTarget: { min: number; max: number }) {
   const supabase = await db()
@@ -435,8 +447,13 @@ export const chaseAlert = async (alertId: string) => { await ok((await db()).rpc
 export const setAssistantPerms = async (id: string, permissions: AssistantPerm[]) => {
   await ok((await db()).from('staff').update({ permissions }).eq('id', id))
 }
-/** Adds or changes one vital definition. The database audits it. */
-export const saveVitalDef = async (def: VitalDef) => { await ok((await db()).from('vital_defs').upsert(fromVitalDef(def))) }
+/** Adds or changes one vital definition in one step. A change to how readings are graded needs a reason; the database audits it
+    (before, after, reason) and tells the treating doctors whose patients it affects. */
+export const saveVitalDef = async (def: VitalDef, reason?: string) => {
+  await ok((await db()).rpc('save_vital_def', { def: fromVitalDef(def), reason: blank(reason) }))
+}
+/** How many active patients are graded by this definition's standard range (no personal target). Admin only. */
+export const vitalDefImpact = async (vitalId: string) => ok<number>((await db()).rpc('vital_def_impact', { vital: vitalId }))
 
 /** Registers someone in advance: they get this role when they sign up with this email (staff roles once the email is confirmed). */
 export const inviteAccount = async (i: { email: string; name: string; role: UserRole; phone?: string }) =>
@@ -452,6 +469,9 @@ export const saveRetentionSettings = async (v: RetentionSettings) => {
   await ok((await db()).rpc('save_settings', { area: 'retention', new_value: {
     audit_days: v.auditDays, deleted_document_days: v.deletedDocumentDays, read_notification_days: v.readNotificationDays, delivery_days: v.deliveryDays,
   } }))
+}
+export const saveClinicalSettings = async (v: ClinicalSettings) => {
+  await ok((await db()).rpc('save_settings', { area: 'clinical', new_value: fromClinical(v) }))
 }
 export interface RetentionRun { documents: number; audit: number; notifications: number; deliveries: number }
 /** Applies the retention settings now instead of waiting for the nightly job. Resolves with what it removed. */

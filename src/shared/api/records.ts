@@ -10,7 +10,7 @@
  */
 import type {
   AccountStatus, AdminUser, AppAlert, AppNotification, AppSettings, AppUser, Appointment, ApprovalStatus, AssistantPerm, AuditEntry,
-  CareAssignment, CarePlan, CareTeamMember, ConditionDef, HoldRule, MedicationDef, PastPatient, RecordView, TimeOff, VitalFrequency, VitalPlan, VitalReview,
+  CareAssignment, CarePlan, ClinicalSettings, GradedRange, CareTeamMember, ConditionDef, HoldRule, MedicationDef, PastPatient, RecordView, TimeOff, VitalFrequency, VitalPlan, VitalReview,
   ClinicalNote, DocEvent, DoctorRating, DoctorRequest, DoctorUser, HydrationLog, Invitation, MealDone, MealPlan, MedDose, MedicalDocument,
   PatientMessage, PatientUser, ReportRequest, ShareLink, SupportGrant, SupportTicket, TargetChange, UserRole, VitalDef, VitalReading,
 } from '@/shared/lib/types'
@@ -109,6 +109,11 @@ export const toVitalDef = (r: Row): VitalDef => ({
   diaNormalMin: num(r.dia_normal_min), diaNormalMax: num(r.dia_normal_max),
   diaCriticalMin: num(r.dia_critical_min), diaCriticalMax: num(r.dia_critical_max),
   unitOptions: r.unit_options ?? undefined,
+  graded: r.graded ?? true, criticalFallback: r.critical_fallback ?? true, groupId: r.group_id ?? undefined,
+  checkinHours: num(r.checkin_hours), decimals: num(r.decimals),
+  contextRanges: r.context_ranges && Object.keys(r.context_ranges).length
+    ? Object.fromEntries(Object.entries(r.context_ranges as Record<string, Row>).map(([k, v]) => [k, { normalMin: num(v.normal_min), normalMax: num(v.normal_max) }]))
+    : undefined,
 })
 
 export const fromVitalDef = (v: VitalDef): Row => ({
@@ -118,12 +123,24 @@ export const fromVitalDef = (v: VitalDef): Row => ({
   dia_normal_min: v.diaNormalMin ?? null, dia_normal_max: v.diaNormalMax ?? null,
   dia_critical_min: v.diaCriticalMin ?? null, dia_critical_max: v.diaCriticalMax ?? null,
   unit_options: v.unitOptions ?? null,
+  graded: v.graded ?? true, critical_fallback: v.criticalFallback ?? true, group_id: v.groupId ?? null,
+  checkin_hours: v.checkinHours ?? null, decimals: v.decimals ?? 0,
+  context_ranges: Object.fromEntries(Object.entries(v.contextRanges ?? {}).map(([k, c]) => [k, { normal_min: c?.normalMin ?? null, normal_max: c?.normalMax ?? null }])),
 })
+
+/** A stamped range from the database ([min, max] arrays, null = no edge) in app shape. */
+const pair = (v: unknown): [number | null, number | null] | null =>
+  Array.isArray(v) ? [v[0] === null || v[0] === undefined ? null : Number(v[0]), v[1] === null || v[1] === undefined ? null : Number(v[1])] : null
+const toGradedRange = (g: Row | null | undefined): GradedRange | undefined => g ? {
+  graded: g.graded !== false, context: g.context ?? null, personal: !!g.personal,
+  target: pair(g.target) ?? [null, null], critical: pair(g.critical) ?? [null, null], diaTarget: pair(g.dia_target), diaCritical: pair(g.dia_critical),
+} : undefined
 
 export const toReading = (r: Row): VitalReading => ({
   id: r.id, vitalId: r.vital_id, value: r.value, at: ms(r.taken_at), loggedAt: when(r.taken_at) ?? '',
   note: r.note ?? undefined, invalid: r.invalid || undefined, invalidReason: r.invalid_reason ?? undefined,
   recordedBy: r.recorded_by ?? undefined, correctedFrom: r.corrected_from ?? undefined, invalidatedBy: r.invalidated_by ?? undefined,
+  level: r.level ?? undefined, context: r.context ?? undefined, source: r.source ?? undefined, gradedRange: toGradedRange(r.graded_range),
 })
 
 /** One page of the audit trail, as a screen shows it. */
@@ -151,8 +168,30 @@ export function toSettings(rows: Row[]): AppSettings {
       readNotificationDays: days(ret.read_notification_days, DEFAULT_SETTINGS.retention.readNotificationDays),
       deliveryDays: days(ret.delivery_days, DEFAULT_SETTINGS.retention.deliveryDays),
     },
+    clinical: toClinical(rows.find(r => r.key === 'clinical')?.value ?? {}),
   }
 }
+function toClinical(c: Row): ClinicalSettings {
+  const d = DEFAULT_SETTINGS.clinical
+  const n = (v: unknown, fallback: number) => (v === undefined || v === null || v === '' ? fallback : Number(v))
+  return {
+    emergencyNumber: typeof c.emergency_number === 'string' && c.emergency_number.trim() ? c.emergency_number.trim() : d.emergencyNumber,
+    escalateMinutes: n(c.escalate_minutes, d.escalateMinutes), criticalReminderMinutes: n(c.critical_reminder_minutes, d.criticalReminderMinutes),
+    warningReminderHours: n(c.warning_reminder_hours, d.warningReminderHours), maxReminders: n(c.max_reminders, d.maxReminders),
+    repeatWarnings: n(c.repeat_warnings, d.repeatWarnings), repeatWarningDays: n(c.repeat_warning_days, d.repeatWarningDays),
+    remeasureWindowHours: n(c.remeasure_window_hours, d.remeasureWindowHours), remeasureNudgeMinutes: n(c.remeasure_nudge_minutes, d.remeasureNudgeMinutes),
+    missedPatientFactor: n(c.missed_patient_factor, d.missedPatientFactor), missedDoctorFactor: n(c.missed_doctor_factor, d.missedDoctorFactor),
+    weightGainKg: n(c.weight_gain_kg, d.weightGainKg), weightGainDays: n(c.weight_gain_days, d.weightGainDays),
+  }
+}
+/** The clinical settings as the database stores them (snake_case). */
+export const fromClinical = (c: ClinicalSettings): Row => ({
+  emergency_number: c.emergencyNumber, escalate_minutes: c.escalateMinutes, critical_reminder_minutes: c.criticalReminderMinutes,
+  warning_reminder_hours: c.warningReminderHours, max_reminders: c.maxReminders, repeat_warnings: c.repeatWarnings,
+  repeat_warning_days: c.repeatWarningDays, remeasure_window_hours: c.remeasureWindowHours, remeasure_nudge_minutes: c.remeasureNudgeMinutes,
+  missed_patient_factor: c.missedPatientFactor, missed_doctor_factor: c.missedDoctorFactor, weight_gain_kg: c.weightGainKg, weight_gain_days: c.weightGainDays,
+})
+
 /** "09:00:00" → "09:00" */
 const hm = (time: string) => time.slice(0, 5)
 
@@ -169,6 +208,7 @@ const toAlert = (r: Row, defs: VitalDef[], remeasures: Row[] = [], comments: Row
   recheckRequestedAt: ms(r.recheck_requested_at), recheckReadingId: r.recheck_reading_id ?? undefined,
   resolvedAt: when(r.resolved_at), resolvedBy: r.resolved_by ?? undefined,
   resolutionReason: r.resolution_reason ?? undefined, resolutionNote: r.resolution_note ?? undefined,
+  rule: r.rule ?? undefined, reminders: r.reminders ?? undefined, lastRemindedAt: ms(r.last_reminded_at),
 })
 
 const toAppointment = (r: Row, events: Row[]): Appointment => ({
@@ -379,6 +419,7 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     }
     const targets = thresholdsOf(p.id)
     const critical = targets.filter(t => t.critical_min !== null && t.critical_max !== null)
+    const dia = targets.filter(t => (t.dia_target_min ?? t.dia_critical_min ?? t.dia_critical_max ?? null) !== null)
     const patient: PatientUser = {
       ...base, role: 'patient',
       assignedDoctorId: pt?.assigned_doctor_id ?? undefined,
@@ -388,6 +429,10 @@ export async function loadRecords(me: AppUser): Promise<Records> {
       trackedVitalIds: trackedOf(p.id).map(t => t.vital_id as string),
       thresholds: Object.fromEntries(targets.map(t => [t.vital_id, { min: Number(t.target_min), max: Number(t.target_max) }])),
       criticalThresholds: critical.length ? Object.fromEntries(critical.map(t => [t.vital_id, { min: Number(t.critical_min), max: Number(t.critical_max) }])) : undefined,
+      diaThresholds: dia.length ? Object.fromEntries(dia.map(t => [t.vital_id, {
+        target: t.dia_target_min !== null && t.dia_target_min !== undefined ? { min: Number(t.dia_target_min), max: Number(t.dia_target_max) } : undefined,
+        critical: t.dia_critical_min !== null || t.dia_critical_max !== null ? { min: num(t.dia_critical_min), max: num(t.dia_critical_max) } : undefined,
+      }])) : undefined,
       // A row that only moved the critical range is not a change of target.
       targetLog: changesOf(p.id).filter(c => c.to_min !== null && !(Number(c.from_min) === Number(c.to_min) && Number(c.from_max) === Number(c.to_max) && c.from_min !== null)).map((c): TargetChange => ({
         vitalId: c.vital_id, at: ms(c.changed_at) ?? 0, by: c.changed_by ?? '',

@@ -56,6 +56,40 @@ export interface VitalDef {
   diaCriticalMax?: number
   /** Alternate display/input units this vital supports (device-dependent), e.g. ['°F','°C']. All stored values, thresholds and hard limits stay in `unit` (the canonical unit); conversion happens only at the display/input boundary. First entry should equal `unit`. */
   unitOptions?: string[]
+  /** False: recorded but never graded or alerted on (height). Default true. */
+  graded?: boolean
+  /** An empty critical edge means "normal ± 25 %" (true, the default) or "no edge" (false). */
+  criticalFallback?: boolean
+  /** Where it is listed when logging several at once. Unknown → the built-in grouping. */
+  groupId?: VitalGroupId
+  /** Hours between readings when the doctor set no rhythm ("fresh / due soon / overdue"). */
+  checkinHours?: number
+  /** Decimals a value is shown with. */
+  decimals?: number
+  /** Normal range per measurement context (glucose fasting / after a meal), canonical unit. A doctor's personal target wins. */
+  contextRanges?: Partial<Record<ReadingContext, { normalMin?: number; normalMax?: number }>>
+}
+
+export type VitalGroupId = 'cardiac' | 'respiratory' | 'metabolic' | 'body'
+
+/** When a reading was taken, for vitals whose range depends on it. */
+export type ReadingContext = 'fasting' | 'before_meal' | 'after_meal' | 'bedtime' | 'resting' | 'after_exercise'
+export const READING_CONTEXT_LABELS: Record<ReadingContext, string> = {
+  fasting: 'Fasting', before_meal: 'Before a meal', after_meal: 'After a meal', bedtime: 'At bedtime', resting: 'At rest', after_exercise: 'After exercise',
+}
+/** Where a reading came from: typed by the patient, entered by the care team, or sent by a device. */
+export type ReadingSource = 'manual' | 'clinic' | 'device'
+export const READING_SOURCE_LABELS: Record<ReadingSource, string> = { manual: 'Entered by the patient', clinic: 'Clinic reading', device: 'From a device' }
+
+/** The ranges a saved reading was graded against (stamped by the database; a null edge = none). */
+export interface GradedRange {
+  graded: boolean
+  context?: ReadingContext | null
+  personal: boolean
+  target: [number | null, number | null]
+  critical: [number | null, number | null]
+  diaTarget?: [number | null, number | null] | null
+  diaCritical?: [number | null, number | null] | null
 }
 
 /** How the account was created. Social accounts have no local password. */
@@ -176,6 +210,11 @@ export interface VitalReading {
   invalidatedBy?: string
   /** The form's reference (see lib/ids): sent with the save so a repeat is recognised. Never shown. */
   clientRef?: string
+  /** The grade the database gave it when saved. Screens prefer it to grading again with today's ranges. */
+  level?: 'normal' | 'warning' | 'critical'
+  context?: ReadingContext
+  source?: ReadingSource
+  gradedRange?: GradedRange
 }
 
 export interface EmergencyContact {
@@ -560,6 +599,8 @@ export interface PatientUser extends BaseUser {
   targetLog?: TargetChange[]
   /** Doctor-set critical band per vital, overriding the admin default for this patient. */
   criticalThresholds?: Record<string, { min: number; max: number }>
+  /** Blood pressure: the doctor's personal diastolic (lower number) target and critical band. */
+  diaThresholds?: Record<string, DiaThreshold>
   /** Patient's preferred display/input unit per vital (must be one of that vital's unitOptions). Falls back to the vital's canonical unit. */
   unitPrefs?: Record<string, string>
   prescriptions: Prescription[]
@@ -677,10 +718,32 @@ export interface RetentionSettings {
   readNotificationDays: number | null
   deliveryDays: number | null
 }
-export interface AppSettings { security: SecuritySettings; retention: RetentionSettings }
+/** Clinical safety: the emergency number and the timings of reminders, escalation and pattern alerts (migration 0023). */
+export interface ClinicalSettings {
+  emergencyNumber: string
+  escalateMinutes: number
+  criticalReminderMinutes: number
+  warningReminderHours: number
+  maxReminders: number
+  repeatWarnings: number
+  repeatWarningDays: number
+  remeasureWindowHours: number
+  remeasureNudgeMinutes: number
+  missedPatientFactor: number
+  missedDoctorFactor: number
+  weightGainKg: number
+  weightGainDays: number
+}
+export interface AppSettings { security: SecuritySettings; retention: RetentionSettings; clinical: ClinicalSettings }
+export interface DiaThreshold { target?: { min: number; max: number }; critical?: { min?: number; max?: number } }
 export const DEFAULT_SETTINGS: AppSettings = {
   security: { mfaRequiredRoles: [], idleMinutes: { admin: 15, assistant: 15, doctor: 15, patient: 0 } },
   retention: { auditDays: null, deletedDocumentDays: 30, readNotificationDays: null, deliveryDays: null },
+  clinical: {
+    emergencyNumber: '999', escalateMinutes: 10, criticalReminderMinutes: 60, warningReminderHours: 24, maxReminders: 3,
+    repeatWarnings: 3, repeatWarningDays: 7, remeasureWindowHours: 24, remeasureNudgeMinutes: 15,
+    missedPatientFactor: 1.25, missedDoctorFactor: 3, weightGainKg: 2, weightGainDays: 3,
+  },
 }
 
 export interface PatientDocPrefs {
@@ -747,7 +810,15 @@ export interface AppAlert {
   resolvedHow?: AlertResolvedHow
   /** What the care team said or did about it, oldest first. */
   comments?: AlertComment[]
+  /** Raised by a pattern rather than one reading's range: closed by the clinician, never by one good number. */
+  rule?: AlertRule
+  /** How many reminders the database has sent about it, and when the last went (epoch ms). */
+  reminders?: number
+  lastRemindedAt?: number
 }
+
+export type AlertRule = 'repeat_warning' | 'weight_gain'
+export const ALERT_RULE_LABELS: Record<AlertRule, string> = { repeat_warning: 'Repeatedly out of range', weight_gain: 'Quick weight gain' }
 
 export type AlertResolvedHow = 'remeasure' | 'doctor' | 'invalid' | 'corrected' | 'patient'
 

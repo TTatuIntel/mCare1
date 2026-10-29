@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useApp, isActiveAlert } from '@/shared/state/AppContext'
 import { BottomSheet, SheetButton, SaveError, useSave, levelStyle } from '@/shared'
-import type { PatientUser, VitalDef } from '@/shared/lib/types'
+import type { PatientUser, ReadingContext, VitalDef } from '@/shared/lib/types'
 import {
   evaluate, alertIsFor, latestValid, targetRange, validateReading, unitView, groupOf, VITAL_GROUPS,
   ago, readingTime, type VitalLevel,
@@ -39,8 +39,19 @@ function WhyItMatters({ why, level }: { why?: string[]; level: VitalLevel }) {
   )
 }
 
-/** One-tap context for a reading; saved as the reading's note, so History can filter on it. */
+/** One-tap context for a reading; saved as the reading's note, so History can filter on it, and, where a tag names a
+    measurement context, as the reading's context too, which the database grades with (glucose fasting / after a meal). */
 const CONTEXT_TAGS = ['Resting', 'Before meal', 'After meal', 'After exercise', 'After medication']
+/** Extra tags for a vital whose range depends on when it was measured. */
+const TIMED_TAGS = ['Fasting', 'At bedtime']
+const TAG_CONTEXT: Record<string, ReadingContext> = {
+  Resting: 'resting', 'Before meal': 'before_meal', 'After meal': 'after_meal', 'After exercise': 'after_exercise', Fasting: 'fasting', 'At bedtime': 'bedtime',
+}
+/** The context a tag stands for, when this vital's ranges depend on it. */
+const contextFor = (def: VitalDef, tag: string): ReadingContext | undefined => {
+  const c = TAG_CONTEXT[tag]
+  return c && def.contextRanges?.[c] ? c : undefined
+}
 
 /**
  * The open alert on a vital that a fresh reading answers. `clears` says an
@@ -86,7 +97,8 @@ export function useVitalLog() {
 
 /* ─── What happened to an out-of-range (or alert-clearing) reading ─── */
 function ResultSheet({ result, onClose }: { result: Result; onClose: () => void }) {
-  const { currentUser, sendAlertNow } = useApp()
+  const { currentUser, sendAlertNow, settings } = useApp()
+  const call = settings.clinical.emergencyNumber
   const [sent, setSent] = useState(false)
   const save = useSave()
   const alerted = result.alerted || sent
@@ -112,11 +124,11 @@ function ResultSheet({ result, onClose }: { result: Result; onClose: () => void 
           : follows && result.level === 'normal'
           ? <p>Your new reading is in range and has been sent to your doctor. Because the first reading was critical, your doctor reviews it and closes the alert.</p>
           : follows && result.level === 'critical'
-          ? <p>This reading is still in the critical range. Your alert stays open and your care team has been told. Contact your doctor now. If you feel unwell — chest pain, breathlessness, confusion — use SOS or call 999.</p>
+          ? <p>This reading is still in the critical range. Your alert stays open and your care team has been told. Contact your doctor now. If you feel unwell — chest pain, breathlessness, confusion — use SOS or call {call}.</p>
           : follows
           ? <p>This reading is still outside your target range, so your alert stays open and your doctor has been told. Message your doctor if it does not settle or you feel unwell. Both readings are kept in your history.</p>
           : result.level === 'critical'
-          ? <p>Your doctor has been alerted immediately. If you feel unwell — chest pain, breathlessness, confusion — use SOS or call 999.</p>
+          ? <p>Your doctor has been alerted immediately. If you feel unwell — chest pain, breathlessness, confusion — use SOS or call {call}.</p>
           : alerted
             ? <p>This reading was out of range again, so your doctor has been notified. You'll see their response under My Alerts.</p>
             : <p>This reading is outside your target range and has been saved. Rest for 5 minutes and measure again: if the next reading is out of range too, it goes to your doctor. You can also send this one now.</p>}
@@ -152,19 +164,21 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
   const u = unitView(def, patient)
   const canon = u.toCanonical(value)
   const error = value.trim() ? validateReading(def, canon, u.unit) : null
-  const lvl = value.trim() && !error ? evaluate(patient, def, canon) : null
-  const range = u.range(targetRange(patient, def))
+  const context = contextFor(def, note)
+  const lvl = value.trim() && !error ? evaluate(patient, def, canon, context) : null
+  const range = u.range(targetRange(patient, def, context))
+  const tags = def.contextRanges ? [...TIMED_TAGS, ...CONTEXT_TAGS] : CONTEXT_TAGS
   const why = patientConditionsByVital(patient, conditionDefs).get(def.id)
   const last = latestValid(patient, def.id)
   const lastAt = last ? readingTime(last) : null
   // The vitals measured together with this one: the rest of its group that the patient tracks.
-  const group = VITAL_GROUPS.find(g => g.id === groupOf(def.id))
-  const siblings = vitalDefs.filter(v => v.active && v.id !== def.id && patient.trackedVitalIds.includes(v.id) && groupOf(v.id) === group?.id)
+  const group = VITAL_GROUPS.find(g => g.id === groupOf(def.id, def))
+  const siblings = vitalDefs.filter(v => v.active && v.id !== def.id && patient.trackedVitalIds.includes(v.id) && groupOf(v.id, v) === group?.id)
 
   /** Saves, then closes; `then` runs instead of closing when the reading needs no follow-up. */
   const save = async (then: () => void = onClose) => {
     if (!value.trim() || error) return
-    const saved = await saving.run(() => logReading(patient.id, { id: `rd_${Date.now()}`, vitalId, value: canon, loggedAt: '', note: note.trim() || undefined }))
+    const saved = await saving.run(() => logReading(patient.id, { id: `rd_${Date.now()}`, vitalId, value: canon, loggedAt: '', note: note.trim() || undefined, context }))
     if (!saved.ok) return   // nothing was saved: the sheet stays open with what was typed and says why
     const res = saved.value
     if (res.level !== 'normal' || res.cleared || res.followsAlert) setResult({ ...res, name: def.name, value: `${u.value(canon)} ${u.unit}`, why })
@@ -175,7 +189,7 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
 
   return (
     <BottomSheet open onClose={onClose} title={`${def.icon} Log ${def.name}`}
-      subtitle={`${u.unit} · target ${range.min}–${range.max}${last ? ` · last ${u.value(last.value)}${lastAt ? `, ${ago(lastAt, now)}` : ''}` : ''}`}
+      subtitle={`${u.unit} · target ${range.min}–${range.max}${context ? ` (${note.toLowerCase()})` : ''}${last ? ` · last ${u.value(last.value)}${lastAt ? `, ${ago(lastAt, now)}` : ''}` : ''}`}
       footer={<><SheetButton tone="ghost" onClick={onClose}>Cancel</SheetButton>
         <SheetButton disabled={!value.trim() || !!error || saving.busy} onClick={() => save()}>{saving.busy ? 'Saving…' : 'Save Reading'}</SheetButton></>}>
       {sc && (
@@ -209,7 +223,7 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
       {lvl && <WhyItMatters why={why} level={lvl} />}
       {/* context: one tap for the common cases, or type your own */}
       <div className="flex flex-wrap gap-1.5 mt-3">
-        {CONTEXT_TAGS.map(t => (
+        {tags.map(t => (
           <button key={t} onClick={() => setNote(note === t ? '' : t)} aria-pressed={note === t}
             className={`text-[10px] font-semibold px-2.5 py-1 rounded-full border transition-colors ${
               note === t ? 'bg-teal-50 text-teal-700 border-teal-300' : 'bg-white text-gray-500 border-gray-200'}`}>
@@ -260,7 +274,7 @@ export function LogAllSheet({ onClose, onSaved, groupId }: {
   const patient = currentUser as PatientUser
   const whyFor = patientConditionsByVital(patient, conditionDefs)
   const only = VITAL_GROUPS.find(g => g.id === groupId)
-  const tracked = vitalDefs.filter(v => v.active && patient.trackedVitalIds.includes(v.id) && (!only || groupOf(v.id) === only.id))
+  const tracked = vitalDefs.filter(v => v.active && patient.trackedVitalIds.includes(v.id) && (!only || groupOf(v.id, v) === only.id))
   const [values, setValues] = useState<Record<string, string>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [openGroup, setOpenGroup] = useState<string | null>(null)
@@ -270,7 +284,7 @@ export function LogAllSheet({ onClose, onSaved, groupId }: {
   if (result) return <ResultSheet result={result} onClose={onClose} />
 
   const groups = VITAL_GROUPS
-    .map(g => ({ ...g, vitals: tracked.filter(v => groupOf(v.id) === g.id) }))
+    .map(g => ({ ...g, vitals: tracked.filter(v => groupOf(v.id, v) === g.id) }))
     .filter(g => g.vitals.length > 0)
   // First group is open by default so the sheet is never a wall of closed rows.
   const activeGroup = openGroup ?? groups[0]?.id ?? null

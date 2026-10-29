@@ -3,7 +3,7 @@ import { isActiveAlert } from '@/shared/state/AppContext'
 import { BackHeader, Pill, AlertStatusPill, VitalCard, VitalChart, HealthSummary, CarePlanCard, EmptyState, useSave, SaveError } from '@/shared'
 import type { CareTeamMember, PatientUser } from '@/shared/lib/types'
 import { NOTE_TYPE_LABELS } from '@/shared/lib/types'
-import { evaluate, latestValid, targetRange, vitalTrend, ago } from '@/shared/lib/vitals'
+import { levelOf, latestValid, targetRange, vitalTrend, ago } from '@/shared/lib/vitals'
 import { useDoctor } from './useDoctor'
 
 /* ─── A patient this doctor consults on ───────────────────────────────
@@ -54,7 +54,7 @@ export function ConsultView({ patient, member, onBack }: { patient: PatientUser;
           <div className="grid grid-cols-3 gap-2">
             {tracked.map(def => {
               const latest = latestValid(patient, def!.id)
-              return <VitalCard key={def!.id} def={def!} value={latest?.value} level={latest ? evaluate(patient, def!, latest.value) : null} at={latest?.at} now={now} />
+              return <VitalCard key={def!.id} def={def!} value={latest?.value} level={latest ? levelOf(patient, def!, latest) : null} at={latest?.at} now={now} />
             })}
           </div>
         )}

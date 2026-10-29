@@ -2,26 +2,44 @@
  * Single source of truth for evaluating vital readings.
  * Used by the alert engine (AppContext) and every screen that colours a value.
  */
-import type { AppAlert, PatientUser, VitalDef, VitalReading } from './types'
+import type { AppAlert, GradedRange, PatientUser, ReadingContext, VitalDef, VitalReading } from './types'
 import { FREQUENCY_HOURS } from './types'
 
 export type VitalLevel = 'normal' | 'warning' | 'critical'
 
 export interface Range { min: number; max: number }
 
-/** Doctor's personal target overrides the admin default. */
-export function targetRange(patient: PatientUser, def: VitalDef): Range {
-  return patient.thresholds[def.id] ?? { min: def.normalMin, max: def.normalMax }
+/* The same rules as grading_range / grade_reading in the database (migration 0024); supabase/tests/rules.test.mjs checks
+   that both give the same grade for a shared set of values. A missing edge is ±Infinity here and null there. */
+
+/** Doctor's personal target, else the range for when it was measured (glucose fasting…), else the admin default. */
+export function targetRange(patient: PatientUser, def: VitalDef, context?: ReadingContext): Range {
+  const personal = patient.thresholds[def.id]
+  if (personal) return personal
+  const c = context ? def.contextRanges?.[context] : undefined
+  return { min: c?.normalMin ?? def.normalMin, max: c?.normalMax ?? def.normalMax }
 }
 
-/** Admin default, unless the doctor has set a personal critical band for this patient. */
-function criticalRange(def: VitalDef, patient?: PatientUser): Range {
+/** Doctor's critical band, else the admin's; an empty edge is normal ± 25 % or none (criticalFallback false).
+    A critical edge always lies outside the target: one inside it moves out by a quarter of the target's width. */
+function criticalRange(def: VitalDef, patient?: PatientUser, target: Range = { min: def.normalMin, max: def.normalMax }): Range {
   const override = patient?.criticalThresholds?.[def.id]
-  if (override) return override
   const span = def.normalMax - def.normalMin
+  const fallback = def.criticalFallback !== false
+  let min = override?.min ?? def.criticalMin ?? (fallback ? def.normalMin - span * 0.25 : -Infinity)
+  let max = override?.max ?? def.criticalMax ?? (fallback ? def.normalMax + span * 0.25 : Infinity)
+  const width = target.max - target.min
+  if (min >= target.min) min = target.min - width * 0.25
+  if (max <= target.max) max = target.max + width * 0.25
+  return { min, max }
+}
+
+/** Blood pressure's lower number: the doctor's diastolic target and band, else the admin's, else 60–90 / 40–120. */
+function diaRanges(def: VitalDef, patient?: PatientUser): { target: Range; critical: Range } {
+  const own = patient?.diaThresholds?.[def.id]
   return {
-    min: def.criticalMin ?? def.normalMin - span * 0.25,
-    max: def.criticalMax ?? def.normalMax + span * 0.25,
+    target: own?.target ?? { min: def.diaNormalMin ?? 60, max: def.diaNormalMax ?? 90 },
+    critical: { min: own?.critical?.min ?? def.diaCriticalMin ?? 40, max: own?.critical?.max ?? def.diaCriticalMax ?? 120 },
   }
 }
 
@@ -60,22 +78,51 @@ function level(n: number, target: Range, crit: Range): VitalLevel {
 const worse = (a: VitalLevel, b: VitalLevel): VitalLevel =>
   a === 'critical' || b === 'critical' ? 'critical' : a === 'warning' || b === 'warning' ? 'warning' : 'normal'
 
-/** Evaluate a raw value for a patient. Unparseable values count as normal (they are rejected at input). */
-export function evaluate(patient: PatientUser, def: VitalDef, raw: string): VitalLevel {
+/** Evaluate a raw value for a patient (and when it was measured). Unparseable values count as normal (they are
+    rejected at input); a vital that is recorded but not graded (height) is always normal. */
+export function evaluate(patient: PatientUser, def: VitalDef, raw: string, context?: ReadingContext): VitalLevel {
   const p = parseValue(def, raw)
-  if (!p) return 'normal'
-  let result = level(p.primary, targetRange(patient, def), criticalRange(def, patient))
+  if (!p || def.graded === false) return 'normal'
+  const target = targetRange(patient, def, context)
+  let result = level(p.primary, target, criticalRange(def, patient, target))
   if (def.id === 'bp' && p.secondary !== undefined) {
-    const dTarget = { min: def.diaNormalMin ?? 60, max: def.diaNormalMax ?? 90 }
-    const dCrit = { min: def.diaCriticalMin ?? 40, max: def.diaCriticalMax ?? 120 }
-    result = worse(result, level(p.secondary, dTarget, dCrit))
+    const d = diaRanges(def, patient)
+    result = worse(result, level(p.secondary, d.target, d.critical))
   }
   return result
 }
 
-/** Exposed so screens can show the effective critical band (doctor override or admin default). */
+/** A saved reading's grade: the one the database stamped when it was saved, so a later change of target does not
+    re-colour history; graded again here only when there is none (demo mode, a reading still being typed). */
+export function levelOf(patient: PatientUser, def: VitalDef, r: VitalReading): VitalLevel {
+  return r.level ?? evaluate(patient, def, r.value, r.context)
+}
+
+/** Exposed so screens can show the effective critical band (doctor override or admin default). An edge may be ±Infinity (none). */
 export function effectiveCriticalRange(def: VitalDef, patient?: PatientUser): Range {
-  return criticalRange(def, patient)
+  return criticalRange(def, patient, targetRange(patient ?? ({ thresholds: {} } as unknown as PatientUser), def))
+}
+
+/** The ranges a reading of this vital is graded against now, in the database's shape (for a demo-mode reading's stamp). */
+export function gradingRange(patient: PatientUser, def: VitalDef, context?: ReadingContext): GradedRange {
+  const target = targetRange(patient, def, context), crit = criticalRange(def, patient, target)
+  const edge = (n: number) => (Number.isFinite(n) ? n : null)
+  const d = def.id === 'bp' ? diaRanges(def, patient) : undefined
+  return {
+    graded: def.graded !== false, context: context ?? null, personal: !!patient.thresholds[def.id],
+    target: [target.min, target.max], critical: [edge(crit.min), edge(crit.max)],
+    diaTarget: d ? [d.target.min, d.target.max] : null, diaCritical: d ? [d.critical.min, d.critical.max] : null,
+  }
+}
+
+/** "90–130", "≤ 90", "≥ 130" or "none" for a pair of edges (null / ±Infinity = no edge). */
+export function rangeWords(min: number | null | undefined, max: number | null | undefined, unit = ''): string {
+  const has = (n: number | null | undefined): n is number => n !== null && n !== undefined && Number.isFinite(n)
+  const u = unit ? ` ${unit}` : ''
+  if (has(min) && has(max)) return `${min}–${max}${u}`
+  if (has(min)) return `≤ ${min}${u}`
+  if (has(max)) return `≥ ${max}${u}`
+  return 'none'
 }
 
 /** Whether an alert is about this vital — by id, falling back to the name on alerts that carry no id. */
@@ -103,7 +150,7 @@ export function riskScore(
     const def = defs.find(d => d.id === id)
     const r = latestValid(patient, id)
     if (!def || !r) return
-    const l = evaluate(patient, def, r.value)
+    const l = levelOf(patient, def, r)
     score += l === 'critical' ? 15 : l === 'warning' ? 6 : 0
   })
   const last = patient.readings.find(r => r.at)?.at
@@ -123,7 +170,7 @@ export function healthScore(patient: PatientUser, defs: VitalDef[]): number | nu
     .map(id => {
       const def = defs.find(d => d.id === id)
       const r = latestValid(patient, id)
-      return def && r ? evaluate(patient, def, r.value) : null
+      return def && r && def.graded !== false ? levelOf(patient, def, r) : null
     })
     .filter((x): x is VitalLevel => x !== null)
   if (evals.length === 0) return null
@@ -584,9 +631,10 @@ export function planHours(patient: PatientUser | undefined, vitalId: string): nu
   return f ? FREQUENCY_HOURS[f] ?? undefined : undefined
 }
 
-/** Pass the patient to follow the frequency their doctor set for this vital; otherwise the usual cadence applies. */
-export function checkInStatus(vitalId: string, lastAt: number | undefined, now = Date.now(), patient?: PatientUser): CheckIn {
-  const intervalHours = planHours(patient, vitalId) ?? CHECKIN_HOURS[vitalId] ?? 24
+/** Pass the patient to follow the frequency their doctor set for this vital; otherwise the definition's rhythm (an admin
+    sets it), else the built-in one, applies. */
+export function checkInStatus(vitalId: string, lastAt: number | undefined, now = Date.now(), patient?: PatientUser, def?: VitalDef): CheckIn {
+  const intervalHours = planHours(patient, vitalId) ?? def?.checkinHours ?? CHECKIN_HOURS[vitalId] ?? 24
   if (lastAt === undefined) return { state: 'none', elapsed: 1, intervalHours }
   const span = intervalHours * 3600_000
   const ratio = (now - lastAt) / span
@@ -624,7 +672,7 @@ const GROUP_OF: Record<string, VitalGroup> = {
   wt: 'body', ht: 'body',
 }
 
-/** Which group a vital belongs to. Unknown vitals fall into body measurements. */
-export function groupOf(vitalId: string): VitalGroup {
-  return GROUP_OF[vitalId] ?? 'body'
+/** Which group a vital belongs to: the definition's own (an admin sets it), else the built-in list; unknown vitals fall into body measurements. */
+export function groupOf(vitalId: string, def?: VitalDef): VitalGroup {
+  return def?.groupId ?? GROUP_OF[vitalId] ?? 'body'
 }

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject, type CSSProperties } from 'react'
 import type { PatientUser, VitalDef } from '@/shared/lib/types'
 import {
-  evaluate, latestValid, targetRange, parseValue, displayUnitFor, formatReadingValue, toDisplayUnit,
+  levelOf, latestValid, targetRange, parseValue, displayUnitFor, formatReadingValue, toDisplayUnit,
   checkInStatus, shortDuration, type VitalLevel, type CheckIn,
 } from '@/shared/lib/vitals'
 import { conditionsByVital, healthOf } from '@/shared/lib/health'
@@ -76,7 +76,7 @@ function seriesFor(patient: PatientUser, def: VitalDef, unit: string, days: Span
         at: r.at as number,
         hi: toDisplayUnit(p.primary, def.unit, unit),
         lo: p.secondary === undefined ? undefined : toDisplayUnit(p.secondary, def.unit, unit),
-        level: evaluate(patient, def, r.value),
+        level: levelOf(patient, def, r),
       }]
     })
     .sort((a, b) => a.at - b.at)
@@ -250,8 +250,8 @@ export function VitalsStrip({ patient, defs, ids, now, onOpen, onLog }: {
           if (!def) return null
           const unit = displayUnitFor(def, patient)
           const r = latestValid(patient, id)
-          const l = r ? evaluate(patient, def, r.value) : null
-          const c = checkInStatus(id, r?.at, now, patient)
+          const l = r ? levelOf(patient, def, r) : null
+          const c = checkInStatus(id, r?.at, now, patient, def)
           const tone = CHECKIN_TONE[c.state]
           const pts = seriesFor(patient, def, unit, span, now)
           const dir = trendDir(pts, patient, def, unit)
@@ -367,8 +367,8 @@ function TrendPopover({ open, patient, def, span, onSpan, now, pos, popRef, onOp
   // Why the patient tracks this: the conditions that call for it.
   const why = conditionsByVital(healthOf(patient).conditions, conditionDefs.length ? conditionDefs : undefined).get(def.id)
   const last = latestValid(patient, def.id)
-  const lastLevel = last ? evaluate(patient, def, last.value) : null
-  const c = checkInStatus(def.id, last?.at, now, patient)
+  const lastLevel = last ? levelOf(patient, def, last) : null
+  const c = checkInStatus(def.id, last?.at, now, patient, def)
   const t = targetRange(patient, def)
   const band = { min: toDisplayUnit(t.min, def.unit, unit), max: toDisplayUnit(t.max, def.unit, unit) }
   const diaBand = def.id === 'bp' ? { min: def.diaNormalMin ?? 60, max: def.diaNormalMax ?? 90 } : undefined

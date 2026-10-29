@@ -1032,6 +1032,7 @@ export async function startBackend(options = {}) {
   const timers = options.jobs === false ? [] : [
     setInterval(() => { deliverQueued().catch(e => console.error('delivery job:', e.message)) }, 10_000),
     setInterval(() => { q(`select public.escalate_stale_alerts()`).then(notePulse, e => console.error('escalation job:', e.message)) }, 60_000),
+    setInterval(() => { q(`select public.nudge_vitals()`).then(notePulse, e => console.error('nudge job:', e.message)) }, 5 * 60_000),
     setInterval(() => { q(`select public.apply_retention()`).then(notePulse, e => console.error('retention job:', e.message)) }, 6 * 3600_000),
     setInterval(() => { q(`select public.complete_ended_prescriptions()`).then(notePulse, e => console.error('prescription job:', e.message)) }, 3600_000),
   ]

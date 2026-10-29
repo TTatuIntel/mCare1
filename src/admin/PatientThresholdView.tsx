@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { BackHeader, EmptyState } from '@/shared'
-import { evaluate, latestValid } from '@/shared/lib/vitals'
+import { levelOf, latestValid } from '@/shared/lib/vitals'
 import type { PatientUser } from '@/shared/lib/types'
 import { useAdmin } from './useAdmin'
 
@@ -29,7 +29,7 @@ export default function PatientThresholdView({ patient, onBack }: { patient: Pat
           {tracked.map(v => {
             const thr = patient.thresholds[v.id]
             const last = latestValid(patient, v.id)
-            const lvl = last ? evaluate(patient, v, last.value) : null
+            const lvl = last ? levelOf(patient, v, last) : null
             return (
               <div key={v.id} className="flex items-center gap-3 py-2.5 border-b border-gray-50 last:border-0">
                 <span className="text-lg w-7 text-center">{v.icon}</span>
