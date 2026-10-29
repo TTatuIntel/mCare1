@@ -378,6 +378,18 @@ export interface Prescription {
   startDate?: string
   endDate?: string
   stopReason?: string
+  /** The catalogue medicine, when it was chosen from the catalogue (migration 0021). */
+  medicationCode?: string
+  /** Dose times, minutes after midnight, in order. Absent: the frequency's usual times. */
+  times?: number[]
+  /** How it goes with meals. */
+  withMeal?: MealLink
+  /** Check this vital before each dose; do not take it when the reading is past the limit. */
+  holdIf?: HoldRule
+  /** The condition it treats, when the catalogue knows it. */
+  conditionCode?: string
+  /** Why the doctor prescribed it despite a recorded allergy (kept and audited by the database). */
+  allergyOverride?: string
   stoppedAt?: string
   stoppedBy?: string
   history?: RxEvent[]
@@ -621,7 +633,34 @@ export interface ConditionDef {
   icon: string
   icd10?: string
   active: boolean
+  /** The vitals this condition calls for, in order. */
   vitals: string[]
+  /** Other words patients use for it ("high bp"); a typed condition containing one suggests this condition's vitals. */
+  keywords?: string[]
+  /* ── The care pathway: a starting plan the treating doctor reviews and applies (migration 0020) ── */
+  /** Per vital: how often to measure it and a target (base units), when the pathway suggests one. */
+  vitalPlans?: Record<string, PathwayVital>
+  /** A daily fluid limit in glasses (heart failure, kidney disease). */
+  fluidLimitGlasses?: number
+  dietNote?: string
+  /** Starter goals for the care plan. */
+  goals?: { text: string; vitalId?: string }[]
+  /** When an admin last confirmed the pathway is clinically right; cleared when its content changes. */
+  reviewedAt?: string
+  reviewedBy?: string
+}
+
+export interface PathwayVital { frequency?: VitalFrequency; targetMin?: number; targetMax?: number }
+
+/** What the treating doctor applies for a patient (`apply_pathway`): reviewed and edited from the proposal. */
+export interface PathwayPlan {
+  /** The condition codes it was built from. */
+  conditions: string[]
+  vitals: { vitalId: string; frequency?: VitalFrequency; reason?: string; conditionCode?: string; targetMin?: number; targetMax?: number }[]
+  fluidLimitGlasses?: number
+  dietNote?: string
+  goals: { text: string; vitalId?: string }[]
+  carePlanTitle?: string
 }
 
 /* ─── Settings an administrator decides ─────────────────────────────── */
@@ -832,14 +871,43 @@ export interface PlannedMeal {
   fat?: number
 }
 
+/** How a medicine goes with meals. */
+export type MealLink = 'before' | 'with' | 'after' | 'any'
+export const MEAL_LINK_LABELS: Record<MealLink, string> = { before: 'Before food', with: 'With food', after: 'After food', any: 'With or without food' }
+
+/** "Check blood pressure before each dose; hold it below 100." */
+export interface HoldRule { vitalId: string; below?: number; above?: number }
+
+/** A medicine in the catalogue (admin-managed reference data, migration 0021). */
+export interface MedicationDef {
+  code: string
+  name: string
+  drugClass: string
+  forms: string[]
+  usualDoses: string[]
+  route?: RxRoute
+  withMeal?: MealLink
+  /** Vitals to track while taking it; prescribing it starts tracking them. */
+  monitorVitals: string[]
+  /** The usual "check before taking" rule, offered when prescribing. */
+  holdIf?: HoldRule
+  note?: string
+  active: boolean
+}
+
+/** Water as a target to reach, or a fluid restriction not to pass. */
+export type FluidMode = 'goal' | 'limit'
+
 /** What the treating doctor set for a patient's meals. A patient without one follows the standard plan. */
 export interface MealPlan {
   patientId: string
   /** Empty = the standard meals. */
   meals: PlannedMeal[]
   targetKcal?: number
-  /** Glasses of water a day. */
+  /** Glasses a day: at least this many (`goal`), or at most (`limit`, a fluid restriction). */
   waterGoal: number
+  /** `limit` for a fluid restriction (heart failure, kidney disease); `goal` otherwise. */
+  fluidMode: FluidMode
   dietaryNote?: string
   setBy?: string
 }

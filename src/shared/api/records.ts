@@ -10,7 +10,7 @@
  */
 import type {
   AccountStatus, AdminUser, AppAlert, AppNotification, AppSettings, AppUser, Appointment, ApprovalStatus, AssistantPerm, AuditEntry,
-  CareAssignment, CarePlan, CareTeamMember, ConditionDef, PastPatient, RecordView, TimeOff, VitalFrequency, VitalPlan, VitalReview,
+  CareAssignment, CarePlan, CareTeamMember, ConditionDef, HoldRule, MedicationDef, PastPatient, RecordView, TimeOff, VitalFrequency, VitalPlan, VitalReview,
   ClinicalNote, DocEvent, DoctorRating, DoctorRequest, DoctorUser, HydrationLog, Invitation, MealDone, MealPlan, MedDose, MedicalDocument,
   PatientMessage, PatientUser, ReportRequest, ShareLink, SupportGrant, SupportTicket, TargetChange, UserRole, VitalDef, VitalReading,
 } from '@/shared/lib/types'
@@ -62,6 +62,7 @@ export interface Records {
   settings: AppSettings
   /** The conditions catalogue, with the vitals each calls for. */
   conditionDefs: ConditionDef[]
+  medicationDefs: MedicationDef[]
   /** Each time the treating doctor reviewed a patient's readings. */
   vitalReviews: VitalReview[]
   /** Who opened a patient's record: the patient's own list, or all of them for staff who view logs. */
@@ -96,6 +97,9 @@ const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000)
 
 /* ─── Rows → the app's shapes ───────────────────────────────────────── */
 const num = (v: unknown) => (v === null || v === undefined ? undefined : Number(v))
+/** A hold rule as the database keeps it ({ vital_id, below?, above? }). */
+const toHold = (h: { vital_id?: string; below?: number | string; above?: number | string } | null | undefined): HoldRule | undefined =>
+  h && h.vital_id ? { vitalId: h.vital_id, below: num(h.below), above: num(h.above) } : undefined
 
 export const toVitalDef = (r: Row): VitalDef => ({
   id: r.id, name: r.name, unit: r.unit, icon: r.icon, active: r.active,
@@ -288,7 +292,7 @@ export async function loadRecords(me: AppUser): Promise<Records> {
 
   // The newer parts of the record, and what belongs to one role.
   const [rxEvents, planRows, planItemRows, planEventRows, assignmentRows, hourRows, timeOffRows, pastRows, remeasureRows, alertCommentRows, teamRows,
-    settingRows, conditionRows, conditionVitalRows, reviewRows, viewRows, directoryRows, signatureRows] = await Promise.all([
+    settingRows, conditionRows, conditionVitalRows, conditionGoalRows, medicationRows, reviewRows, viewRows, directoryRows, signatureRows] = await Promise.all([
     rows('prescription_events', q => q.order('id')),
     rows('care_plans', q => q.order('created_at', { ascending: false })),
     rows('care_plan_items', q => q.order('position')),
@@ -303,6 +307,8 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     rows('app_settings'),
     rows('condition_defs', q => q.order('position')),
     rows('condition_vitals', q => q.order('position')),
+    rows('condition_goals', q => q.order('position')),
+    rows('medication_defs', q => q.order('name')),
     rows('vital_reviews', q => q.order('reviewed_through', { ascending: false }).limit(1000)),
     rows('record_views', q => q.order('created_at', { ascending: false }).limit(300)),
     // Approved doctors with their public details: how anyone finds a doctor they do not deal with yet.
@@ -394,7 +400,9 @@ export async function loadRecords(me: AppUser): Promise<Records> {
         id: r.id, medication: r.medication, dosage: r.dosage, frequency: r.frequency, purpose: r.purpose ?? '',
         prescribedAt: dateLabel(new Date(r.prescribed_at)), doctorId: r.doctor_id, active: r.active,
         status: r.status ?? (r.active ? 'active' : 'discontinued'), route: r.route ?? undefined, instructions: r.instructions ?? undefined,
-        startDate: r.start_date ?? undefined, endDate: r.end_date ?? undefined, stopReason: r.stop_reason ?? undefined,
+        startDate: r.start_date ?? undefined, endDate: r.end_date ?? undefined, stopReason: r.stop_reason ?? undefined, allergyOverride: r.allergy_override ?? undefined,
+        medicationCode: r.medication_code ?? undefined, times: Array.isArray(r.times) ? r.times.map(Number) : undefined, withMeal: r.with_meal ?? undefined,
+        holdIf: toHold(r.hold_if), conditionCode: r.condition_code ?? undefined,
         stoppedAt: when(r.stopped_at), stoppedBy: r.stopped_by ?? undefined,
         history: rxEvents.filter(e => e.prescription_id === r.id).map(e => ({
           id: String(e.id), action: e.action, actorId: e.actor_id ?? undefined, detail: e.detail ?? undefined, at: ms(e.created_at) ?? 0, createdAt: when(e.created_at) ?? '',
@@ -480,6 +488,17 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     conditionDefs: conditionRows.map(c => ({
       code: c.code, name: c.name, icon: c.icon ?? '🩺', icd10: c.icd10 ?? undefined, active: c.active,
       vitals: conditionVitalRows.filter(v => v.condition_code === c.code).map(v => v.vital_id as string),
+      keywords: (c.keywords as string[] | null) ?? [],
+      vitalPlans: Object.fromEntries(conditionVitalRows.filter(v => v.condition_code === c.code).map(v => [v.vital_id, {
+        frequency: v.frequency ?? undefined, targetMin: num(v.target_min), targetMax: num(v.target_max),
+      }])),
+      fluidLimitGlasses: c.fluid_limit_glasses ?? undefined, dietNote: c.diet_note ?? undefined,
+      goals: conditionGoalRows.filter(g => g.condition_code === c.code).map(g => ({ text: g.text as string, vitalId: g.vital_id ?? undefined })),
+      reviewedAt: when(c.reviewed_at), reviewedBy: c.reviewed_by ?? undefined,
+    })),
+    medicationDefs: medicationRows.map(r => ({
+      code: r.code, name: r.name, drugClass: r.drug_class ?? '', forms: r.forms ?? [], usualDoses: r.usual_doses ?? [], route: r.route ?? undefined,
+      withMeal: r.with_meal ?? undefined, monitorVitals: r.monitor_vitals ?? [], holdIf: toHold(r.hold_if), note: r.note ?? undefined, active: r.active,
     })),
     vitalReviews: reviewRows.map(r => ({
       id: r.id, patientId: r.patient_id, reviewerId: r.reviewer_id, reviewedThrough: ms(r.reviewed_through) ?? 0, note: r.note ?? undefined,
@@ -495,7 +514,7 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     })),
     mealPlans: mealPlanRows.map(r => ({
       patientId: r.patient_id, meals: Array.isArray(r.meals) ? r.meals : [], targetKcal: r.target_kcal ?? undefined,
-      waterGoal: r.water_goal ?? 8, dietaryNote: r.dietary_note ?? undefined, setBy: r.set_by ?? undefined,
+      waterGoal: r.water_goal ?? 8, fluidMode: r.fluid_mode === 'limit' ? 'limit' : 'goal', dietaryNote: r.dietary_note ?? undefined, setBy: r.set_by ?? undefined,
     })),
     hydration: hydrationRows.map(r => ({ patientId: r.patient_id, day: r.day, glasses: r.glasses })),
     ratings: ratingRows.map(r => ({ patientId: r.patient_id, doctorId: r.doctor_id, rating: r.rating, comment: r.comment ?? undefined })),

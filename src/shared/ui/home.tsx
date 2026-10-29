@@ -8,6 +8,7 @@ import type { AppNotification } from '@/shared/lib/types'
 import { Avatar } from './primitives'
 import { NotificationBell } from './NotificationBell'
 import { SignOutButton } from './SignOutButton'
+import { countable } from './CountUp'
 
 export const HERO_GRADIENT = 'linear-gradient(135deg,#064f4f 0%,#0a6e6e 55%,#0d9e82 100%)'
 
@@ -64,7 +65,7 @@ export function HeroCard({ eyebrow, value, suffix, caption, sideTitle, side = []
           <div className="min-w-0">
             <p className="text-[10px] font-semibold text-teal-200 uppercase tracking-widest">{eyebrow}</p>
             <div className="flex items-end gap-1.5 mt-1">
-              <span className="text-5xl font-black text-white leading-none">{value}</span>
+              <span className="text-5xl font-black text-white leading-none">{countable(value)}</span>
               {suffix && <span className="text-teal-300 text-sm mb-1">{suffix}</span>}
             </div>
             {caption && <p className="text-[10px] text-emerald-300 font-semibold mt-1.5">{caption}</p>}
@@ -74,7 +75,7 @@ export function HeroCard({ eyebrow, value, suffix, caption, sideTitle, side = []
               {sideTitle && <p className="text-[10px] text-teal-300 uppercase tracking-wider">{sideTitle}</p>}
               {side.map((s, i) => (
                 <div key={s.label}>
-                  <p className={`text-white font-bold text-lg leading-tight ${i === 0 ? 'mt-0.5' : 'mt-1'}`}>{s.value}</p>
+                  <p className={`text-white font-bold text-lg leading-tight ${i === 0 ? 'mt-0.5' : 'mt-1'}`}>{countable(s.value)}</p>
                   <p className="text-teal-300 text-[10px]">{s.label}</p>
                 </div>
               ))}
@@ -83,7 +84,7 @@ export function HeroCard({ eyebrow, value, suffix, caption, sideTitle, side = []
         </div>
         {progress !== undefined && (
           <div className="mt-4 bg-white/15 rounded-full h-[5px]">
-            <div className="bg-white rounded-full h-[5px] transition-all" style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
+            <div className="hero-bar bg-white rounded-full h-[5px] transition-all duration-700 ease-out" style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
           </div>
         )}
       </div>

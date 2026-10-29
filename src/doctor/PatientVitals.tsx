@@ -6,6 +6,8 @@ import {
 import type { PatientUser, VitalDef, VitalFrequency } from '@/shared/lib/types'
 import { FREQUENCY_LABELS, VITAL_FREQUENCIES } from '@/shared/lib/types'
 import { effectiveCriticalRange, latestValid, targetRange, validateReading, vitalTrend } from '@/shared/lib/vitals'
+import { conditionGaps, patientConditionsByVital } from '@/shared/lib/health'
+import { useApp } from '@/shared/state/AppContext'
 import { useDoctor } from './useDoctor'
 
 type Period = '14' | '30' | '90' | 'all'
@@ -25,6 +27,10 @@ const num = (v: string) => (v.trim() === '' ? NaN : Number(v))
 export function PatientVitals({ patient }: { patient: PatientUser }) {
   const { vitalDefs, nameOf, now, setTrackedVitals, setTarget, setCriticalRange, recordReading, invalidateReading, setVitalPlan, reviewsOf, unreviewedOf, reviewVitals } = useDoctor()
   const activeVitals = vitalDefs.filter(v => v.active)
+  const { conditionDefs } = useApp()
+  // The patient's conditions against what they record: each vital's reasons, and the ones not recorded yet.
+  const whyFor = patientConditionsByVital(patient, conditionDefs)
+  const gaps = conditionGaps(patient, activeVitals.map(v => v.id), conditionDefs)
   const act = useAct()
   const [period, setPeriod] = useState<Period>('30')
   const since = period === 'all' ? 0 : now - Number(period) * DAY
@@ -141,6 +147,28 @@ export function PatientVitals({ patient }: { patient: PatientUser }) {
           className="text-xs font-bold text-white bg-teal-700 px-3 py-2 rounded-full flex-shrink-0 disabled:opacity-40">Mark reviewed</button>
       </div>
 
+      {gaps.length > 0 && (
+        <section className="rise-in bg-amber-50 border border-amber-100 rounded-2xl p-4 span-all" aria-label="Conditions without a vital">
+          <p className="text-sm font-bold text-amber-900"><span aria-hidden="true">⚑</span> {gaps.length === 1 ? "A vital for this patient's conditions is" : `${gaps.length} vitals for this patient's conditions are`} not tracked</p>
+          <ul className="mt-2 flex flex-col gap-1.5">
+            {gaps.map(g => {
+              const def = activeVitals.find(v => v.id === g.vitalId)!
+              return (
+                <li key={g.vitalId} className="flex items-center gap-2 bg-white/80 rounded-xl px-3 py-2">
+                  <span className="text-lg" aria-hidden="true">{def.icon}</span>
+                  <p className="flex-1 min-w-0 text-xs text-gray-700 leading-snug">
+                    <b className="text-gray-900">{g.conditions.join(', ')}</b> recorded · <b className="text-gray-900">{def.name}</b> not tracked
+                  </p>
+                  <button onClick={() => toggleTracked(def)} disabled={act.busy}
+                    className="flex-shrink-0 text-[11px] font-bold text-white bg-teal-700 px-3 py-1.5 rounded-full active:scale-95 transition-transform disabled:opacity-50">Track it</button>
+                </li>
+              )
+            })}
+          </ul>
+          <p className="mt-2 text-[10px] text-amber-800/80">Matched from the conditions the patient gave. A suggestion only: you decide what they record.</p>
+        </section>
+      )}
+
       {patient.trackedVitalIds.length === 0
         ? <div className="span-all"><EmptyState icon="📈" title="No vitals assigned" text="Switch on the vitals this patient should record, below." /></div>
         : <ChipFilter label="Period" options={PERIODS} value={period} onChange={setPeriod} />}
@@ -158,12 +186,13 @@ export function PatientVitals({ patient }: { patient: PatientUser }) {
               <p className="text-sm font-bold text-gray-900">{def.icon} {def.name}</p>
               <p className="text-[11px] text-teal-700 font-semibold">Target {target.min}–{target.max} {def.unit}</p>
             </div>
+            {whyFor.get(id) && <p className="text-[10px] text-teal-800 mb-1">For {whyFor.get(id)!.join(' · ')}</p>}
             {trend.points.length > 0 && (
               <p className="text-[10px] text-gray-400 mb-1">
                 {trend.points.length} reading{trend.points.length > 1 ? 's' : ''} · average <span className="font-mono">{trend.average}</span> · {trend.inRange} in range
               </p>
             )}
-            <VitalChart points={trend.points} range={target} height={64} />
+            <VitalChart points={trend.points} range={target} height={64} scrub unit={def.unit} />
             {/* the same filterable history the patient sees, with the doctor's own row action */}
             <VitalHistory patient={patient} def={def} rows={rows} total={all.length} latestId={latestValid(patient, id)?.id}
               caption={period === 'all' ? undefined : `From the last ${period} days`} onShowAll={period === 'all' ? undefined : () => setPeriod('all')}
@@ -201,7 +230,9 @@ export function PatientVitals({ patient }: { patient: PatientUser }) {
                     ⏱ {patient.vitalPlans?.[v.id]?.frequency ? FREQUENCY_LABELS[patient.vitalPlans[v.id].frequency!] : 'Usual schedule'}
                   </button>
                 </div>
-              ) : <p className="text-[10px] text-gray-400 mt-1">Not recorded by this patient.</p>}
+              ) : whyFor.get(v.id)
+                ? <p className="text-[10px] text-amber-700 font-semibold mt-1">Not recorded · suggested for {whyFor.get(v.id)!.join(', ')}</p>
+                : <p className="text-[10px] text-gray-400 mt-1">Not recorded by this patient.</p>}
             </div>
           )
         })}

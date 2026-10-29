@@ -4,7 +4,8 @@
  * patient view all derive from buildDaySchedule(), so a tick in one place
  * shows up everywhere.
  */
-import type { PatientUser, Prescription, MedDose, MealDone, Appointment, PlannedMeal } from './types'
+import type { PatientUser, Prescription, MedDose, MealDone, Appointment, PlannedMeal, HoldRule } from './types'
+import { MEAL_LINK_LABELS } from './types'
 import { dayKey, latestValid, checkInStatus } from './vitals'
 
 /* ─── Schedule data ─────────────────────────────────────────────────── */
@@ -49,7 +50,8 @@ export const toneOf = (inMin: number | null, done = false): Tone =>
 export const TONE_PILL: Record<Tone, string> = { done: 'green', late: 'red', soon: 'amber', upcoming: 'gray' }
 
 /* ─── Derivation ────────────────────────────────────────────────────── */
-export const doseSlots = (rx: Prescription) => DOSE_TIMES[rx.frequency] ?? []
+/** A prescription's dose times today: the doctor's own times (0021), else the frequency's usual ones. */
+export const doseSlots = (rx: Prescription) => (rx.times?.length ? rx.times : DOSE_TIMES[rx.frequency] ?? [])
 export const minuteOfDay = (now: number) => { const d = new Date(now); return d.getHours() * 60 + d.getMinutes() }
 
 /** Effective date/time of an appointment (the new slot when rescheduled). A visit with no set time counts from 9:00 AM. */
@@ -92,6 +94,25 @@ export type ScheduleItem = {
   inMin: number
   done: boolean
   tone: Tone
+  /** A dose with a hold rule: `check` = measure first; `hold` = the latest reading is past the limit, do not take it. */
+  hold?: { state: 'check' | 'hold' | 'ok'; text: string }
+}
+
+const VITAL_WORD: Record<string, string> = { bp: 'blood pressure', hr: 'heart rate', gluc: 'glucose', spo2: 'oxygen level', wt: 'weight', temp: 'temperature', rr: 'breathing rate' }
+/** A reading this recent counts for a dose's hold rule. */
+export const HOLD_FRESH_MIN = 12 * 60
+
+/** Whether a dose may be taken, from the latest reading of the vital its hold rule names. */
+export function holdState(patient: PatientUser, rule: HoldRule, now: number): NonNullable<ScheduleItem['hold']> {
+  const word = VITAL_WORD[rule.vitalId] ?? rule.vitalId
+  const limit = [rule.below !== undefined ? `below ${rule.below}` : '', rule.above !== undefined ? `above ${rule.above}` : ''].filter(Boolean).join(' or ')
+  const r = latestValid(patient, rule.vitalId)
+  const fresh = r?.at && now - r.at <= HOLD_FRESH_MIN * 60_000
+  if (!r || !fresh) return { state: 'check', text: `Check your ${word} first: do not take it ${limit}` }
+  const v = parseFloat(r.value)   // blood pressure: the first (systolic) number
+  if ((rule.below !== undefined && v < rule.below) || (rule.above !== undefined && v > rule.above))
+    return { state: 'hold', text: `Hold this dose: your ${word} was ${r.value}, ${limit}. Contact your doctor.` }
+  return { state: 'ok', text: `${word[0].toUpperCase()}${word.slice(1)} ${r.value}: fine to take` }
 }
 
 export type DaySchedule = {
@@ -122,11 +143,19 @@ export function buildDaySchedule(patient: PatientUser, doses: MedDose[], mealsDo
 
   const medItems = patient.prescriptions.filter(rx => rx.active).flatMap(rx => {
     const slots = doseSlots(rx)
-    return slots.map((slot, i) => mk({
-      key: `${rx.id}@${slot}`, kind: 'med', refId: rx.id, slot, icon: '💊', title: rx.medication,
-      sub: `${clock(slot)}${slots.length > 1 ? ` · dose ${i + 1} of ${slots.length}` : ''}${rx.purpose ? ` · ${rx.purpose}` : ''}`,
-      done: isDoseTaken(doses, patient.id, rx.id, slot, day),
-    }))
+    const meal = rx.withMeal && rx.withMeal !== 'any' ? ` · ${MEAL_LINK_LABELS[rx.withMeal].toLowerCase()}` : ''
+    return slots.map((slot, i) => {
+      const done = isDoseTaken(doses, patient.id, rx.id, slot, day)
+      const hold = rx.holdIf && !done ? holdState(patient, rx.holdIf, now) : undefined
+      return {
+        ...mk({
+          key: `${rx.id}@${slot}`, kind: 'med', refId: rx.id, slot, icon: '💊', title: rx.medication,
+          sub: `${clock(slot)}${slots.length > 1 ? ` · dose ${i + 1} of ${slots.length}` : ''}${meal}${hold && hold.state !== 'ok' ? ` · ${hold.text}` : rx.purpose ? ` · ${rx.purpose}` : ''}`,
+          done,
+        }),
+        ...(hold ? { hold } : {}),
+      }
+    })
   })
   const logged = new Set(mealsDone.filter(m => m.patientId === patient.id && m.day === day).map(m => m.mealId))
   const mealItems = meals.map(m => mk({

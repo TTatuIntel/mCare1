@@ -8,10 +8,7 @@ import { MailboxSheet } from '@/shared/email/Mailbox'
 import { EditProfileSheet, ChangePasswordSheet, ThemeFontSheet, HelpSupportSheet, DeactivateAccountSheet } from './AccountSheets'
 import { NotificationsSheet } from './NotificationsSheet'
 import { SecuritySheet } from './SecuritySheet'
-<<<<<<< Updated upstream
 import { SignOutButton } from '@/shared/ui/SignOutButton'
-=======
->>>>>>> Stashed changes
 
 /* ─── ProfileCard ───────────────────────────────────────────────────── */
 /**

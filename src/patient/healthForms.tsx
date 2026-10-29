@@ -6,7 +6,8 @@
 import { useState } from 'react'
 import { Field, inputCls } from '@/shared'
 import type { Allergy, AllergySeverity, BiologicalSex, BloodType } from '@/shared/lib/types'
-import { BLOOD_TYPES, COMMON_ALLERGIES, COMMON_CONDITIONS, RELATIONSHIPS, SEVERITIES, SEX_OPTIONS, type CatalogueCondition } from '@/shared/lib/health'
+import { BLOOD_TYPES, COMMON_ALLERGIES, COMMON_CONDITIONS, RELATIONSHIPS, SEVERITIES, SEX_OPTIONS, matchNote, vitalsForCondition, type CatalogueCondition } from '@/shared/lib/health'
+import { useApp } from '@/shared/state/AppContext'
 import { usePatient } from './usePatient'
 
 /** Toggle chip: teal when selected (teal is the action colour). */
@@ -32,18 +33,46 @@ function ChoiceCard({ on, onClick, icon, title, body }: { on: boolean; onClick: 
 }
 
 /** Free-text "add your own" row used by conditions and allergies. */
-function AddOwn({ placeholder, onAdd }: { placeholder: string; onAdd: (v: string) => void }) {
+function AddOwn({ placeholder, onAdd, hint }: {
+  placeholder: string
+  onAdd: (v: string) => void
+  /** A live note under the box about what is typed (e.g. which vitals it matches); polite, so a screen reader hears it. */
+  hint?: (typed: string) => React.ReactNode
+}) {
   const [v, setV] = useState('')
   const add = () => { if (v.trim()) { onAdd(v.trim()); setV('') } }
+  const note = hint && v.trim().length >= 2 ? hint(v.trim()) : null
   return (
-    <div className="flex gap-2">
-      <input value={v} onChange={e => setV(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()}
-        placeholder={placeholder} className={inputCls} />
-      <button type="button" onClick={add} disabled={!v.trim()}
-        className={`px-4 rounded-xl text-sm font-bold flex-shrink-0 ${v.trim() ? 'bg-teal-700 text-white' : 'bg-gray-200 text-gray-400'}`}>
-        Add
-      </button>
-    </div>
+    <>
+      <div className="flex gap-2">
+        <input value={v} onChange={e => setV(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()}
+          placeholder={placeholder} aria-label={placeholder} className={inputCls} />
+        <button type="button" onClick={add} disabled={!v.trim()}
+          className={`px-4 rounded-xl text-sm font-bold flex-shrink-0 transition-colors ${v.trim() ? 'bg-teal-700 text-white active:scale-95' : 'bg-gray-200 text-gray-400'}`}>
+          Add
+        </button>
+      </div>
+      {hint && <div aria-live="polite" className="min-h-0">{note}</div>}
+    </>
+  )
+}
+
+/** What a typed condition matches, as the patient types it: the vitals it would suggest and why. */
+function ConditionMatchHint({ typed, catalogue }: { typed: string; catalogue: CatalogueCondition[] }) {
+  const { vitalDefs } = useApp()
+  const known = catalogue.find(c => c.name.toLowerCase() === typed.toLowerCase())
+  const { vitals } = vitalsForCondition(typed, catalogue)
+  const how = matchNote(typed, catalogue)
+  const names = vitals.map(id => vitalDefs.find(d => d.id === id)).filter(d => d?.active).map(d => `${d!.icon} ${d!.name}`)
+  return (
+    <p key={vitals.join()} className="sheet-fade mt-2 flex items-start gap-1.5 rounded-xl px-3 py-2 text-[11px] leading-snug bg-gray-50 text-gray-600">
+      <span aria-hidden="true">{names.length ? '✨' : '🩺'}</span>
+      <span>
+        {known ? <>That's <b>{known.name}</b> on the list. </> : how ? <>Matched {how.startsWith('like') ? <b>{how}</b> : <>by body area: <b>{how}</b></>}. </> : null}
+        {names.length ? <>We'll suggest tracking <b>{names.join(', ')}</b>. You choose what to track next.</>
+          : 'No vital matches this yet. Add it anyway: your doctor can still choose vitals for it.'}
+      </span>
+    </p>
   )
 }
 
@@ -98,10 +127,18 @@ export function ConditionsFields({ value, onChange }: { value: ConditionsValue; 
         {catalogue.map(c => (
           <Chip key={c.name} on={conditions.includes(c.name)} onClick={() => toggle(c.name)}>{c.icon} {c.name}</Chip>
         ))}
-        {custom.map(c => <Chip key={c} on onClick={() => toggle(c)}>🩺 {c} ✕</Chip>)}
+        {custom.map(c => {
+          const how = matchNote(c, catalogue)
+          return <Chip key={c} on onClick={() => toggle(c)}>🩺 {c}{how && <span className="font-normal opacity-80"> · {how}</span>} ✕</Chip>
+        })}
       </div>
       <div className="mt-3">
-        <AddOwn placeholder="Something else? Type it here" onAdd={c => !conditions.includes(c) && toggle(c)} />
+        <AddOwn placeholder="Something else? Type it here" hint={t => <ConditionMatchHint typed={t} catalogue={catalogue} />}
+          onAdd={c => {
+            // A name the list knows is picked from the list, so it is spelt (and linked) the same way.
+            const name = catalogue.find(x => x.name.toLowerCase() === c.toLowerCase())?.name ?? c
+            if (!conditions.some(x => x.toLowerCase() === name.toLowerCase())) toggle(name)
+          }} />
       </div>
       <button type="button" onClick={() => onChange({ ...value, conditions: [], noConditions: !noConditions })} aria-pressed={!!noConditions}
         className={`mt-3 w-full py-3 rounded-2xl text-sm font-semibold border-2 transition-colors ${noConditions ? 'border-teal-600 bg-teal-50 text-teal-800' : 'border-gray-200 text-gray-600'}`}>

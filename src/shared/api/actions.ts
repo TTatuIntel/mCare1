@@ -12,6 +12,7 @@
  * Reading lives in ./records.
  */
 import type {
+  PathwayPlan,
   AccountStatus, AdminReport, DeliveryReport, NotifyPrefs, AlertCommentKind, Appointment, ApprovalStatus, AssistantPerm, AvatarSpec, CarePlanDraft, CarePlanItemStatus, CarePlanStatus,
   ConditionDef, DayAvailability, EmergencyContact, FontSizePref, HealthProfile, MealPlan, NoteType, NoteVisibility, Prescription, RecordViewContext,
   RetentionSettings, SecuritySettings, ThemePref, UserRole, VitalDef, VitalFrequency, WorkBlock,
@@ -238,10 +239,13 @@ export const resolveAlert = async (id: string, reason: string, note?: string) =>
 
 /* ─── Medication and meals ──────────────────────────────────────────── */
 export const addPrescription = async (patientId: string, doctorId: string,
-  rx: Pick<Prescription, 'medication' | 'dosage' | 'frequency' | 'purpose' | 'route' | 'instructions' | 'startDate' | 'endDate' | 'clientRef'>) => {
+  rx: Pick<Prescription, 'medication' | 'dosage' | 'frequency' | 'purpose' | 'route' | 'instructions' | 'startDate' | 'endDate' | 'clientRef' | 'allergyOverride' | 'medicationCode' | 'times' | 'withMeal' | 'holdIf' | 'conditionCode'>) => {
   await okOnce((await db()).from('prescriptions').insert({
     patient_id: patientId, doctor_id: doctorId, medication: rx.medication, dosage: rx.dosage, frequency: rx.frequency, purpose: rx.purpose,
     route: rx.route ?? null, instructions: blank(rx.instructions), ...(rx.startDate ? { start_date: rx.startDate } : {}), end_date: rx.endDate || null,
+    allergy_override: blank(rx.allergyOverride), medication_code: rx.medicationCode ?? null, times: rx.times?.length ? rx.times : null,
+    with_meal: rx.withMeal ?? null, condition_code: rx.conditionCode ?? null,
+    hold_if: rx.holdIf ? { vital_id: rx.holdIf.vitalId, below: rx.holdIf.below ?? null, above: rx.holdIf.above ?? null } : null,
     ...withRef(rx.clientRef),
   }))
 }
@@ -297,7 +301,7 @@ export const setHydration = async (patientId: string, day: string, glasses: numb
 /** The treating doctor's plan for a patient: one row per patient. The database checks it, tells the patient and audits it. */
 export const setMealPlan = async (plan: Omit<MealPlan, 'setBy'>) => {
   await ok((await db()).from('meal_plans').upsert({
-    patient_id: plan.patientId, meals: plan.meals, target_kcal: plan.targetKcal ?? null, water_goal: plan.waterGoal, dietary_note: blank(plan.dietaryNote),
+    patient_id: plan.patientId, meals: plan.meals, target_kcal: plan.targetKcal ?? null, water_goal: plan.waterGoal, fluid_mode: plan.fluidMode, dietary_note: blank(plan.dietaryNote),
   }))
 }
 /** Back to the standard plan. */
@@ -453,9 +457,27 @@ export interface RetentionRun { documents: number; audit: number; notifications:
 /** Applies the retention settings now instead of waiting for the nightly job. Resolves with what it removed. */
 export const runRetentionNow = async () => ok<RetentionRun>((await db()).rpc('run_retention_now'))
 /** Adds or changes a condition in the catalogue, with the vitals it calls for, in one transaction. */
-export const saveConditionDef = async (c: ConditionDef) => {
-  await ok((await db()).rpc('save_condition_def', { def: { code: c.code, name: c.name.trim(), icon: c.icon, icd10: c.icd10 ?? '', active: c.active, vitals: c.vitals } }))
+export const saveConditionDef = async (c: ConditionDef, reviewed = false) => {
+  await ok((await db()).rpc('save_condition_def', { def: {
+    code: c.code, name: c.name.trim(), icon: c.icon, icd10: c.icd10 ?? '', active: c.active, reviewed, keywords: c.keywords ?? [],
+    vitals: c.vitals.map(id => { const p = c.vitalPlans?.[id]; return { vital_id: id, frequency: p?.frequency ?? null, target_min: p?.targetMin ?? null, target_max: p?.targetMax ?? null } }),
+    fluid_limit_glasses: c.fluidLimitGlasses ?? null, diet_note: blank(c.dietNote),
+    goals: (c.goals ?? []).map(g => ({ text: g.text, vital_id: g.vitalId ?? null })),
+  } }))
 }
+/** An admin offers or withdraws a catalogue medicine (prescriptions already made keep their name). */
+export const setMedicationActive = async (code: string, active: boolean) => {
+  await ok((await db()).from('medication_defs').update({ active }).eq('code', code))
+}
+/** The treating doctor applies a reviewed care pathway: monitoring, targets, fluid limit, diet note and a draft care plan, in one transaction. */
+export const applyPathway = async (patientId: string, plan: PathwayPlan) =>
+  ok<{ vitals: number; targets: number; fluid_limit: number | null; care_plan_id: string | null }>((await db()).rpc('apply_pathway', { patient: patientId, plan: {
+    conditions: plan.conditions, care_plan_title: plan.carePlanTitle ?? null,
+    fluid_limit_glasses: plan.fluidLimitGlasses ?? null, diet_note: blank(plan.dietNote),
+    vitals: plan.vitals.map(v => ({ vital_id: v.vitalId, frequency: v.frequency ?? null, reason: blank(v.reason), condition_code: v.conditionCode ?? null,
+      target_min: v.targetMin ?? null, target_max: v.targetMax ?? null })),
+    goals: plan.goals.map(g => ({ text: g.text, vital_id: g.vitalId ?? null })),
+  } }))
 /** The treating doctor sets how often a patient measures a vital (null: the usual schedule). The patient is told. */
 export const setVitalPlan = async (patientId: string, vitalId: string, frequency: VitalFrequency | null, reason?: string) => {
   await ok((await db()).rpc('set_vital_plan', { patient: patientId, vital: vitalId, frequency, reason: blank(reason) }))

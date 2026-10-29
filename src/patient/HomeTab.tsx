@@ -75,10 +75,7 @@ export function HomeTab({ go, openVital, onLog }: {
   const { currentUser, vitalDefs, alerts, now, unseenDocs } = useApp()
   const patient = currentUser as PatientUser
   const { resumeSetup, enrolled } = usePatient()
-<<<<<<< Updated upstream
   const awaitingDoctor = patient.doctorRequest?.status === 'pending'
-=======
->>>>>>> Stashed changes
   const [openItem, setOpenItem] = useState<ScheduleItem | null>(null)
   const toast = useToast()
   const score = healthScore(patient, vitalDefs)
@@ -111,15 +108,10 @@ export function HomeTab({ go, openVital, onLog }: {
         </NoticeCard>
       )}
 
-<<<<<<< Updated upstream
       {/* no treating doctor yet: medicines and meals start once one takes the patient on; until then, the first steps */}
       {!enrolled && <GettingStarted patientId={patient.id} waiting={awaitingDoctor} steps={startSteps(patient, {
         setup: resumeSetup, log: logFirst, profile: () => go('profile'), care: () => go('care'),
       })} />}
-=======
-      {/* no treating doctor yet: explained by PlanNotice, which floats over Home (PatientApp) */}
-
->>>>>>> Stashed changes
       {/* active alerts for me */}
       <AlertSummaryCard alerts={myAlerts} onOpenAll={() => go('alerts')} onLog={onLog} />
 
@@ -163,7 +155,7 @@ export function HomeTab({ go, openVital, onLog }: {
             ]} />
         }>
         {heroIds.length > 0 && (
-          <VitalsStrip patient={patient} defs={vitalDefs} ids={heroIds} now={now} onOpen={openVital} />
+          <VitalsStrip patient={patient} defs={vitalDefs} ids={heroIds} now={now} onOpen={openVital} onLog={onLog} />
         )}
       </HeroCard>
 

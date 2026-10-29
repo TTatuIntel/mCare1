@@ -2,6 +2,7 @@ import { useApp } from '@/shared/state/AppContext'
 import { Page, EmptyState } from '@/shared'
 import { usePatient } from './usePatient'
 import { ANYTIME_SLOT, clock, countdown, isDoseTaken } from '@/shared/lib/schedule'
+import { MEAL_LINK_LABELS } from '@/shared/lib/types'
 import { useDaySchedule } from './useDaySchedule'
 
 const CHIP: Record<string, string> = {
@@ -25,12 +26,8 @@ export function MedicineTab({ go }: { go: (t: string) => void }) {
 
       {activePrescriptions.length === 0 ? (
         <EmptyState icon="💊" title="No active prescriptions"
-<<<<<<< Updated upstream
           text={enrolled ? 'Your doctor will prescribe medications here.' : 'Your medicines will appear here once a doctor is caring for you.'}
           {...(enrolled ? {} : { action: 'Find a doctor →', onAction: () => go('care') })} />
-=======
-          text={enrolled ? 'Your doctor will prescribe medications here.' : 'Your medicines will appear here once a doctor is caring for you.'} />
->>>>>>> Stashed changes
       ) : (
         <>
           {/* next dose — same countdown as the Home reminders */}
@@ -74,9 +71,17 @@ export function MedicineTab({ go }: { go: (t: string) => void }) {
                   <div className="flex-1 min-w-0">
                     <p className={`text-sm font-bold ${allTaken ? 'line-through text-gray-400' : 'text-gray-900'}`}>{rx.medication}</p>
                     <p className="text-xs text-gray-500">{[rx.dosage, rx.purpose, rx.frequency].filter(Boolean).join(' · ')}</p>
+                    {rx.withMeal && rx.withMeal !== 'any' && <p className="text-[11px] text-teal-700 font-semibold mt-0.5">🍽️ {MEAL_LINK_LABELS[rx.withMeal]}</p>}
                     <p className="text-[10px] text-gray-400 mt-0.5">Prescribed by {getDoctorName(rx.doctorId)} · {rx.prescribedAt}</p>
                   </div>
                 </div>
+                {/* a hold rule: measure first, and do not take it past the limit (the next dose still to take) */}
+                {(() => {
+                  const hold = slots.find(x => !x.done && x.hold)?.hold
+                  if (!hold) return null
+                  const tone = hold.state === 'hold' ? 'bg-red-50 text-red-700 border-red-200' : hold.state === 'check' ? 'bg-amber-50 text-amber-800 border-amber-100' : 'bg-emerald-50 text-emerald-700 border-emerald-100'
+                  return <p role={hold.state === 'hold' ? 'alert' : undefined} className={`text-[11px] font-semibold border rounded-xl px-3 py-2 mt-2.5 ${tone}`}>{hold.state === 'hold' ? '⛔ ' : hold.state === 'check' ? '🩺 ' : '✓ '}{hold.text}</p>
+                })()}
                 {/* one chip per scheduled dose; tap to mark taken */}
                 <div className="flex flex-wrap gap-1.5 mt-3">
                   {slots.length > 0 ? slots.map(x => (

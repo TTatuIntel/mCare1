@@ -105,6 +105,15 @@ check('the doctor now sees this patient and no other', (await doc.from('patients
   && (await doc2.from('patients').select('id')).data?.length === 0)
 check('patient rates their doctor; the directory shows the average', !(await pat.from('doctor_ratings').upsert({ patient_id: patId, doctor_id: docId, rating: 4 })).error
   && Number((await pat2.rpc('doctor_rating_summary', { doctor: docId })).data?.[0]?.average) === 4)
+// Care pathway (0020): the treating doctor applies a reviewed bundle for the patient's high blood pressure.
+const pwPlan = { conditions: ['hypertension'], care_plan_title: 'High blood pressure', vitals: [{ vital_id: 'bp', frequency: 'daily', condition_code: 'hypertension', target_min: 90, target_max: 130 }],
+  goals: [{ text: 'Home blood pressure on target most days', vital_id: 'bp' }] }
+check('only the treating doctor applies a care pathway', !!(await doc2.rpc('apply_pathway', { patient: patId, plan: pwPlan })).error
+  && !!(await pat.rpc('apply_pathway', { patient: patId, plan: pwPlan })).error)
+const pwApplied = await doc.rpc('apply_pathway', { patient: patId, plan: pwPlan })
+check('the treating doctor applies it in one request; the patient sees the plan and is told', !pwApplied.error && pwApplied.data?.vitals === 1 && !!pwApplied.data?.care_plan_id
+  && (await pat.from('tracked_vitals').select('frequency').eq('vital_id', 'bp').single()).data?.frequency === 'daily'
+  && (await pat.from('notifications').select('title')).data?.some(n => n.title === 'Your care was set up'), pwApplied.error?.message)
 
 /* ── Vitals and alerts ── */
 console.log('\nVitals and alerts')
@@ -360,7 +369,7 @@ const started = await doc.rpc('set_care_plan_status', { plan: draft.data, new_st
 check('once started, the patient reads the plan and its goals, and is told', !started.error
   && (await pat.from('care_plans').select('status, title').single()).data?.status === 'active'
   && (await pat.from('care_plan_items').select('id')).data?.length === 2
-  && (await pat.from('notifications').select('id').eq('kind', 'care_plan')).data?.length === 1, started.error?.message)
+  && (await pat.from('notifications').select('id').eq('kind', 'care_plan').neq('title', 'Your care was set up')).data?.length === 1, started.error?.message)
 
 const weekday = new Date(`${inDays(7)}T00:00:00Z`).getUTCDay()
 const setHours = await doc.rpc('set_doctor_hours', { hours: [{ weekday, start: '09:00', end: '12:00' }], visit_minutes: 30 })

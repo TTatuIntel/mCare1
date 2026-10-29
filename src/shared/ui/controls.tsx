@@ -1,6 +1,7 @@
 /** Small controls every portal uses to switch a view, filter a list or act on a row. */
 import type { Outcome } from '@/shared/lib/types'
 import { SaveError, useSave, useToast } from './BottomSheet'
+import { countable } from './CountUp'
 
 /* ─── Segmented: two or three views of one screen ─── */
 export function Segmented<T extends string>({ options, value, onChange, label }: {
@@ -53,7 +54,7 @@ export function StatTiles({ items }: { items: { value: React.ReactNode; label: s
     <div className={`grid ${cols} gap-2`}>
       {items.map(x => (
         <div key={x.label} className="bg-white rounded-2xl py-3 px-1 text-center shadow-sm">
-          <p className={`text-lg font-black font-mono ${tones[x.tone ?? 'teal']}`}>{x.value}</p>
+          <p className={`text-lg font-black font-mono ${tones[x.tone ?? 'teal']}`}>{countable(x.value)}</p>
           <p className="text-[10px] text-gray-400 leading-tight">{x.label}</p>
         </div>
       ))}

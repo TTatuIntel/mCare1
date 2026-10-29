@@ -18,21 +18,14 @@ Patients log vitals, medicines, meals and water from their phone. Their doctor f
 | **Tested** | Typecheck clean · 410 database-rule checks · 176 API checks · 70 browser checks across all portals at three screen widths, with no console warning or error: all passing. |
 | **Just added** | Security and data-architecture upgrade: two-step sign-in (each person's choice, required per role by an admin, enforced by the database) · clinical records can no longer be hard-deleted · audit trail with device, session and "acted for" · private doctor signatures and contact details · conditions catalogue, monitoring plans and reviews of readings · "who opened my record" and "download my record" · idle sign-out · admin Settings with data retention · write limits · instant updates on the local backend · production security headers · CI. |
 | **Clean** | No warnings anywhere: TypeScript (unused code included), the production build, the browser console in all four portals at three widths, the email/SMS sender in the editor. Two documents only (this README and AGENTS.md); no unused files. |
-<<<<<<< Updated upstream
 | **In progress** | A clearer first day for new patients (a closable getting-started reminder, "Find a doctor", doctors suggested by condition) and a sign-out that is always in sight (web sidebar, tablet rail, phone header, Profile), branch `onboarding-before-doctor`. |
-=======
->>>>>>> Stashed changes
 | **Not yet done** | Running on a hosted Supabase project (and its Auth settings) · real email, SMS and push providers · choosing the host · reviewed legal text · server-side file scanning · sharing files (not just reports) by link · physical-phone testing. |
 
 ## Features
 
 | Portal | Highlights |
 | --- | --- |
-<<<<<<< Updated upstream
 | **Patient** | A guided start before a doctor is assigned (getting-started steps, doctors suggested by condition; no meals or medicines until a doctor takes them on) · Vitals with server-side grading, trends and history, following the doctor's monitoring plan · alerts with one-tap **Re-measure** (an in-range reading clears a warning automatically) · SOS · medication schedule · meal plan and water · appointments · private chats with the treating doctor and each consulting doctor (with read times) · medical documents with private sharing · who opened my record · download my whole record · two-step sign-in · notifications by email, SMS and push |
-=======
-| **Patient** | Vitals with server-side grading, trends and history, following the doctor's monitoring plan · alerts with one-tap **Re-measure** (an in-range reading clears a warning automatically) · SOS · medication schedule · meal plan and water · appointments · private chats with the treating doctor and each consulting doctor (with read times) · medical documents with private sharing · who opened my record · download my whole record · two-step sign-in · notifications by email, SMS and push |
->>>>>>> Stashed changes
 | **Doctor** | Patients ranked by risk · readings to review, "Mark reviewed" · alert workflow: acknowledge, request a re-measurement, comment, record actions and instructions, resolve or book a follow-up · readings, targets, critical ranges and how often to measure · prescriptions · clinical notes · care plans · meal plans · appointments and working hours · signed vitals reports showing every abnormal reading and how it was resolved · consulting doctors |
 | **Admin / Assistant** | Doctor approvals · registration by invitation · account status · correcting someone's details and resetting two-step sign-in, with a reason · doctor assignment and history · alert monitoring · appointment and support desk · document registry and recovery · searchable audit log (device, session, "acted for") · operational reports · Settings: two-step sign-in per role, idle sign-out, data retention, conditions catalogue · assistants limited to the permissions they are granted |
 

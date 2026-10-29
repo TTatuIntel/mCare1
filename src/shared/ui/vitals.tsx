@@ -178,7 +178,7 @@ export function InsightNotes({ insights, onOpen }: {
    movement is visible; the green band is the part of the target range in
    view. `bare` is the tile-sized sparkline; `detailed` adds the value
    axis, labelled target edges and a soft fill for a full-page chart. */
-export function VitalChart({ points, range, secondaryRange, from, to, height = 120, bare, detailed, format = round1, marks = [], activeId, onPick }: {
+export function VitalChart({ points, range, secondaryRange, from, to, height = 120, bare, detailed, format = round1, marks = [], activeId, onPick, scrub, unit }: {
   /** Oldest → newest, as returned by `vitalTrend().points`. */
   points: TrendPoint[]
   range: Range
@@ -198,9 +198,17 @@ export function VitalChart({ points, range, secondaryRange, from, to, height = 1
   onPick?: (readingId: string) => void
   /** The picked reading, drawn with a guide line and a ring. */
   activeId?: string | null
+  /**
+   * Slide a finger or the pointer across to read any point (value, time); arrow keys do the same.
+   * With `onPick`, a tap picks the nearest reading. Vertical scrolling still works on a phone.
+   */
+  scrub?: boolean
+  /** Written after a scrubbed value, e.g. "mmHg". */
+  unit?: string
 }) {
   const gid = `vc${useId().replace(/[^a-zA-Z0-9]/g, '')}`
   const [ref, width] = useElementWidth<SVGSVGElement>()
+  const [hoverId, setHoverId] = useState<string | null>(null)
   if (points.length < 2) return <p className="text-[11px] text-gray-400 italic">Not enough readings for a trend yet.</p>
   // Drawn at the size it is shown, so it is as sharp and as wide as its card on any screen; a wide page chart also grows taller.
   const W = width || (bare ? 120 : 300)
@@ -239,8 +247,42 @@ export function VitalChart({ points, range, secondaryRange, from, to, height = 1
   const dot = (l: VitalLevel) => (l === 'normal' ? '#0a6e6e' : LEVEL_STYLE[l].accent)
   const inView = (v: number) => v > lo && v < hi
 
+  /* scrubbing: the reading nearest the pointer in time */
+  const canScrub = !!scrub && !bare
+  const hoverIdx = hoverId ? points.findIndex(p => p.id === hoverId) : -1
+  const hover = hoverIdx >= 0 ? points[hoverIdx] : undefined
+  const nearest = (e: React.PointerEvent<SVGSVGElement> | React.MouseEvent<SVGSVGElement>) => {
+    const box = e.currentTarget.getBoundingClientRect()
+    const px = ((e.clientX - box.left) / Math.max(1, box.width)) * W
+    return points.reduce((best, p) => (Math.abs(x(p.at) - px) < Math.abs(x(best.at) - px) ? p : best))
+  }
+  const moveBy = (step: number) => {
+    const at = hoverIdx < 0 ? points.length - 1 : Math.max(0, Math.min(points.length - 1, hoverIdx + step))
+    setHoverId(points[at].id)
+  }
+  const scrubProps = canScrub ? {
+    tabIndex: 0,
+    onPointerMove: (e: React.PointerEvent<SVGSVGElement>) => setHoverId(nearest(e).id),
+    onPointerDown: (e: React.PointerEvent<SVGSVGElement>) => setHoverId(nearest(e).id),
+    // A finger lifting keeps its point on screen; only a mouse leaving clears it.
+    onPointerLeave: (e: React.PointerEvent<SVGSVGElement>) => { if (e.pointerType === 'mouse') setHoverId(null) },
+    onClick: onPick ? (e: React.MouseEvent<SVGSVGElement>) => onPick(nearest(e).id) : undefined,
+    onBlur: () => setHoverId(null),
+    onKeyDown: (e: React.KeyboardEvent<SVGSVGElement>) => {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); moveBy(e.key === 'ArrowLeft' ? -1 : 1) }
+      else if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); setHoverId(points[e.key === 'Home' ? 0 : points.length - 1].id) }
+      else if (e.key === 'Escape') setHoverId(null)
+      else if ((e.key === 'Enter' || e.key === ' ') && onPick && hover) { e.preventDefault(); onPick(hover.id) }
+    },
+  } : {}
+  const readout = (p: TrendPoint) =>
+    `${format(p.value)}${p.secondary === undefined ? '' : `/${format(p.secondary)}`}${unit ? ` ${unit}` : ''} · ${new Date(p.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+
   return (
-    <svg ref={ref} viewBox={`0 0 ${W} ${H}`} className="w-full block" style={{ height: H }} role="img" aria-label="Trend of readings against the target range">
+    <>
+    <svg ref={ref} viewBox={`0 0 ${W} ${H}`} style={{ height: H }} role="img" {...scrubProps}
+      aria-label={canScrub ? 'Trend of readings against the target range. Use the left and right arrow keys to read each point.' : 'Trend of readings against the target range'}
+      className={`w-full block ${canScrub ? 'touch-pan-y cursor-crosshair select-none rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-teal-400' : ''}`}>
       <defs>
         <linearGradient id={gid} x1="0" x2="0" y1="0" y2="1">
           <stop offset="0" stopColor="#0a6e6e" stopOpacity=".18" />
@@ -283,9 +325,10 @@ export function VitalChart({ points, range, secondaryRange, from, to, height = 1
         </g>
       ))}
 
-      {detailed && <path d={`${primary} L${x(last.at).toFixed(1)},${bottom} L${x(points[0].at).toFixed(1)},${bottom} Z`} fill={`url(#${gid})`} />}
-      {secondary && <path d={secondary} fill="none" stroke="#0a6e6e" strokeOpacity=".45" strokeWidth="1.4" strokeDasharray="3 2" strokeLinejoin="round" strokeLinecap="round" />}
-      <path d={primary} fill="none" stroke="#0a6e6e" strokeWidth={bare ? 1.5 : 2} strokeLinejoin="round" strokeLinecap="round" />
+      {detailed && <path className="chart-fill-in" d={`${primary} L${x(last.at).toFixed(1)},${bottom} L${x(points[0].at).toFixed(1)},${bottom} Z`} fill={`url(#${gid})`} />}
+      {secondary && <path className={bare ? undefined : 'chart-fill-in'} d={secondary} fill="none" stroke="#0a6e6e" strokeOpacity=".45" strokeWidth="1.4" strokeDasharray="3 2" strokeLinejoin="round" strokeLinecap="round" />}
+      {/* the line draws itself in once, when the chart first appears (a fade with reduced motion) */}
+      <path className={bare ? undefined : 'chart-draw'} pathLength={bare ? undefined : 1} d={primary} fill="none" stroke="#0a6e6e" strokeWidth={bare ? 1.5 : 2} strokeLinejoin="round" strokeLinecap="round" />
 
       {/* out-of-range readings always show; in-range ones only when the chart is sparse enough to read */}
       {!bare && points.filter(p => p.level !== 'normal' || points.length <= 40).map(p => (
@@ -301,11 +344,27 @@ export function VitalChart({ points, range, secondaryRange, from, to, height = 1
           <circle cx={x(active.at)} cy={y(active.value)} r="4" fill={dot(active.level)} stroke="#fff" strokeWidth="1.4" />
         </g>
       )}
-      {/* tappable points: a wide invisible target over each reading */}
-      {onPick && points.map(p => (
+      {/* the scrubbed reading: a guide, the point, and its value and time */}
+      {hover && hover.id !== active?.id && (() => {
+        const hx = x(hover.at), hy = y(hover.value), text = readout(hover)
+        const bw = text.length * 5 + 14, bx = Math.max(PL, Math.min(W - PR - bw, hx - bw / 2))
+        const by = hy - 26 < top ? Math.min(bottom - 16, hy + 10) : hy - 26
+        return (
+          <g pointerEvents="none">
+            <line x1={hx} x2={hx} y1={top} y2={bottom} stroke="#0a6e6e" strokeWidth="1" strokeDasharray="2 2" opacity=".45" />
+            <circle cx={hx} cy={hy} r="4.2" fill={dot(hover.level)} stroke="#fff" strokeWidth="1.6" />
+            <rect x={bx} y={by} width={bw} height="16" rx="8" fill="#0f172a" opacity=".88" />
+            <text x={bx + bw / 2} y={by + 11} textAnchor="middle" fontSize="9" fontWeight="700" fill="#fff">{text}</text>
+          </g>
+        )
+      })()}
+      {/* tappable points: a wide invisible target over each reading (a scrubbing chart picks the nearest instead) */}
+      {onPick && !canScrub && points.map(p => (
         <circle key={p.id} cx={x(p.at)} cy={y(p.value)} r="9" fill="transparent" className="cursor-pointer" onClick={() => onPick(p.id)} />
       ))}
     </svg>
+    {canScrub && <span className="sr-only" aria-live="polite">{hover ? readout(hover) : ''}</span>}
+    </>
   )
 }
 

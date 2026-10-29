@@ -5,10 +5,10 @@ import type {
   AccountStatus, SupportTicket, ResetToken, ResetChannel, AuthProvider, VitalsReportInclude, EmailContent, SentEmail, SentSms,
   MealPlan, HydrationLog, DoctorRating, Outcome, Invitation, UserRole, ReportNote,
   CarePlan, CarePlanDraft, CarePlanItemStatus, CarePlanStatus, CareAssignment, CareTeamMember, PastPatient, DeliveryReport, TimeOff, WorkBlock, DayAvailability, AdminReport,
-  AppSettings, ConditionDef, RecordView, RecordViewContext, RetentionSettings, SecuritySettings, VitalFrequency, VitalReview,
+  AppSettings, ConditionDef, MedicationDef, PathwayPlan, RecordView, RecordViewContext, RetentionSettings, SecuritySettings, VitalFrequency, VitalReview,
 } from '@/shared/lib/types'
 import { DEFAULT_SETTINGS, FREQUENCY_LABELS } from '@/shared/lib/types'
-import { COMMON_CONDITIONS } from '@/shared/lib/health'
+import { COMMON_CONDITIONS, DEMO_PATHWAYS } from '@/shared/lib/health'
 import { emails as mail, sms as smsText, appBaseUrl, activationLink, activationToken } from '@/shared/email/emailTemplate'
 import { RESET_TTL_MIN, MAX_RESET_ATTEMPTS, AUTH_PROVIDER_LABELS, FOLLOW_UP_REASON } from '@/shared/lib/types'
 import { passwordIssue } from './auth'
@@ -19,6 +19,7 @@ import { mfaGate, signOutBackend, type MfaGate } from '@/shared/api/authBackend'
 import * as api from '@/shared/api/actions'
 import { changeToken, isoClock, isoDay, loadRecords, searchAudit as searchAuditApi, type AuditWho, type Records } from '@/shared/api/records'
 import { evaluate, alertIsFor, stamp, dateLabel, dayKey, targetRange, ESCALATE_AFTER_MIN, CORRECTION_WINDOW_MIN, type VitalLevel } from '@/shared/lib/vitals'
+import { allergyConflicts, conflictLabel, DEMO_MEDICATIONS, structureIssue } from '@/shared/lib/medicines'
 import { apptDateLabel, apptTimeLabel, apptWhen, isOpenAppt } from '@/shared/lib/schedule'
 import { useDocumentStore, type DocumentApi } from '@/shared/documents/useDocumentStore'
 import { seedDocuments } from '@/shared/documents/docSeed'
@@ -264,10 +265,17 @@ interface Ctx extends DocumentApi {
   runRetentionNow: () => Saved<api.RetentionRun>
   /** The conditions catalogue and the vitals each calls for. */
   conditionDefs: ConditionDef[]
-  saveConditionDef: (def: ConditionDef) => Saved
+  /** The medicine catalogue (migration 0021): offered when prescribing. */
+  medicationDefs: MedicationDef[]
+  /** Admin: offer or withdraw a catalogue medicine. */
+  setMedicationActive: (code: string, active: boolean) => Saved
+  /** `reviewed`: the admin confirms the pathway is clinically right (stamped; any later change clears it). */
+  saveConditionDef: (def: ConditionDef, reviewed?: boolean) => Saved
   // Monitoring plans, reviews, access log
   /** The treating doctor sets how often a patient measures a vital (null: the usual schedule). */
   setVitalPlan: (patientId: string, vitalId: string, frequency: VitalFrequency | null, reason?: string) => Saved
+  /** The treating doctor applies a reviewed care pathway in one step (`apply_pathway`). */
+  applyPathway: (patientId: string, plan: PathwayPlan) => Saved
   vitalReviews: VitalReview[]
   /** The treating doctor marks a patient's readings reviewed up to now. `ref` is the form's reference. */
   reviewVitals: (patientId: string, note?: string, ref?: string) => Saved
@@ -314,8 +322,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [timeOff, setTimeOff] = useState<TimeOff[]>([])
   const [careTeam, setCareTeam] = useState<CareTeamMember[]>([])
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
+  const [medicationDefs, setMedicationDefs] = useState<MedicationDef[]>(() => LIVE ? [] : DEMO_MEDICATIONS)
   const [conditionDefs, setConditionDefs] = useState<ConditionDef[]>(() => LIVE ? [] : COMMON_CONDITIONS.map((c, i) => ({
-    code: c.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `c${i}`, name: c.name, icon: c.icon, active: true, vitals: c.vitals })))
+    code: c.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `c${i}`, name: c.name, icon: c.icon, active: true, vitals: c.vitals, keywords: c.keywords, ...DEMO_PATHWAYS[c.name] })))
   const [vitalReviews, setVitalReviews] = useState<VitalReview[]>([])
   const [recordViews, setRecordViews] = useState<RecordView[]>([])
   const [mfa, setMfa] = useState<{ step: Exclude<MfaGate, 'ok'>; account: AppUser; acceptedTerms: boolean } | null>(null)
@@ -474,7 +483,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setReportRequests(r.reportRequests); setClinicalNotes(r.clinicalNotes); setSupportTickets(r.supportTickets); setAudit(r.audit)
     setMealPlans(r.mealPlans); setHydrationLogs(r.hydration); setRatings(r.ratings); setInvitations(r.invitations)
     setCarePlans(r.carePlans); setCareAssignments(r.careAssignments); setPastPatients(r.pastPatients); setTimeOff(r.timeOff); setCareTeam(r.careTeam)
-    setSettings(r.settings); setConditionDefs(r.conditionDefs); setVitalReviews(r.vitalReviews); setRecordViews(r.recordViews)
+    setSettings(r.settings); setConditionDefs(r.conditionDefs); setMedicationDefs(r.medicationDefs); setVitalReviews(r.vitalReviews); setRecordViews(r.recordViews)
     docStore.hydrateDocuments(r.documents, r.docEvents, r.shareLinks, r.supportGrants)
   }
   /**
@@ -490,7 +499,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     users: [], vitalDefs: [], alerts: [], appointments: [], messages: [], notifications: [], doses: [], mealsDone: [], reportRequests: [],
     clinicalNotes: [], supportTickets: [], audit: [], mealPlans: [], hydration: [], ratings: [], documents: [], docEvents: [], shareLinks: [], supportGrants: [], invitations: [],
     carePlans: [], careAssignments: [], pastPatients: [], timeOff: [], careTeam: [],
-    settings: DEFAULT_SETTINGS, conditionDefs: [], vitalReviews: [], recordViews: [],
+    settings: DEFAULT_SETTINGS, conditionDefs: [], medicationDefs: [], vitalReviews: [], recordViews: [],
   }
 
   /** Signs out locally. `notice` says why, when the person did not choose to. */
@@ -877,13 +886,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
   /* ─ prescriptions, notes, doses ─ */
   const addPrescription = (patientId: string, rx: Prescription): Saved => {
     if (rx.endDate && rx.endDate < (rx.startDate ?? dayKey())) return refused('The end date cannot be before the start date.')
+    // Same rule as the database (0019): a medicine matching a recorded allergy needs the doctor's reason.
+    const pt = findUser(patientId) as PatientUser | undefined
+    const hits = allergyConflicts(rx.medication, pt?.health?.allergies ?? [])
+    if (hits.length && (rx.allergyOverride?.trim().length ?? 0) < 3)
+      return refused(`${rx.medication.trim()} matches an allergy on record: ${conflictLabel(hits)}. To prescribe it anyway, give your reason.`)
+    // Same checks as the database (0021): dose times and the hold rule.
+    const structure = structureIssue(rx, vitalDefs)
+    if (structure) return refused(structure)
     if (LIVE) return run(() => api.addPrescription(patientId, rx.doctorId, rx))   // the database notifies, audits and files the document
-    const made: Prescription = { ...rx, status: 'active', active: true, startDate: rx.startDate ?? dayKey(),
+    // A catalogue medicine starts tracking the vitals it needs (0021 prescription_monitoring), and the patient is told.
+    const wanted = medicationDefs.find(m => m.code === rx.medicationCode)?.monitorVitals.filter(id => vitalDefs.some(v => v.id === id && v.active)) ?? []
+    const added = wanted.filter(id => !pt?.trackedVitalIds.includes(id))
+    if (added.length) {
+      patchPatient(patientId, p => ({ ...p, trackedVitalIds: [...p.trackedVitalIds, ...added.filter(id => !p.trackedVitalIds.includes(id))] }))
+      notify(patientId, 'prescription', 'New vitals to track', `With ${rx.medication}, please also log: ${added.map(id => vitalDefs.find(v => v.id === id)?.name ?? id).join(', ')}`, 'vitals')
+    }
+    const made: Prescription = { ...rx, times: rx.times?.length ? [...rx.times].sort((a, b) => a - b) : undefined, status: 'active', active: true, startDate: rx.startDate ?? dayKey(),
       history: [{ id: uid('rxe'), action: 'prescribed', actorId: rx.doctorId, detail: `${rx.dosage} · ${rx.frequency}`, at: Date.now(), createdAt: stamp() }] }
     patchPatient(patientId, p => ({ ...p, prescriptions: [made, ...p.prescriptions] }))
     docStore.filePrescription(patientId, rx)
     notify(patientId, 'prescription', 'New prescription', `${rx.medication} — ${rx.frequency}`, 'medicine')
     logAudit('Prescribed', `${rx.medication} for ${findUser(patientId)?.name}`)
+    if (hits.length) logAudit('Prescribed despite allergy', `${rx.medication} · allergy: ${conflictLabel(hits)} · reason: ${rx.allergyOverride?.trim()}`)
     return done()
   }
   const setPrescriptionActive = (patientId: string, rxId: string, active: boolean, reason?: string): Saved => {
@@ -928,7 +953,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (LIVE) return run(() => api.setMealPlan(plan))   // the database checks it, tells the patient and audits it
     setMealPlans(prev => [...prev.filter(p => p.patientId !== plan.patientId), { ...plan, dietaryNote: plan.dietaryNote?.trim() || undefined, setBy: actorId() }])
     notify(plan.patientId, 'message', 'Your meal plan was updated',
-      `${findUser(actorId())?.name ?? 'Your doctor'} set your meals${plan.targetKcal ? ` · ${plan.targetKcal} kcal a day` : ''} · ${plan.waterGoal} glasses of water`, 'meals')
+      `${findUser(actorId())?.name ?? 'Your doctor'} set your meals${plan.targetKcal ? ` · ${plan.targetKcal} kcal a day` : ''} · ${plan.fluidMode === 'limit' ? `at most ${plan.waterGoal} glasses of fluid a day` : `${plan.waterGoal} glasses of water`}`, 'meals')
     logAudit('Set meal plan', `${findUser(plan.patientId)?.name} · ${plan.meals.length} meals`)
     return done()
   }
@@ -1878,17 +1903,59 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!isAdminNow()) return refused('Only an admin can apply retention.')
     return done({ documents: 0, audit: 0, notifications: 0, deliveries: 0 })
   }
-  const saveConditionDef = (def: ConditionDef): Saved => {
+  const saveConditionDef = (def: ConditionDef, reviewed = false): Saved => {
     if (!def.name.trim()) return refused('Give the condition a name.')
-    if (LIVE) return run(() => api.saveConditionDef(def))
+    if (LIVE) return run(() => api.saveConditionDef(def, reviewed))
     if (!isAdminNow()) return refused('Only an admin can change the conditions list.')
     const code = def.code || def.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
     const before = conditionDefs.find(c => c.code === code)
-    setConditionDefs(prev => before ? prev.map(c => c.code === code ? { ...def, code, name: def.name.trim() } : c) : [...prev, { ...def, code, name: def.name.trim() }])
+    // Same rule as the database: marking it reviewed stamps who and when; changing the clinical content clears it.
+    const content = (c?: ConditionDef) => JSON.stringify([c?.vitals, c?.vitalPlans, c?.fluidLimitGlasses ?? null, c?.dietNote ?? null, c?.goals ?? []])
+    const review = reviewed ? { reviewedAt: stamp(), reviewedBy: actorId() } : content(before) === content(def) ? { reviewedAt: before?.reviewedAt, reviewedBy: before?.reviewedBy } : { reviewedAt: undefined, reviewedBy: undefined }
+    const saved = { ...def, ...review, code, name: def.name.trim() }
+    setConditionDefs(prev => before ? prev.map(c => c.code === code ? saved : c) : [...prev, saved])
+    if (reviewed) logAudit('Reviewed condition pathway', def.name.trim())
     logAudit(before ? (before.active !== def.active ? (def.active ? 'Activated condition' : 'Deactivated condition') : 'Updated condition') : 'Added condition', def.name.trim())
     return done()
   }
   const treatsNow = (patientId: string) => currentUser?.role === 'doctor' && (findUser(patientId) as PatientUser | undefined)?.assignedDoctorId === currentUser.id
+  const setMedicationActive = (code: string, active: boolean): Saved => {
+    if (LIVE) return run(() => api.setMedicationActive(code, active))
+    if (!isAdminNow()) return refused('Only an admin can change the medicine list.')
+    setMedicationDefs(prev => prev.map(m => m.code === code ? { ...m, active } : m))
+    logAudit(active ? 'Offered medicine' : 'Withdrew medicine', medicationDefs.find(m => m.code === code)?.name ?? code)
+    return done()
+  }
+  const applyPathway = async (patientId: string, plan: PathwayPlan): Saved => {
+    if (LIVE) return run(async () => { await api.applyPathway(patientId, plan) })   // one transaction; audited and told once
+    if (!treatsNow(patientId)) return refused("Only the patient's treating doctor can set up their care.")
+    // Demo mode: the same steps through the existing actions, which apply the same checks.
+    for (const v of plan.vitals) {
+      const r = await setVitalPlan(patientId, v.vitalId, v.frequency ?? null, v.reason)
+      if (!r.ok) return r
+      if (v.targetMin !== undefined && v.targetMax !== undefined) {
+        const t = await setThreshold(patientId, v.vitalId, { min: v.targetMin, max: v.targetMax })
+        if (!t.ok) return t
+      }
+    }
+    if (plan.fluidLimitGlasses !== undefined || plan.dietNote) {
+      const was = mealPlans.find(m => m.patientId === patientId)
+      const r = await setMealPlan({
+        patientId, meals: was?.meals ?? [], targetKcal: was?.targetKcal,
+        fluidMode: plan.fluidLimitGlasses !== undefined ? 'limit' : was?.fluidMode ?? 'goal',
+        waterGoal: plan.fluidLimitGlasses ?? was?.waterGoal ?? 8, dietaryNote: was?.dietaryNote ?? plan.dietNote,
+      })
+      if (!r.ok) return r
+    }
+    if (plan.goals.length) {
+      const r = await saveCarePlan({ patientId, title: plan.carePlanTitle || 'Care plan', items: plan.goals.map(g => ({ kind: 'goal' as const, text: g.text, vitalId: g.vitalId })) })
+      if (!r.ok) return { ok: false, error: r.error }
+    }
+    const names = conditionDefs.filter(c => plan.conditions.includes(c.code)).map(c => c.name).join(', ')
+    notify(patientId, 'care_plan', 'Your care was set up', `${currentUser?.name ?? 'Your doctor'} set up your monitoring${names ? ` for ${names}` : ''}${plan.fluidLimitGlasses ? ` · fluid limit ${plan.fluidLimitGlasses} glasses a day` : ''}`, 'vitals')
+    logAudit('Applied care pathway', `${findUser(patientId)?.name}${names ? ` · ${names}` : ''} · ${plan.vitals.length} vitals`)
+    return done()
+  }
   const setVitalPlan = (patientId: string, vitalId: string, frequency: VitalFrequency | null, reason?: string): Saved => {
     if (LIVE) return run(() => api.setVitalPlan(patientId, vitalId, frequency, reason))
     if (!treatsNow(patientId)) return refused("Only the patient's treating doctor can set their monitoring plan.")
@@ -1989,7 +2056,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setPasswordAfterVerification, recoveryChannels, requestAdminPasswordHelp, socialAuth,
       supportTickets, createSupportTicket, resolveSupportTicket,
       signOut, mfa: mfa ? { step: mfa.step, account: mfa.account } : null, completeMfa, cancelMfa,
-      settings, saveSecuritySettings, saveRetentionSettings, runRetentionNow, conditionDefs, saveConditionDef,
+      settings, saveSecuritySettings, saveRetentionSettings, runRetentionNow, conditionDefs, saveConditionDef, applyPathway, medicationDefs, setMedicationActive,
       setVitalPlan, vitalReviews, reviewVitals, recordViews, logRecordView, exportMyRecord, adminUpdateProfile, resetTwoStep,
     }}>
       {children}
