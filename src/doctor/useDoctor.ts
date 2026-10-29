@@ -23,6 +23,7 @@ import { useApp, isActiveAlert } from '@/shared/state/AppContext'
 import { useLoadStatus } from '@/shared/state/useLoadStatus'
 import { partnersOf } from '@/shared/lib/messaging'
 import type { Appointment, DoctorUser, MealPlan, PatientUser, RxRoute } from '@/shared/lib/types'
+import { proposePathway } from '@/shared/lib/pathways'
 import * as api from '@/shared/api/actions'
 import { dateLabel } from '@/shared/lib/vitals'
 
@@ -192,6 +193,10 @@ export function useDoctor() {
     /* ── monitoring plan, reviews, access log ── */
     /** RPC set_vital_plan: how often the patient measures a vital (null: the usual schedule), and why. The patient is told. */
     setVitalPlan: app.setVitalPlan,
+    /** The care pathway proposed from a patient's conditions (the catalogue's starting values, merged). A suggestion only. */
+    proposalFor: (p: PatientUser) => proposePathway(p, app.conditionDefs, app.vitalDefs),
+    /** RPC apply_pathway: monitoring, targets, fluid limit, diet note and a draft care plan in one step; audited, the patient told once. */
+    applyPathway: app.applyPathway,
     /** GET vital_reviews: each review of a patient's readings, newest first. */
     reviewsOf: (patientId: string) => app.vitalReviews.filter(r => r.patientId === patientId).sort((a, b) => b.reviewedThrough - a.reviewedThrough),
     /** Valid readings a patient logged since the last review (all of them before the first). */

@@ -370,6 +370,23 @@ try {
     const plan = await row(service.from('meal_plans').select('set_by, target_kcal, meals').eq('patient_id', patId).single())
     if (plan?.set_by !== docId || plan.target_kcal !== 1800 || plan.meals.length !== 4) throw new Error(JSON.stringify(plan))
   })
+  await step(d, 'the doctor sets up care from the patient\'s conditions in one step, after reviewing it', async () => {
+    // The basic seed records no conditions: the patient's high blood pressure is added here.
+    const cond = await service.from('conditions').insert({ patient_id: patId, name: 'High blood pressure' })
+    if (cond.error) throw new Error(cond.error.message)
+    await d.page.getByRole('button', { name: 'Overview', exact: true }).click()
+    const card = d.page.getByRole('region', { name: 'Care from conditions' })
+    await card.getByText('High blood pressure').waitFor({ timeout: 20000 })   // the open record learns of it by itself
+    await card.getByRole('button', { name: 'Review and set up' }).click()
+    await d.sheet().getByText(/not been clinically reviewed/).waitFor({ timeout: 5000 })
+    // The goal is left out here so the care-plan step below works with its own plan (the draft is covered by the rule tests).
+    await d.sheet().getByRole('checkbox', { name: /Home blood pressure on target/ }).uncheck()
+    await d.sheet().getByRole('button', { name: 'Apply' }).click()
+    await d.page.getByText(/Care set up/).waitFor({ timeout: 15000 })
+    const tv = await row(service.from('tracked_vitals').select('frequency, condition_code').eq('patient_id', patId).eq('vital_id', 'bp').single())
+    const told = await row(patient.from('notifications').select('title'))
+    if (tv?.frequency !== 'daily' || tv.condition_code !== 'hypertension' || !told.some(n => n.title === 'Your care was set up')) throw new Error(JSON.stringify({ tv }))
+  })
   await step(d, 'the doctor records a reading on the patient\'s record', async () => {
     await d.page.getByRole('button', { name: 'Vitals', exact: true }).click()
     await d.page.getByRole('button', { name: '+ Record a reading' }).click()

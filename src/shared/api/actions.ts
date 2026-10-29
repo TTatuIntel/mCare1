@@ -12,6 +12,7 @@
  * Reading lives in ./records.
  */
 import type {
+  PathwayPlan,
   AccountStatus, AdminReport, DeliveryReport, NotifyPrefs, AlertCommentKind, Appointment, ApprovalStatus, AssistantPerm, AvatarSpec, CarePlanDraft, CarePlanItemStatus, CarePlanStatus,
   ConditionDef, DayAvailability, EmergencyContact, FontSizePref, HealthProfile, MealPlan, NoteType, NoteVisibility, Prescription, RecordViewContext,
   RetentionSettings, SecuritySettings, ThemePref, UserRole, VitalDef, VitalFrequency, WorkBlock,
@@ -453,9 +454,23 @@ export interface RetentionRun { documents: number; audit: number; notifications:
 /** Applies the retention settings now instead of waiting for the nightly job. Resolves with what it removed. */
 export const runRetentionNow = async () => ok<RetentionRun>((await db()).rpc('run_retention_now'))
 /** Adds or changes a condition in the catalogue, with the vitals it calls for, in one transaction. */
-export const saveConditionDef = async (c: ConditionDef) => {
-  await ok((await db()).rpc('save_condition_def', { def: { code: c.code, name: c.name.trim(), icon: c.icon, icd10: c.icd10 ?? '', active: c.active, vitals: c.vitals } }))
+export const saveConditionDef = async (c: ConditionDef, reviewed = false) => {
+  await ok((await db()).rpc('save_condition_def', { def: {
+    code: c.code, name: c.name.trim(), icon: c.icon, icd10: c.icd10 ?? '', active: c.active, reviewed,
+    vitals: c.vitals.map(id => { const p = c.vitalPlans?.[id]; return { vital_id: id, frequency: p?.frequency ?? null, target_min: p?.targetMin ?? null, target_max: p?.targetMax ?? null } }),
+    fluid_limit_glasses: c.fluidLimitGlasses ?? null, diet_note: blank(c.dietNote),
+    goals: (c.goals ?? []).map(g => ({ text: g.text, vital_id: g.vitalId ?? null })),
+  } }))
 }
+/** The treating doctor applies a reviewed care pathway: monitoring, targets, fluid limit, diet note and a draft care plan, in one transaction. */
+export const applyPathway = async (patientId: string, plan: PathwayPlan) =>
+  ok<{ vitals: number; targets: number; fluid_limit: number | null; care_plan_id: string | null }>((await db()).rpc('apply_pathway', { patient: patientId, plan: {
+    conditions: plan.conditions, care_plan_title: plan.carePlanTitle ?? null,
+    fluid_limit_glasses: plan.fluidLimitGlasses ?? null, diet_note: blank(plan.dietNote),
+    vitals: plan.vitals.map(v => ({ vital_id: v.vitalId, frequency: v.frequency ?? null, reason: blank(v.reason), condition_code: v.conditionCode ?? null,
+      target_min: v.targetMin ?? null, target_max: v.targetMax ?? null })),
+    goals: plan.goals.map(g => ({ text: g.text, vital_id: g.vitalId ?? null })),
+  } }))
 /** The treating doctor sets how often a patient measures a vital (null: the usual schedule). The patient is told. */
 export const setVitalPlan = async (patientId: string, vitalId: string, frequency: VitalFrequency | null, reason?: string) => {
   await ok((await db()).rpc('set_vital_plan', { patient: patientId, vital: vitalId, frequency, reason: blank(reason) }))

@@ -69,6 +69,7 @@ What the person sees or says, and where it lives. Screen titles are the `Page` /
 | Prescribe, stop / restart medicine | `doctor/PatientMeds.tsx` |
 | Notes, internal note, correct a note | `doctor/PatientNotes.tsx` |
 | Care plan, goals, interventions | `doctor/PatientCarePlan.tsx`, `shared/ui/CarePlanCard.tsx` |
+| Care from conditions, care pathway, set up monitoring from conditions | `doctor/PathwaySheet.tsx`, `shared/lib/pathways.ts`; catalogue editor: `admin/SettingsTab.tsx`; rule: `apply_pathway` (`0020`) |
 | Meal plan, nutrition | `doctor/PatientNutrition.tsx` |
 | Vitals report, report builder, sign, release, correct | `doctor/ReportBuilderSheet.tsx`, `PatientDocs.tsx`, `shared/documents/DocumentViewer.tsx`, `reportTemplate.ts` |
 | Doctor's "Alerts", acknowledge, resolve, follow-up | `doctor/AlertsTab.tsx`, `AlertCard.tsx`, `shared/ui/alerts.tsx` (`ResolveAlertSheet`) |
@@ -217,7 +218,7 @@ Test accounts (password `M7c24`): `test.patient@mcare.test` (Patient One: two we
 - **The database decides.** Access rules, clinical rules (grading, alerts), notifications and the audit trail belong to `supabase/migrations`, not to a screen. A screen may hide a button the person cannot use; it must never be the only thing stopping them. The browser cannot write the audit trail: audit inside the trigger or function that makes the change (`audit_event(...)`).
 - **Identity checks come from the helpers.** Use `my_role()`, `is_admin()`, `staff_can()`, `treats()`, `consults()`, `account_active()` in policies and functions: they already include the account status and two-step sign-in (`mfa_ok()`). A `security definer` function the app calls must check one of them itself (it bypasses row rules). A function acting for someone sets `set_config('mcare.on_behalf_of', <person>, true)` before auditing; one that writes its own audit entry for a batch sets `mcare.self_audited` so the row triggers stay quiet.
 - **Staying current.** A table that belongs to a patient needs the `zz_touch_patient` trigger, or open screens will not learn of its changes.
-- **Migrations.** Add a new numbered file (next: `0020_…`; `0018` is kept for the `auth-upgrade` branch); never edit one that has been applied. New functions must have their default grants revoked ([§8 Database → Adding a change](#adding-a-change)).
+- **Migrations.** Add a new numbered file (next: `0021_…`; `0018` is kept for the `auth-upgrade` branch); never edit one that has been applied. New functions must have their default grants revoked ([§8 Database → Adding a change](#adding-a-change)).
 - **Sending.** Never send email, SMS or push from a screen: the database queues every channel ([§10](#10-notifications-and-delivery)).
 - **Errors** shown to people are sentences: every `api/actions.ts` request goes through `ok(…)`, which throws an `ApiError` whose message (`explain()`) can be shown as it is; `run()` in `AppContext` turns it into `{ ok: false, error }`.
 - **No warnings.** `npm run typecheck` treats unused variables, imports and parameters as errors (app and Edge Function); `npm run build` must print no warning (keep every file under 500 kB: split with `codeSplitting` in `vite.config.ts` or a dynamic `import()`); `npm run test:ui` fails on any console warning or error. Fix a warning where it starts; never silence it.
@@ -369,6 +370,7 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `PatientMeds.tsx` | Prescribe, stop, restart. |
 | `PatientCarePlan.tsx` | Care plan editor and steps. |
 | `PatientNutrition.tsx` | Meal plan. |
+| `PathwaySheet.tsx` | `PathwayCard` on the patient overview: "Care from conditions": review the proposed plan, edit it and apply it in one step. |
 | `PatientNotes.tsx` | Clinical notes, shared/internal, corrections. |
 | `PatientDocs.tsx` · `ReportBuilderSheet.tsx` (270) | The patient's documents · build a vitals report. |
 | `ConsultView.tsx` | Read-only record of a consulted patient. |
@@ -420,6 +422,7 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `vitals.ts` (615) | Grading (`evaluate`, `targetRange`), validation, risk and health score, `alertStory`, units, trends, insights, check-in cadence (`planHours`, `checkInStatus` follow the doctor's plan), `VITAL_GROUPS`. |
 | `schedule.ts` | `buildDaySchedule`: what is due when (doses, meals, vitals, appointments). |
 | `medicines.ts` | Prescribing checks: `allergyConflicts` (mirror of `allergy_drug_terms`, keep in step), `conflictLabel`, `alreadyTaking`. |
+| `pathways.ts` | Care pathways: `proposePathway` (a patient's conditions → one proposed plan: every vital, the most frequent measuring, the strictest target, the smallest fluid limit; clashes listed), `planFrom`, `planIssue`. A suggestion: `apply_pathway` decides. |
 | `messaging.ts` | `threadOf`, `partnersOf`, `conversationsOf`. |
 | `health.ts` | Conditions (`COMMON_CONDITIONS` for demo mode; live uses the catalogue), allergies, `suggestedVitals(conditions, catalogue)`, `fluidRestrictionFor` (heart failure, kidney disease), `healthGaps`. |
 | `push.ts` | This device's push subscription. |
@@ -587,6 +590,7 @@ The sign-in email lives in `auth.users`; `profiles.email` follows it and is neve
 | Record opening (`record_views`) | patient | the database (`log_record_view`) | nobody | the patient; staff with "View audit logs" | append-only |
 | Doctor's signature (`doctor_signatures`) | doctor | the doctor | the doctor | the doctor only (stamped onto what they sign) | audited |
 | Condition in the catalogue (`condition_defs`, `condition_vitals`) | mCare | admin (`save_condition_def`) | admin | everyone signed in | audited |
+| Care pathway (`condition_vitals` frequency and targets, `condition_defs` fluid limit, diet note and review, `condition_goals`) | mCare | admin (`save_condition_def`) | admin; marking it reviewed is stamped, any change clears it | everyone signed in | audited when reviewed |
 | Settings (`app_settings`: security, retention) | mCare | — | admin (`save_settings`) | everyone signed in | audited with before and after |
 
 ### Who may do what
@@ -712,8 +716,9 @@ The first ten files are the **baseline**. On 3 October 2026, before any hosted d
 
 | `0017_clear_read_notifications.sql` | Policy `notifications_clear`: a person may delete their own notifications once read. A delivery row now outlives its notification (`notification_id` foreign key `on delete set null`), so what was sent stays on record and follows its own retention (`delivery_days`). |
 | `0019_fluid_limit_allergy_check.sql` | `meal_plans.fluid_mode` (`goal` or `limit`: a fluid restriction for heart failure and kidney disease; the patient is told "at most N glasses"). `allergy_drug_terms` (allergy group → medicine-name fragments, admin-managed) and `prescription_allergy_check`: a prescription matching a recorded allergy is refused unless `prescriptions.allergy_override` gives a reason, which is kept (never rewritten) and audited ("Prescribed despite allergy"). `0018` is left for the `auth-upgrade` branch (the runner tracks files by name). |
+| `0020_care_pathways.sql` | Care pathways on the conditions catalogue: per vital `condition_vitals.frequency`, `target_min`, `target_max`; per condition `fluid_limit_glasses`, `diet_note`, `reviewed_by`/`reviewed_at` (clinical review); `condition_goals` (starter care-plan goals). Seeded starting values, unreviewed. `save_condition_def` replaced (takes the pathway and a `reviewed` flag; a change to the clinical content clears the review). `apply_pathway(patient, plan)`: the treating doctor applies a reviewed bundle in one transaction (monitoring plan, targets, fluid limit and diet note on the meal plan, a draft care plan with the goals), audited once with the bundle, the patient told once. |
 
-**Next file number: `0020`** (`0018` is kept for the `auth-upgrade` branch).
+**Next file number: `0021`** (`0018` is kept for the `auth-upgrade` branch).
 
 #### Function and trigger index
 
@@ -735,6 +740,7 @@ The first ten files are the **baseline**. On 3 October 2026, before any hosted d
 | `0016` | `message_read_stamp` `rate_limit` `log_record_view` `export_my_record` `audit_log_guard` `apply_retention` `run_retention_now`; replaced: `log_patient_view` `purge_deleted_documents` `purge_expired_documents` | `message_read_stamp` `rate_limit` (messages, support_tickets, appointments, share_links, report_requests) `record_views_append_only` `audit_log_append_only` (now `audit_log_guard`) |
 | `0017` | policy `notifications_clear`; `notification_deliveries.notification_id` foreign key now `on delete set null` | |
 | `0019` | `medication_allergy_conflict` (internal) `prescription_allergy_check`; replaced: `meal_plan_changed` | `prescription_allergy_check` (prescriptions) `zz_touch_topic` (allergy_drug_terms) |
+| `0020` | `pathway_of` (internal) `apply_pathway`; replaced: `save_condition_def` | `zz_touch_topic` (condition_goals) |
 
 #### Adding a change
 
@@ -844,7 +850,7 @@ erDiagram
 
 ### Tables, keys and constraints
 
-55 tables. Seven were added after the baseline: `app_settings` (0012), `doctor_signatures` (0014), `condition_defs`, `condition_vitals`, `vital_reviews` (0015), `record_views` (0016), `allergy_drug_terms` (0019); one view, `patient_care_team` (0015). The 48 of the baseline are in `0001_schema.sql`: `profiles` `doctors` `staff` `patients` `allergies` `conditions` `emergency_contacts` `consents` `account_invitations` `doctor_requests` `care_assignments` `care_team_members` `doctor_ratings` `vital_defs` `tracked_vitals` `thresholds` `threshold_changes` `readings` `alerts` `alert_remeasures` `alert_comments` `prescriptions` `prescription_events` `dose_logs` `meal_plans` `meal_logs` `hydration_logs` `appointments` `appointment_events` `doctor_hours` `doctor_time_off` `clinical_notes` `care_plans` `care_plan_items` `care_plan_events` `documents` `document_events` `share_links` `support_grants` `report_requests` `messages` `notifications` `push_subscriptions` `notification_deliveries` `support_tickets` `audit_log` `patient_changes` `system_changes`.
+56 tables. Eight were added after the baseline: `app_settings` (0012), `doctor_signatures` (0014), `condition_defs`, `condition_vitals`, `vital_reviews` (0015), `record_views` (0016), `allergy_drug_terms` (0019), `condition_goals` (0020); one view, `patient_care_team` (0015). The 48 of the baseline are in `0001_schema.sql`: `profiles` `doctors` `staff` `patients` `allergies` `conditions` `emergency_contacts` `consents` `account_invitations` `doctor_requests` `care_assignments` `care_team_members` `doctor_ratings` `vital_defs` `tracked_vitals` `thresholds` `threshold_changes` `readings` `alerts` `alert_remeasures` `alert_comments` `prescriptions` `prescription_events` `dose_logs` `meal_plans` `meal_logs` `hydration_logs` `appointments` `appointment_events` `doctor_hours` `doctor_time_off` `clinical_notes` `care_plans` `care_plan_items` `care_plan_events` `documents` `document_events` `share_links` `support_grants` `report_requests` `messages` `notifications` `push_subscriptions` `notification_deliveries` `support_tickets` `audit_log` `patient_changes` `system_changes`.
 
 | Table | Primary key | Belongs to | Notes |
 | --- | --- | --- | --- |
@@ -940,6 +946,7 @@ Triggers are used where a rule must hold however the row is written.
 | An approved doctor's licence number is changed by anyone but an approver | Refused. Specialty and facility changes are audited. |
 | A doctor signs or releases a document, or a prescription is filed | The signer's signature is stamped from `doctor_signatures`. |
 | The treating doctor sets a monitoring plan or reviews readings | Saved, audited, the patient is told (`set_vital_plan`, `review_vitals`). |
+| The treating doctor applies a care pathway | One transaction: monitoring plan, targets, fluid limit and diet note, a draft care plan with the goals; audited once with the whole bundle; the patient told once (`apply_pathway`). |
 | A message is marked read | `read_at` is stamped. |
 | Someone creates messages, support requests, appointments, share links or report requests too fast | Refused with a sentence (`rate_limit`). |
 | A record is opened by someone other than the patient | A line in `record_views` (the app calls `log_record_view`). |
@@ -1010,6 +1017,7 @@ Tabs: Home (`dashboard`) · Patients (`patients`) · Chat (`messages`) · Appts 
 | Readings and trends; record a clinic reading; mark one invalid | `PatientVitals` | `readings` | recorder, `invalidated_by/at`, audit |
 | Tracked vitals, target and critical ranges | `PatientVitals` | `set_tracked_vitals()`, `thresholds` | `threshold_changes` |
 | Monitoring plan: how often to measure each vital, and why (the patient is told) | `PatientVitals` ("⏱" on each vital) | `set_vital_plan()`, `tracked_vitals` | audit |
+| Care from conditions: the patient's conditions propose a starting plan (vitals and how often, targets, fluid limit, diet note, care-plan goals; several conditions merged, clashes shown, unreviewed values flagged); the doctor edits and applies it in one step | `PathwaySheet` (overview) | `apply_pathway()` | audit (the whole bundle) |
 | Review of readings: new readings since the last review; "Mark reviewed" with a note for the patient | `PatientVitals`, `DashboardTab` | `review_vitals()`, `vital_reviews` | append-only, audit |
 | Opening a patient (or a consulted patient) is in their access log | `PatientDetail`, `ConsultView` | `log_record_view()` | `record_views` |
 | Alerts: acknowledge, escalate, ask for a re-measurement, see it arrive, comment / action / instruction without resolving, resolve (or "resolve with this reading"), book a follow-up | `AlertsTab`, `AlertCard`, shared `ResolveAlertSheet` | `alerts`, `alert_comments`, `alert_remeasures`, `schedule_follow_up()` | the alert's steps, comments and re-measurements |
@@ -1040,7 +1048,7 @@ Tabs (`ADMIN_TABS` in `AdminApp.tsx`): `dashboard` · People: `approvals`, `assi
 | Find, suspend, deactivate, reactivate (with a reason); assistant permissions | `UsersTab` | admin only for status and permissions | `set_account_status()` |
 | Correct someone's name, phone, date of birth (with a reason; audited as done for them; they are told) | `UsersTab` | admin; Handle support (not staff accounts) | `admin_update_profile()` |
 | Reset two-step sign-in for someone who lost their phone | `UsersTab` | admin | `reset_two_step()` |
-| Settings: require two-step sign-in per role; idle sign-out per role; data retention (and "Apply now"); the conditions catalogue | `SettingsTab` | admin only | `save_settings()`, `run_retention_now()`, `save_condition_def()` |
+| Settings: require two-step sign-in per role; idle sign-out per role; data retention (and "Apply now"); the conditions catalogue with each condition's care pathway (frequency and target per vital, fluid limit, diet note, goals) and its clinical review | `SettingsTab` | admin only | `save_settings()`, `run_retention_now()`, `save_condition_def()` |
 | Assign, move or remove a doctor; history; consulting doctors | `AssignTab`, `PatientAssignmentView`, `DoctorPicker` | Assign healthworkers | `assign_doctor()`, `add_consulting_doctor()` |
 | Answer a patient's request for a doctor | `PatientAssignmentView` | Approve patient requests | `decide_doctor_request()` |
 | Alert monitor: chase the doctor, work and resolve alerts, close an SOS | `AlertsMonitorTab` | Monitor patients | `chase_alert()`, `alerts` |
@@ -1139,7 +1147,7 @@ Each layer assumes the one above it may be compromised.
 
 ### Who reaches what
 
-Row-level security is on for every table (55 in `public`). A table with no policy for a role returns nothing to it. The role table is in [§7 Data model → Who may do what](#who-may-do-what); the policies are in `0009_security.sql` and the migrations after it.
+Row-level security is on for every table (56 in `public`). A table with no policy for a role returns nothing to it. The role table is in [§7 Data model → Who may do what](#who-may-do-what); the policies are in `0009_security.sql` and the migrations after it.
 
 - **Relationships grant access, not roles.** A doctor reads a patient only while assigned (`treats()`) or on the care team (`consults()`); losing the relationship removes access in the same transaction.
 - **The restrictive rule** `<table>_active_only` on every table requires `account_active()`; since `0016` it is written `(select account_active())`, so Postgres works it out once per query instead of once per row.
@@ -1454,6 +1462,7 @@ Check `git status` too: work may have started since this was written.
 | --- | --- |
 | **Sign in, sign up and every form step move like the welcome page** (branch `auth-motion-parity`). The logo flies (and resizes) from the welcome page onto the form and back, follows the pointer between the tour and the form on web, and is the way back to welcome; the icons around it spring out, drift with the pointer and act out the tour's feature at every size; every main button (`AuthButton`) is the Get Started pill: lean to the pointer, pointer light, ripple, pulsing ring once it can be pressed. The old 2px hover lift is gone, which also ends the pointer jitter the browser test had to work around (`signIn` in `ui.test.mjs` still moves the pointer away first; harmless). Under reduced motion: no flight, no lean (`reducedMotion()`), icons appear without the spring. Verified: typecheck clean; `test:ui` 70 of 71 (the one failure was another change to `authBackend.ts` saved mid-run, not this one); a separate browser check at 390/834/1366px: one logo on screen on every step, logo flight and button lean measured, sign-up fits a 1366×768 window, no console error. | `src/shared/auth/AuthShell.tsx`, `authKit.tsx`, `WelcomeScreen.tsx` |
 | **P0 clinical safety** (branch `p0-fluid-limit-allergy-check`). *Fluid limit*: a meal plan's water is a goal or a daily limit (`fluid_mode`, migration `0019`); a heart-failure or kidney-disease patient is never shown "drink 8 glasses": without a doctor's figure they are asked to check their limit, with one they see "at most N" and a warning when over; the doctor's form starts such a patient on a limit and warns on a goal; days over the limit show in red to the doctor. *Allergy check*: a prescription matching a recorded allergy is refused by the database unless the doctor gives a reason (kept, audited, shown on the prescription); the form warns first and notes a medicine already being taken. Verified: typecheck clean; `test:db` 418/0; `test:api` 177/0; `test:ui` 72/0 (new: the prescribing form stops a penicillin-allergic patient's amoxicillin until a reason is given). | `supabase/migrations/0019_fluid_limit_allergy_check.sql`, `src/shared/lib/medicines.ts` (new), `health.ts`, `types.ts`, `records.ts`, `actions.ts`, `AppContext.tsx`, `src/doctor/PatientMeds.tsx`, `PatientNutrition.tsx`, `useDoctor.ts`, `src/patient/MealsTab.tsx`, `usePatient.ts`, rules and browser tests |
+| **P1 care pathways** (branch `p1-care-pathways`, on top of P0). Each condition in the catalogue carries a starting plan: how often to measure each vital and a target, a daily fluid limit, a diet note and starter care-plan goals (migration `0020`, seeded and marked *not reviewed*). On the patient overview, "Care from conditions" proposes one plan from all the patient's conditions (every vital, the most frequent measuring, the strictest target, the smallest fluid limit; clashing targets are shown and left to the doctor; unreviewed values are flagged); the doctor edits and applies it in one step (`apply_pathway`: one transaction, audited once, the patient told once; goals become a draft care plan the doctor starts). Admins edit each pathway in Settings → Conditions and mark it clinically reviewed; any later change clears the review. The clinical starting values need a clinician's sign-off before real use. Verified: typecheck clean; `test:db` 426/0; `test:api` 179/0; `test:ui` 73/0 (new: the doctor reviews and applies the pathway for a patient's high blood pressure). | `supabase/migrations/0020_care_pathways.sql`, `src/shared/lib/pathways.ts` (new), `src/doctor/PathwaySheet.tsx` (new), `PatientDetail.tsx`, `useDoctor.ts`, `src/admin/SettingsTab.tsx`, `src/shared/lib/types.ts`, `health.ts` (`DEMO_PATHWAYS`), `records.ts`, `actions.ts`, `AppContext.tsx`, the three test suites |
 
 ### Recently finished
 
@@ -1503,6 +1512,7 @@ Check `git status` too: work may have started since this was written.
 | SOS and "I'm safe now" | Done |
 | Targets, critical ranges, tracked vitals, history | Done |
 | Conditions catalogue (admin-managed, ICD-10, suggested vitals); patients' conditions linked to it | Done; admin editing: no browser test |
+| Care pathways: starting plan per condition, applied by the treating doctor in one step; admin review | Done; admin pathway editing: no browser test; the starting values: not yet clinically reviewed |
 | Prescriptions: prescribe, stop, restart, history, filed as a document; auto-complete at end date | Done |
 | Clinical notes (shared / internal, corrected by a new note) | Done |
 | Care plans (goals, interventions, steps, events) | Done |

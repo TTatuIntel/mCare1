@@ -1237,6 +1237,49 @@ check('the plan is saved with who asked and why, the patient is told, and it is 
   && (await one(`select count(*)::int n from audit_log where action in ('Started tracking a vital', 'Changed a tracked vital') and patient_id = $1 and created_at > now() - interval '1 minute'`, [ID.pat])).n === 0)
 check('the patient sees their plan', (await as(ID.pat, `select frequency from tracked_vitals where vital_id = 'gluc'`))[0].frequency === 'twice_daily')
 
+// Care pathways (0020): the catalogue carries a starting plan; the treating doctor applies a reviewed bundle in one step.
+check('the catalogue carries starting values for the doctor to review', (await one(`select fluid_limit_glasses, reviewed_at from condition_defs where code = 'heart_failure'`)).fluid_limit_glasses === 6
+  && (await one(`select reviewed_at from condition_defs where code = 'heart_failure'`)).reviewed_at === null
+  && Number((await one(`select target_max from condition_vitals where condition_code = 'hypertension' and vital_id = 'bp'`)).target_max) === 130
+  && (await as(ID.pat, `select 1 from condition_goals where condition_code = 'heart_failure'`)).length === 2)
+const bundle = JSON.stringify({ conditions: ['heart_failure', 'hypertension'], care_plan_title: 'Heart failure and blood pressure', fluid_limit_glasses: 6, diet_note: 'Low salt',
+  vitals: [{ vital_id: 'wt', frequency: 'daily', condition_code: 'heart_failure', reason: 'Daily weight' }, { vital_id: 'bp', frequency: 'daily', target_min: 90, target_max: 130, condition_code: 'hypertension' }],
+  goals: [{ text: 'Weigh every morning', vital_id: 'wt' }] })
+check('only the treating doctor applies a pathway', (await denied(DOC, `select apply_pathway($1, $2)`, [ID.pat, bundle])).blocked
+  && (await denied(ID.pat, `select apply_pathway($1, $2)`, [ID.pat, bundle])).blocked
+  && (await denied(ID.admin, `select apply_pathway($1, $2)`, [ID.pat, bundle])).blocked
+  && (await denied(ID.asst, `select apply_pathway($1, $2)`, [ID.pat, bundle])).blocked)
+check('an impossible target or an unknown vital is refused, and nothing is half-saved', (await denied(TREAT, `select apply_pathway($1, $2)`, [ID.pat, JSON.stringify({ vitals: [{ vital_id: 'bp', target_min: 140, target_max: 120 }] })])).blocked
+  && (await denied(TREAT, `select apply_pathway($1, $2)`, [ID.pat, JSON.stringify({ vitals: [{ vital_id: 'wt', frequency: 'daily' }, { vital_id: 'nope' }] })])).blocked
+  && (await one(`select frequency from tracked_vitals where patient_id = $1 and vital_id = 'wt'`, [ID.pat]))?.frequency !== 'daily')
+await db.exec('begin')   // rolled back below: later checks see the record as it was
+const pw = (await as(TREAT, `select apply_pathway($1, $2) r`, [ID.pat, bundle]))[0].r
+const cpRow = await one(`select status, title, (select count(*)::int from care_plan_items i where i.plan_id = p.id and i.kind = 'goal') goals from care_plans p where id = $1`, [pw.care_plan_id])
+check('applying sets the monitoring plan, the target, the fluid limit and a draft care plan in one step', pw.vitals === 2 && pw.targets === 1
+  && (await one(`select frequency, assigned_by from tracked_vitals where patient_id = $1 and vital_id = 'wt'`, [ID.pat])).assigned_by === TREAT
+  && Number((await one(`select target_max from thresholds where patient_id = $1 and vital_id = 'bp'`, [ID.pat])).target_max) === 130
+  && (await one(`select fluid_mode, water_goal, dietary_note from meal_plans where patient_id = $1`, [ID.pat])).fluid_mode === 'limit'
+  && cpRow.status === 'draft' && cpRow.goals === 1, JSON.stringify({ pw, cpRow }))
+check('…audited once with the bundle, and the patient told once (a draft care plan stays out of their sight)',
+  (await one(`select count(*)::int n from audit_log where action = 'Applied care pathway' and patient_id = $1 and after_state ? 'vitals'`, [ID.pat])).n === 1
+  && (await as(ID.pat, `select body from notifications where title = 'Your care was set up'`)).some(n => /High blood pressure, Heart failure/.test(n.body) && /fluid limit 6/.test(n.body))
+  && (await as(ID.pat, `select 1 from care_plans where id = $1`, [pw.care_plan_id])).length === 0)
+await db.exec('rollback')
+
+// The admin keeps the pathway; a change to its clinical content needs a fresh review.
+check('only an admin changes a pathway', (await denied(TREAT, `select save_condition_def($1)`, [JSON.stringify({ code: 'hypertension', name: 'High blood pressure', vitals: [] })])).blocked)
+await db.exec('begin')
+await as(ID.admin, `select save_condition_def($1)`, [JSON.stringify({ code: 'hypertension', name: 'High blood pressure', icon: '🫀', icd10: 'I10', active: true, reviewed: true, diet_note: 'Low salt',
+  vitals: [{ vital_id: 'bp', frequency: 'daily', target_min: 90, target_max: 130 }, 'hr'], goals: [{ text: 'BP on target', vital_id: 'bp' }] })])
+const reviewed = await one(`select reviewed_by, diet_note from condition_defs where code = 'hypertension'`)
+check('the admin marks a pathway reviewed; the review is stamped and audited', reviewed.reviewed_by === ID.admin && reviewed.diet_note === 'Low salt'
+  && (await one(`select count(*)::int n from condition_vitals where condition_code = 'hypertension'`)).n === 2
+  && (await one(`select count(*)::int n from audit_log where action = 'Reviewed condition pathway' and resource_id = 'hypertension'`)).n === 1)
+await as(ID.admin, `select save_condition_def($1)`, [JSON.stringify({ code: 'hypertension', name: 'High blood pressure', icon: '🫀', icd10: 'I10', active: true, diet_note: 'Low salt',
+  vitals: [{ vital_id: 'bp', frequency: 'daily', target_min: 90, target_max: 140 }, 'hr'], goals: [{ text: 'BP on target', vital_id: 'bp' }] })])
+check('…changing a target afterwards clears the review', (await one(`select reviewed_at from condition_defs where code = 'hypertension'`)).reviewed_at === null)
+await db.exec('rollback')
+
 // Reviews of readings.
 check('only the treating doctor marks readings reviewed', (await denied(DOC, `select review_vitals($1)`, [ID.pat])).blocked && (await denied(ID.pat, `select review_vitals($1)`, [ID.pat])).blocked)
 const reviewRef = '0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f'

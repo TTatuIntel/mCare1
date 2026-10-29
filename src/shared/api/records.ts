@@ -288,7 +288,7 @@ export async function loadRecords(me: AppUser): Promise<Records> {
 
   // The newer parts of the record, and what belongs to one role.
   const [rxEvents, planRows, planItemRows, planEventRows, assignmentRows, hourRows, timeOffRows, pastRows, remeasureRows, alertCommentRows, teamRows,
-    settingRows, conditionRows, conditionVitalRows, reviewRows, viewRows, directoryRows, signatureRows] = await Promise.all([
+    settingRows, conditionRows, conditionVitalRows, conditionGoalRows, reviewRows, viewRows, directoryRows, signatureRows] = await Promise.all([
     rows('prescription_events', q => q.order('id')),
     rows('care_plans', q => q.order('created_at', { ascending: false })),
     rows('care_plan_items', q => q.order('position')),
@@ -303,6 +303,7 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     rows('app_settings'),
     rows('condition_defs', q => q.order('position')),
     rows('condition_vitals', q => q.order('position')),
+    rows('condition_goals', q => q.order('position')),
     rows('vital_reviews', q => q.order('reviewed_through', { ascending: false }).limit(1000)),
     rows('record_views', q => q.order('created_at', { ascending: false }).limit(300)),
     // Approved doctors with their public details: how anyone finds a doctor they do not deal with yet.
@@ -480,6 +481,12 @@ export async function loadRecords(me: AppUser): Promise<Records> {
     conditionDefs: conditionRows.map(c => ({
       code: c.code, name: c.name, icon: c.icon ?? '🩺', icd10: c.icd10 ?? undefined, active: c.active,
       vitals: conditionVitalRows.filter(v => v.condition_code === c.code).map(v => v.vital_id as string),
+      vitalPlans: Object.fromEntries(conditionVitalRows.filter(v => v.condition_code === c.code).map(v => [v.vital_id, {
+        frequency: v.frequency ?? undefined, targetMin: num(v.target_min), targetMax: num(v.target_max),
+      }])),
+      fluidLimitGlasses: c.fluid_limit_glasses ?? undefined, dietNote: c.diet_note ?? undefined,
+      goals: conditionGoalRows.filter(g => g.condition_code === c.code).map(g => ({ text: g.text as string, vitalId: g.vital_id ?? undefined })),
+      reviewedAt: when(c.reviewed_at), reviewedBy: c.reviewed_by ?? undefined,
     })),
     vitalReviews: reviewRows.map(r => ({
       id: r.id, patientId: r.patient_id, reviewerId: r.reviewer_id, reviewedThrough: ms(r.reviewed_through) ?? 0, note: r.note ?? undefined,

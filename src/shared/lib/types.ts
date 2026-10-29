@@ -623,7 +623,32 @@ export interface ConditionDef {
   icon: string
   icd10?: string
   active: boolean
+  /** The vitals this condition calls for, in order. */
   vitals: string[]
+  /* ── The care pathway: a starting plan the treating doctor reviews and applies (migration 0020) ── */
+  /** Per vital: how often to measure it and a target (base units), when the pathway suggests one. */
+  vitalPlans?: Record<string, PathwayVital>
+  /** A daily fluid limit in glasses (heart failure, kidney disease). */
+  fluidLimitGlasses?: number
+  dietNote?: string
+  /** Starter goals for the care plan. */
+  goals?: { text: string; vitalId?: string }[]
+  /** When an admin last confirmed the pathway is clinically right; cleared when its content changes. */
+  reviewedAt?: string
+  reviewedBy?: string
+}
+
+export interface PathwayVital { frequency?: VitalFrequency; targetMin?: number; targetMax?: number }
+
+/** What the treating doctor applies for a patient (`apply_pathway`): reviewed and edited from the proposal. */
+export interface PathwayPlan {
+  /** The condition codes it was built from. */
+  conditions: string[]
+  vitals: { vitalId: string; frequency?: VitalFrequency; reason?: string; conditionCode?: string; targetMin?: number; targetMax?: number }[]
+  fluidLimitGlasses?: number
+  dietNote?: string
+  goals: { text: string; vitalId?: string }[]
+  carePlanTitle?: string
 }
 
 /* ─── Settings an administrator decides ─────────────────────────────── */
