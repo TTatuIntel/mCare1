@@ -1189,7 +1189,7 @@ check('an admin sets them, cleaned (lower case, no repeats, no one-letter words)
   && (await denied(TREAT, `select save_condition_def('{"code":"gout","name":"Gout","keywords":["x2"]}')`)).blocked)
 
 // Settings.
-check('everyone signed in reads the settings; only an admin changes them, through the function', (await as(ID.pat, `select 1 from app_settings`)).length === 2
+check('everyone signed in reads the settings; only an admin changes them, through the function', (await as(ID.pat, `select 1 from app_settings`)).length === 3
   && (await denied(ID.pat, `select save_settings('security', '{"mfa_required_roles":[]}')`)).blocked
   && (await denied(ID.asst, `select save_settings('retention', '{}')`)).blocked
   && (await as(ID.admin, `update app_settings set value = '{}' where key = 'security' returning 1`)).length === 0
@@ -1383,6 +1383,160 @@ check("every table that belongs to a patient tells open screens it changed (zz_t
 check('signed-out visitors reach none of the new tables or functions', (await denied(null, `select 1 from app_settings`)).blocked && (await denied(null, `select 1 from record_views`)).blocked
   && (await denied(null, `select * from doctor_directory()`)).blocked && (await denied(null, `select my_security()`)).blocked
   && (await denied(null, `select 1 from vital_reviews`)).blocked)
+
+/* ── Vital safety (0023, 0024): the review of the vital structure ── */
+console.log('\nVital safety')
+const VS = '77777777-7777-4777-8777-777777777771'
+await signUp(VS, 'vera.safety@mcare.test', { full_name: 'Vera Safety' }, true)
+await as(ID.admin, `update patients set assigned_doctor_id = $1 where id = $2`, [ID.doc, VS])
+await as(ID.doc, `select add_consulting_doctor($1, $2)`, [VS, ID.doc2])
+await db.query(`update profiles set phone = '+254 700 000 991', notify_sms = true where id = $1`, [ID.doc])
+const vlog = (v, val, o = {}) => as(o.by ?? VS, `insert into readings (patient_id, vital_id, value, context, source) values ($1, $2, $3, $4, $5)
+  returning id, level, graded_range, source, context`, [VS, v, val, o.context ?? null, o.source ?? 'manual']).then(r => r[0])
+const vAlerts = async vital => (await db.query(`select * from alerts where patient_id = $1 and vital_id is not distinct from $2 order by created_at`, [VS, vital])).rows
+const ago = async (sql, params) => { await db.exec(`set session_replication_role = replica`); await db.query(sql, params); await db.exec(`set session_replication_role = origin`) }
+const told = async (who, like) => (await db.query(`select title, body, urgent from notifications where user_id = $1 and title like $2 order by created_at desc`, [who, like])).rows
+const vsName = 'Vera Safety'
+
+// Grading: the range used is stamped; no sentinel edges; source.
+const vsSp = await vlog('spo2', '100')
+check('SpO₂ 100 % is normal and there is no upper critical edge (no sentinel 101)', vsSp.level === 'normal'
+  && vsSp.graded_range.critical[0] === 90 && vsSp.graded_range.critical[1] === null && vsSp.graded_range.target.join() === '95,100', JSON.stringify(vsSp.graded_range))
+check('a reading says where it came from: the patient\'s own is manual, a device one is kept', vsSp.source === 'manual' && (await vlog('hr', '72', { source: 'device' })).source === 'device')
+check('a reading entered by the doctor is a clinic reading, whatever the app says', (await vlog('hr', '74', { by: ID.doc, source: 'device' })).source === 'clinic')
+
+// Item 6 and 13: a critical reading reaches the consulting doctor; urgency is carried on the notification and sends a text.
+const vsCrit = await vlog('spo2', '85')
+const vsDocCrit = await told(ID.doc, `Critical: ${vsName}`)
+check('a critical reading is urgent and goes to the consulting doctor too', vsCrit.level === 'critical' && vsDocCrit[0]?.urgent === true
+  && (await told(ID.doc2, `Critical: ${vsName}`)).length === 1)
+check('the urgent notification is texted (urgency no longer read from the title)', (await one(`select count(*)::int n from notification_deliveries d join notifications n on n.id = d.notification_id
+  where n.user_id = $1 and n.title = $2 and d.channel = 'sms'`, [ID.doc, `Critical: ${vsName}`])).n === 1)
+check('the patient is told the emergency number from the settings', /call 999/.test((await told(VS, 'Critical reading%'))[0]?.body ?? ''))
+await as(ID.doc, `update alerts set status = 'resolved', resolution_reason = 'Probe checked' where patient_id = $1 and vital_id = 'spo2' and status <> 'resolved'`, [VS])
+const vsCleared = (await vlog('spo2', '84'), await vlog('spo2', '97'))
+check('a consulting doctor is not sent the routine follow-ups', vsCleared.level === 'normal' && (await told(ID.doc2, `Re-check in range: ${vsName}`)).length === 0
+  && (await told(ID.doc, `Re-check in range: ${vsName}`)).length === 1)
+await as(ID.doc, `update alerts set status = 'resolved', resolution_reason = 'Reviewed' where patient_id = $1 and status <> 'resolved'`, [VS])
+
+// Item 12: context ranges, fixed after the first save.
+const vsFast = await vlog('gluc', '120', { context: 'fasting' }), vsMeal = await vlog('gluc', '120', { context: 'after_meal' })
+check('glucose 120 is out of range fasting and in range after a vsMeal', vsFast.level === 'warning' && vsMeal.level === 'normal' && vsFast.graded_range.target.join() === '70,100')
+check('the context of a saved reading cannot be changed', (await as(VS, `update readings set context = 'after_meal' where id = $1 returning context`, [vsFast.id]))[0].context === 'fasting')
+check('an unknown context is refused', (await denied(VS, `insert into readings (patient_id, vital_id, value, context) values ($1, 'gluc', '90', 'lunchtime')`, [VS])).blocked)
+
+// Item 8: a vital recorded but not graded.
+await as(ID.admin, `update vital_defs set active = true where id = 'ht'`)
+check('height is recorded but never graded', (await vlog('ht', '25')).level === 'normal' && (await vAlerts('ht')).length === 0)
+await as(ID.admin, `update vital_defs set active = false where id = 'ht'`)
+
+// Item 4: personal diastolic ranges.
+await as(ID.doc, `insert into thresholds (patient_id, vital_id, target_min, target_max, dia_target_min, dia_target_max) values ($1, 'bp', 90, 130, 60, 80)`, [VS])
+const vsBp1 = await vlog('bp', '120/85')
+check('the doctor\'s diastolic target grades the lower number', vsBp1.level === 'warning' && vsBp1.graded_range.dia_target.join() === '60,80')
+check('the diastolic target is kept in the history and audited; the patient is told',
+  (await one(`select to_dia from threshold_changes where patient_id = $1 and vital_id = 'bp' order by id desc limit 1`, [VS])).to_dia?.target_max === 80
+  && (await one(`select count(*)::int n from audit_log where action = 'Set diastolic range' and patient_id = $1`, [VS])).n === 1
+  && (await told(VS, 'Your target was updated')).some(n => /lower number/.test(n.body)))
+check('a patient cannot set their own diastolic target', (await as(VS, `update thresholds set dia_target_max = 120 where patient_id = $1 returning 1`, [VS])).length === 0)
+
+// Item 2: repeated warnings far apart raise an alert, which a single good number does not close.
+await ago(`update readings set taken_at = now() - interval '2 days' where id = $1`, [vsBp1.id])
+const vsBp2 = await vlog('bp', '121/86')
+check('two warnings two days apart: still no alert', vsBp2.level === 'warning' && (await vAlerts('bp')).length === 0)
+await ago(`update readings set taken_at = now() - interval '1 day' where id = $1`, [vsBp2.id])
+await vlog('bp', '122/87')
+const vsRep = (await vAlerts('bp'))[0]
+check('the third warning within 7 days raises an alert for the pattern', vsRep?.rule === 'repeat_warning' && vsRep.severity === 'warning'
+  && (await told(ID.doc, `Repeatedly out of range: ${vsName}`)).length === 1)
+await vlog('bp', '118/75')
+check('one in-range reading does not close a pattern alert: it goes back to the doctor', (await vAlerts('bp'))[0].status !== 'resolved')
+
+// Item 11: a re-measurement links only within the window.
+await ago(`update alerts set created_at = now() - interval '30 hours' where id = $1`, [vsRep.id])
+await ago(`update alert_remeasures set created_at = now() - interval '30 hours' where alert_id = $1`, [vsRep.id])
+const vsBefore = (await one(`select count(*)::int n from alert_remeasures where alert_id = $1`, [vsRep.id])).n
+await vlog('bp', '125/88')
+check('a reading after the re-measurement window is not folded into the old alert', (await one(`select count(*)::int n from alert_remeasures where alert_id = $1`, [vsRep.id])).n === vsBefore)
+
+// Item 8: heart failure weight gain.
+await as(VS, `insert into conditions (patient_id, name) values ($1, 'Heart failure')`, [VS])
+const vsW1 = await vlog('wt', '70')
+await ago(`update readings set taken_at = now() - interval '2 days' where id = $1`, [vsW1.id])
+const vsW2 = await vlog('wt', '72.5')
+const vsWa = (await vAlerts('wt'))[0]
+check('heart failure: 2.5 kg up in 2 days raises a weight-gain alert though the weight is in range', vsW2.level === 'normal' && vsWa?.rule === 'weight_gain'
+  && (await told(ID.doc, `Weight gain: ${vsName}`)).length === 1, JSON.stringify(vsWa))
+
+// Item 1: escalation tiers.
+const vsSos = (await as(VS, `select raise_sos('Short of breath') id`))[0].id
+check('an SOS reaches the consulting doctor', (await told(ID.doc2, `SOS: ${vsName}`)).length === 1)
+await ago(`update alerts set created_at = now() - interval '11 minutes' where id = $1`, [vsSos])
+await db.query(`select escalate_stale_alerts()`)
+check('tier 1: unacknowledged after 10 min, escalated; the doctor and the patient are told; audited',
+  (await one(`select status from alerts where id = $1`, [vsSos])).status === 'escalated'
+  && (await told(ID.doc, `Not acknowledged: ${vsName}`))[0]?.urgent === true
+  && (await told(VS, 'Your alert was passed to the wider care team')).length === 1
+  && (await one(`select count(*)::int n from audit_log where action = 'Escalated alert (automatic)' and resource_id = $1`, [vsSos])).n === 1)
+await ago(`update alerts set escalated_at = now() - interval '61 minutes' where id = $1`, [vsSos])
+await db.query(`select escalate_stale_alerts()`)
+await db.query(`select escalate_stale_alerts()`)
+check('tier 2: still unresolved after an hour, reminded once (not on every run)', (await one(`select reminders from alerts where id = $1`, [vsSos])).reminders === 1
+  && (await told(ID.doc, `Still unresolved: ${vsName}`)).length === 1)
+await ago(`update alerts set created_at = now() - interval '25 hours' where id = $1`, [vsWa.id])
+await db.query(`select escalate_stale_alerts()`)
+check('tier 3: a warning alert waiting a day reminds the doctor', (await one(`select reminders from alerts where id = $1`, [vsWa.id])).reminders === 1
+  && (await told(ID.doc, `Alert waiting: ${vsName}`)).length >= 1)
+check('nobody can reset the reminders or the rule through the API', (await as(ID.doc, `update alerts set reminders = 0, rule = null where id = $1 returning reminders, rule`, [vsWa.id]))[0]?.reminders === 1
+  && (await one(`select rule from alerts where id = $1`, [vsWa.id])).rule === 'weight_gain')
+await as(VS, `select cancel_sos($1)`, [vsSos])
+
+// Items 2 and 3: nudges.
+const vsHr1 = await vlog('hr', '105')
+await ago(`update readings set taken_at = now() - interval '20 minutes' where id = $1`, [vsHr1.id])
+await db.query(`select nudge_vitals()`); await db.query(`select nudge_vitals()`)
+console.log('DEBUG', JSON.stringify(vsHr1), JSON.stringify((await db.query("select title, created_at from notifications where user_id = $1 order by created_at desc limit 4", [VS])).rows), JSON.stringify((await db.query("select vital_id, level, taken_at from readings where patient_id = $1 and vital_id = 'hr' order by taken_at", [VS])).rows), JSON.stringify((await db.query("select vital_id, status from alerts where patient_id = $1 and status <> 'resolved'", [VS])).rows))
+check('a single out-of-range reading not re-measured: the patient is reminded once', vsHr1.level === 'warning' && (await told(VS, 'Please measure your Heart Rate again')).length === 1)
+await as(ID.doc, `select set_vital_plan($1, 'temp', 'daily', 'Fever watch')`, [VS])
+await ago(`update tracked_vitals set assigned_at = now() - interval '31 hours' where patient_id = $1 and vital_id = 'temp'`, [VS])
+await db.query(`select nudge_vitals()`)
+check('a missed daily measurement: the patient is reminded, the doctor not yet', (await told(VS, 'Time to measure your Temperature')).length === 1
+  && (await told(ID.doc, `Missed check-ins: ${vsName}`)).length === 0)
+await ago(`update tracked_vitals set assigned_at = now() - interval '73 hours' where patient_id = $1 and vital_id = 'temp'`, [VS])
+await db.query(`select nudge_vitals()`); await db.query(`select nudge_vitals()`)
+check('missed for three intervals: the doctor is told, once', (await told(ID.doc, `Missed check-ins: ${vsName}`)).length === 1)
+check('app users cannot run the nudge job, and see only their own nudges', (await denied(VS, `select nudge_vitals()`)).blocked
+  && (await as(VS, `select 1 from vital_nudges`)).length >= 2 && (await as(ID.pat2, `select 1 from vital_nudges`)).length === 0)
+
+// Item 14: clinical settings.
+check('only an admin changes the clinical settings, and they are checked', (await denied(ID.doc, `select save_settings('clinical', '{"emergency_number":"112"}')`)).blocked
+  && /2 to 15 digits/.test((await denied(ID.admin, `select save_settings('clinical', '{"emergency_number":"call me"}')`)).why ?? '')
+  && /between 2 and 20/.test((await denied(ID.admin, `select save_settings('clinical', '{"repeat_warnings":1}')`)).why ?? ''))
+await as(ID.admin, `select save_settings('clinical', '{"emergency_number":"112"}')`)
+check('the emergency number follows the setting', (await as(VS, `select emergency_number() n`))[0].n === '112'
+  && (await one(`select count(*)::int n from audit_log where action = 'Changed settings' and detail = 'Clinical safety'`)).n === 1)
+await as(ID.admin, `select save_settings('clinical', '{"emergency_number":"999"}')`)
+
+// Item 9: changing a definition.
+const vsHrDef = (await one(`select to_jsonb(v) d from vital_defs v where id = 'hr'`)).d
+check('changing how readings are graded needs a reason', /Say why/.test((await denied(ID.admin, `select save_vital_def($1, null)`, [{ ...vsHrDef, normal_max: 95 }])).why ?? ''))
+check('the admin sees how many patients a change affects; nobody else may ask', (await as(ID.admin, `select vital_def_impact('hr') n`))[0].n >= 1
+  && (await denied(ID.doc, `select vital_def_impact('hr')`)).blocked && (await denied(ID.doc, `select save_vital_def($1, 'x')`, [vsHrDef])).blocked)
+await as(ID.admin, `select save_vital_def($1, 'Local guideline')`, [{ ...vsHrDef, normal_max: 95 }])
+const vsHrAudit = await one(`select before_state, after_state, detail from audit_log where action = 'Updated vital definition' and resource_id = 'hr' order by id desc limit 1`)
+check('the change is audited once with before, after and the reason; treating doctors are told', vsHrAudit.before_state.normal_max === 100 && vsHrAudit.after_state.normal_max === 95
+  && /Local guideline/.test(vsHrAudit.detail) && (await told(ID.doc, 'Standard range changed: Heart Rate')).length === 1
+  && (await one(`select count(*)::int n from audit_log where resource_id = 'hr' and action = 'Updated vital definition'`)).n === 1)
+await as(ID.admin, `select save_vital_def($1, 'Back to the standard')`, [vsHrDef])
+
+// Grading internals and the COPD template.
+check('grading another patient is not callable from the app', (await denied(ID.pat, `select grade_reading($1, 'hr', 72, null)`, [VS])).blocked
+  && (await denied(ID.pat, `select grading_range($1, 'hr')`, [VS])).blocked)
+check('the COPD pathway starts SpO₂ at 88–92 %, waiting for review', (await one(`select target_min, target_max from condition_vitals where condition_code = 'copd' and vital_id = 'spo2'`)).target_max == 92
+  && (await one(`select reviewed_at from condition_defs where code = 'copd'`)).reviewed_at === null)
+await as(ID.doc, `insert into thresholds (patient_id, vital_id, target_min, target_max) values ($1, 'spo2', 88, 92)`, [VS])
+const vsCopd = await vlog('spo2', '89')
+check('with a target of 88–92 %, 89 % is in range: the critical edge moves outside the target', vsCopd.level === 'normal' && Number(vsCopd.graded_range.critical[0]) === 87)
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
