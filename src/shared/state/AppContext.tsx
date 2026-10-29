@@ -315,7 +315,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [careTeam, setCareTeam] = useState<CareTeamMember[]>([])
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
   const [conditionDefs, setConditionDefs] = useState<ConditionDef[]>(() => LIVE ? [] : COMMON_CONDITIONS.map((c, i) => ({
-    code: c.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `c${i}`, name: c.name, icon: c.icon, active: true, vitals: c.vitals })))
+    code: c.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `c${i}`, name: c.name, icon: c.icon, active: true, vitals: c.vitals, keywords: c.keywords })))
   const [vitalReviews, setVitalReviews] = useState<VitalReview[]>([])
   const [recordViews, setRecordViews] = useState<RecordView[]>([])
   const [mfa, setMfa] = useState<{ step: Exclude<MfaGate, 'ok'>; account: AppUser; acceptedTerms: boolean } | null>(null)

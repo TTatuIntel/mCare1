@@ -2,7 +2,7 @@ import { useApp } from '@/shared/state/AppContext'
 import { Toggle, SaveError, useSave } from '@/shared'
 import type { PatientUser, VitalDef } from '@/shared/lib/types'
 import { unitView } from '@/shared/lib/vitals'
-import { conditionsByVital, healthOf, vitalsForCondition, COMMON_CONDITIONS } from '@/shared/lib/health'
+import { conditionsByVital, healthOf, matchNote, vitalsForCondition, COMMON_CONDITIONS } from '@/shared/lib/health'
 import { usePatient } from './usePatient'
 
 /**
@@ -134,10 +134,11 @@ function ConditionsMatch({ conditions, catalogue, missing, matchedCount, busy, o
       <ul className="mt-2 flex flex-wrap gap-1.5">
         {conditions.map((c, i) => {
           const known = list.find(d => d.name.toLowerCase() === c.toLowerCase())
-          const { vitals, areas } = vitalsForCondition(c, catalogue)
+          const { vitals } = vitalsForCondition(c, catalogue)
+          const how = matchNote(c, catalogue ?? COMMON_CONDITIONS)
           return (
             <li key={c} style={{ animationDelay: `${i * 50}ms` }}
-              title={areas.length ? `Matched by area: ${areas.join(', ')}` : undefined}
+              title={how ? `Matched ${how}` : undefined}
               className="chip-in inline-flex items-center gap-1 rounded-full bg-gray-50 ring-1 ring-gray-100 px-2.5 py-1 text-[11px] font-semibold text-gray-700">
               <span aria-hidden="true">{known?.icon ?? '🩺'}</span>{c}
               {vitals.length === 0 && <span className="font-normal text-gray-400">· no vitals</span>}

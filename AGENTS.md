@@ -41,7 +41,12 @@ What the person sees or says, and where it lives. Screen titles are the `Page` /
 | Home, health score, "up next", reminders, recent readings | `patient/HomeTab.tsx`, `VitalsStrip.tsx`, `ReminderSheet.tsx` |
 | Vital popup, trend popover on the home card (scrub, "+ Log", "For Hypertension") | `patient/VitalsStrip.tsx` (`TrendPopover`, `TrendChart`) |
 | "Vitals" page | `patient/VitalsTab.tsx` |
-| "My Vitals", "Vitals I Track", choosing vitals, vitals matched to conditions | `patient/VitalPicker.tsx` (both screens); matching: `vitalsForCondition`, `CONDITION_AREAS`, `conditionsByVital` in `lib/health.ts` |
+| "My Vitals", "Vitals I Track", choosing vitals, vitals matched to conditions | `patient/VitalPicker.tsx` (both screens); matching: `vitalsForCondition` (catalogue name → admin keywords → `CONDITION_AREAS`), `conditionsByVital`, `patientConditionsByVital`, `matchNote` in `lib/health.ts` |
+| "Words patients use" for a condition, condition keywords | Admin Settings → Conditions (`admin/SettingsTab.tsx`, `KeywordsField`); `condition_defs.keywords`, `save_condition_def` (`0019`); built-in copy on `COMMON_CONDITIONS` |
+| "Tracked for…", "This matters for your…", condition-aware insights | `VitalDetail.tsx` (line under the plan), `VitalLogSheets.tsx` (`WhyItMatters`), `generateInsights(…, whyFor)` in `lib/vitals.ts` |
+| Doctor: condition recorded but its vital not tracked ("⚑ not tracked") | `doctor/PatientVitals.tsx` (card with "Track it"), `doctor/PatientChips.tsx` (list flag); `conditionGaps` in `lib/health.ts` |
+| Scrub a chart, read any point | `VitalChart` `scrub` prop in `shared/ui/vitals.tsx` (patient vital page, doctor charts); home popup has its own `TrendChart` in `VitalsStrip.tsx` |
+| Numbers counting up, cards cascading in | `CountUp` / `countable` (`shared/ui/CountUp.tsx`, used by `HeroCard`, `StatTiles`); `stagger-in` on every `Page` (`index.css`) |
 | One vital's page ("Vital"), chart, history, fix a typo | `patient/VitalDetail.tsx`, `shared/ui/VitalHistory.tsx`, `shared/ui/vitals.tsx` |
 | Log a reading, "Log all", re-measure banner | `patient/VitalLogSheets.tsx` |
 | Floating "Log vitals" button, FAB, quick log | `patient/QuickLogFab.tsx` |
@@ -54,7 +59,7 @@ What the person sees or says, and where it lives. Screen titles are the `Page` /
 | "Care Team", find / request / rate a doctor | `patient/CareTeamTab.tsx`, `DoctorProfileSheet.tsx`, `shared/ui/CareTeamCard.tsx`, `CarePlanCard.tsx` |
 | "Documents", upload, share link, download | `patient/DocsTab.tsx`, `shared/documents/*` (`UploadSheet`, `ShareSheet`, `DownloadSheet`, `DocumentViewer`) |
 | Ask for a report | `patient/ReportRequest.tsx` |
-| First-run setup, "About you", conditions, allergies | `patient/HealthSetup.tsx`, `healthForms.tsx` |
+| First-run setup, "About you", conditions, allergies | `patient/HealthSetup.tsx`, `healthForms.tsx` (typing a condition shows what it matches: `ConditionMatchHint`) |
 | Profile, health profile, emergency contacts / next of kin | `patient/ProfileTab.tsx`, `HealthEditSheet.tsx`, `EmergencyContacts.tsx` |
 | "Who opened my record", "Download my record", privacy | `patient/ProfileTab.tsx` (Privacy & Security card); `record_views`, `export_my_record()` (`0016`) |
 | "Measure twice a day", the doctor's plan on a vital | `patient/VitalDetail.tsx`; `planHours` / `checkInStatus` in `lib/vitals.ts` |
@@ -299,7 +304,7 @@ File `src/<role>/<Name>Tab.tsx` wrapped in `Page` → `<Role>App.tsx`: id in `SC
 
 ### F. A new vital
 
-Live: insert into `vital_defs` in a new migration (shape: `0010_reference_data_jobs.sql`), or let an admin add it in Vitals. Demo: `INITIAL_VITAL_DEFS` in `demoData.ts`. Grouping: `VITAL_GROUPS` / `groupOf` in `vitals.ts`. Condition suggestions: `suggestedVitals` in `lib/health.ts` (catalogue first, then `CONDITION_AREAS` by body area); add the new id to the areas it watches.
+Live: insert into `vital_defs` in a new migration (shape: `0010_reference_data_jobs.sql`), or let an admin add it in Vitals. Demo: `INITIAL_VITAL_DEFS` in `demoData.ts`. Grouping: `VITAL_GROUPS` / `groupOf` in `vitals.ts`. Condition suggestions: `suggestedVitals` in `lib/health.ts` (catalogue name first, then the catalogue's keywords, then `CONDITION_AREAS` by body area); add the new id to the areas it watches.
 
 ### G. A new email
 
@@ -338,9 +343,9 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `VitalsStrip.tsx` (580) | Home-card vitals strip and its trend popup: 7D/30D (sliding thumb), a chart that draws itself in and can be scrubbed (mouse or finger) to read any point, the level of the latest reading, the conditions the vital is for, "+ Log" and "Open". |
 | `VitalPicker.tsx` (207) | Choosing the vitals to track (Vitals → My Vitals, Profile → Vitals I Track): the patient's conditions, "For your conditions" first with "Suggested for …" on any not tracked and "Track all", then other vitals; doctor-set ones locked. One save at a time. |
 | `ReminderSheet.tsx` | Reminder detail sheet. |
-| `VitalsTab.tsx` (628) | Vitals overview by group, logging entry points; My Vitals is `VitalPicker`. |
+| `VitalsTab.tsx` (629) | Vitals overview by group, logging entry points; My Vitals is `VitalPicker`. |
 | `VitalDetail.tsx` (538) | One vital: chart, history, insights, log/correct. |
-| `VitalLogSheets.tsx` (397) | `useVitalLog`, `LogAllSheet`, self-clear (re-measure) banner. |
+| `VitalLogSheets.tsx` (423) | `useVitalLog`, `LogAllSheet`, self-clear (re-measure) banner; an out-of-range value says which of the patient's conditions it matters for (`WhyItMatters`, result sheet, log-all rows). |
 | `QuickLogFab.tsx` | Floating "Log vitals": one, a group or all. |
 | `MyAlertsTab.tsx` | My alerts: Sent → Reviewing → Resolved, each alert's story. |
 | `alertKit.tsx` | `useAlertView`, `AlertSummaryCard`: how the patient sees an alert. |
@@ -355,7 +360,7 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `ReportRequest.tsx` | Ask the care team for a signed vitals report. |
 | `ProfileTab.tsx` | Profile, health profile, privacy (who opened my record, download my record), account. |
 | `HealthSetup.tsx` (309) | First-run health setup, step by step. |
-| `healthForms.tsx` | Health-profile form sections shared by setup and profile. |
+| `healthForms.tsx` | Health-profile form sections shared by setup and profile. A typed condition shows live what it matches and the vitals it would suggest; a name the list knows is picked from the list. |
 | `HealthEditSheet.tsx` · `EmergencyContacts.tsx` | Edit health profile · emergency contacts (one next of kin). |
 
 ### `src/doctor/` — doctor portal
@@ -368,7 +373,7 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `DashboardTab.tsx` | Home: risk board, alerts, readings to review, reports to sign, requests, today's visits. |
 | `PatientsTab.tsx` · `PatientChips.tsx` | Patient list, past patients · filter chips. |
 | `PatientDetail.tsx` (239) | One patient's record frame (sections) and care team card. |
-| `PatientVitals.tsx` (320) | Readings, record a reading, mark invalid, targets and critical ranges, monitoring plan, mark readings reviewed. |
+| `PatientVitals.tsx` (351) | Readings, record a reading, mark invalid, targets and critical ranges, monitoring plan, mark readings reviewed. Conditions without their vital ("Asthma recorded · Respiratory rate not tracked", "Track it"); "For …" on each vital; charts scrub. |
 | `PatientMeds.tsx` | Prescribe, stop, restart. |
 | `PatientCarePlan.tsx` | Care plan editor and steps. |
 | `PatientNutrition.tsx` | Meal plan. |
@@ -423,7 +428,7 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | `vitals.ts` (615) | Grading (`evaluate`, `targetRange`), validation, risk and health score, `alertStory`, units, trends, insights, check-in cadence (`planHours`, `checkInStatus` follow the doctor's plan), `VITAL_GROUPS`. |
 | `schedule.ts` | `buildDaySchedule`: what is due when (doses, meals, vitals, appointments). |
 | `messaging.ts` | `threadOf`, `partnersOf`, `conversationsOf`. |
-| `health.ts` | Conditions (`COMMON_CONDITIONS` for demo mode; live uses the catalogue), allergies, `vitalsForCondition` (catalogue name first, else `CONDITION_AREAS`: body areas matched by keyword, so typed-in conditions such as "high BP" or "pre-diabetes" suggest vitals too), `suggestedVitals`, `conditionsByVital`, `healthGaps`. Suggestions only: the patient confirms; nothing is tracked without a save. |
+| `health.ts` | Conditions (`COMMON_CONDITIONS` for demo mode; live uses the catalogue), allergies, `vitalsForCondition` (catalogue name first; else a catalogue condition whose `keywords` the name contains, word-start match, short words whole; else `CONDITION_AREAS` body areas), `matchNote`, `suggestedVitals`, `conditionsByVital`, `patientConditionsByVital`, `conditionGaps` (doctor), `healthGaps`. Suggestions only: the patient confirms; nothing is tracked without a save. |
 | `push.ts` | This device's push subscription. |
 | `ids.ts` | `newRef()` (form reference for once-only saves). |
 | `clipboard.ts` | `copyText()`: copies on https and on plain-http network addresses. |
@@ -431,13 +436,14 @@ Ignored, not source: `dist/` (build), `supabase/.data/` (local DB, keys, files, 
 | **ui/** | |
 | `primitives.tsx` | `Avatar`, `Pill`, `Toggle`, `SectionHead`, `InfoRow`, `PageTitle` (old), `AddButton`, `BackHeader`. |
 | `BottomSheet.tsx` | `BottomSheet`, `Field`, `inputCls`, `SheetButton`, `useSave`, `SaveError`, `useToast`. |
-| `Page.tsx` | `Page`, `EmptyState`, `ErrorState`. |
+| `Page.tsx` | `Page` (cards cascade in: `stagger-in`, not on `fill` pages), `EmptyState`, `ErrorState`. |
+| `CountUp.tsx` | `CountUp` (a number counts to its value; the value at once with reduced motion), `countable` (a plain number counts up, any other node is left alone). |
 | `controls.tsx` | `Segmented`, `ChipFilter`, `StatTiles`, `useAct`. |
 | `home.tsx` | `PortalHeader`, `HeroCard`, `QuickGrid`, `NoticeCard`, `NoticeRow`. |
 | `Loader.tsx` | Global loading popup: `Loading`, `useLoader`, `LoaderProvider`. |
 | `alerts.tsx` | `AlertStatusPill`, `AlertTimeline`, `ResolveAlertSheet`. |
 | `appointments.tsx` | `AppointmentCard`, `APPT_STATUS`, `useApptLinks`. |
-| `vitals.tsx` | `VitalCard`, `VitalChart`, `VitalThresholdRow`, `InsightNotes`, `useElementWidth`. |
+| `vitals.tsx` | `VitalCard`, `VitalChart` (line draws in; `scrub`: pointer, finger or arrow keys read any point, a tap picks the nearest with `onPick`), `VitalThresholdRow`, `InsightNotes`, `useElementWidth`. |
 | `VitalHistory.tsx` | A vital's history list with filters. |
 | `Inbox.tsx` · `ChatThread.tsx` | Conversation list (`InboxPerson`) · one thread, quick replies, "Read 10:42". |
 | `NotificationBell.tsx` | Bell + sheet; tap navigates by `link`/`resource`. |
@@ -714,7 +720,9 @@ The first ten files are the **baseline**. On 3 October 2026, before any hosted d
 
 | `0017_clear_read_notifications.sql` | Policy `notifications_clear`: a person may delete their own notifications once read. A delivery row now outlives its notification (`notification_id` foreign key `on delete set null`), so what was sent stays on record and follows its own retention (`delivery_days`). |
 
-**Next file number: `0018`.**
+| `0019_condition_keywords.sql` | `condition_defs.keywords` (other words patients use, ≤ 30, cleaned by `clean_keywords`); `save_condition_def` replaced to save them (a save without `keywords` keeps them); the built-in words seeded where none are set. Additive. Rollback: `alter table condition_defs drop column keywords` and re-create `save_condition_def` from `0015`. |
+
+**Next file number: `0020`.** (`0018` is taken by the password-change notice on branch `auth-upgrade`.)
 
 #### Function and trigger index
 
@@ -1451,6 +1459,7 @@ Check `git status` too: work may have started since this was written.
 
 | Change | Files |
 | --- | --- |
+| **Conditions everywhere, scrubbable charts, app-wide motion** (branch `vitals-insights`, on top of `vitals-conditions-ux`). Admin keeps "words patients use" per condition (`0019`, Settings → Conditions); a typed condition containing one matches that condition's vitals before the body areas. Setup and the health-profile editor show live what a typed condition matches. The log sheets, the result sheet and the vital's page say which of the patient's conditions a vital is for; insights add "This matters for your …" to a worrying trend and suggest vitals the conditions call for that are not tracked. Doctor: a card per condition whose vital is not tracked, with "Track it", a "⚑ n not tracked" chip on the patient list, "For …" on each vital. `VitalChart` scrubs (pointer, finger, arrow keys) on the patient's vital page and the doctor's charts; the line draws in. Every `Page` cascades its cards in; headline numbers count up; the hero bar fills. Verified: typecheck; `test:db` 414 passed (2 new); browser check (see commit). | `supabase/migrations/0019_condition_keywords.sql` (new), `shared/ui/CountUp.tsx` (new), `lib/health.ts`, `lib/vitals.ts`, `lib/types.ts`, `api/records.ts`, `api/actions.ts`, `state/AppContext.tsx`, `ui/vitals.tsx`, `ui/Page.tsx`, `ui/home.tsx`, `ui/controls.tsx`, `index.ts`, `admin/SettingsTab.tsx`, `patient/healthForms.tsx`, `VitalLogSheets.tsx`, `VitalDetail.tsx`, `VitalsTab.tsx`, `VitalPicker.tsx`, `doctor/PatientVitals.tsx`, `PatientChips.tsx`, `ConsultView.tsx`, `index.css`, `rules.test.mjs` |
 | **Vitals matched to conditions, a richer vital popup** (branch `vitals-conditions-ux`). My Vitals and Vitals I Track are one `VitalPicker`: the patient's conditions on top, the vitals they call for first ("For Hypertension"; amber "Suggested for …" when not tracked, with "Track all"), then the rest; doctor-set vitals locked; one save at a time, so two quick taps cannot undo each other; every switch labelled. Conditions typed in or worded differently are matched by body area (`CONDITION_AREAS`), which also feeds first-run setup and the health-profile editor; still only suggestions. Home trend popup: sliding 7D/30D, the line draws in, scrub with a mouse or finger to read any reading and its time, the latest level (✓ Normal / ▲ Out / ⚠ Critical), the conditions it is for, "+ Log" (opens the log sheet) beside "Open". New motion (`index.css`: `chart-*`, `stagger-in`, `chip-in`, `pick-pop`) with calm fallbacks under reduced motion. No SQL change. Verified: typecheck; browser check of both test patients at 1366px and 390px (touch): popup, scrub, My Vitals, no console error; the matcher on 18 condition names; `test:ui` 71 passed, 0 failed. | `patient/VitalPicker.tsx` (new), `VitalsStrip.tsx`, `VitalsTab.tsx`, `ProfileTab.tsx`, `HomeTab.tsx`, `shared/lib/health.ts`, `index.css` |
 
 ### Recently finished
@@ -1499,7 +1508,7 @@ Check `git status` too: work may have started since this was written.
 | Escalation of unacknowledged critical alerts (10 min) | Done locally (interval in `server.mjs`); `pg_cron` schedule unverified |
 | SOS and "I'm safe now" | Done |
 | Targets, critical ranges, tracked vitals, history | Done |
-| Conditions catalogue (admin-managed, ICD-10, suggested vitals); patients' conditions linked to it | Done; admin editing: no browser test |
+| Conditions catalogue (admin-managed, ICD-10, suggested vitals, words patients use); patients' conditions linked to it | Done; admin keyword editing: browser-checked (branch `vitals-insights`) |
 | Prescriptions: prescribe, stop, restart, history, filed as a document; auto-complete at end date | Done |
 | Clinical notes (shared / internal, corrected by a new note) | Done |
 | Care plans (goals, interventions, steps, events) | Done |

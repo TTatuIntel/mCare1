@@ -6,6 +6,7 @@ import {
   evaluate, alertIsFor, latestValid, targetRange, validateReading, unitView, groupOf, VITAL_GROUPS,
   ago, readingTime, type VitalLevel,
 } from '@/shared/lib/vitals'
+import { patientConditionsByVital } from '@/shared/lib/health'
 
 /* ─── Logging vitals ──────────────────────────────────────────────────
    The only place a patient enters a reading. Every screen that logs —
@@ -18,7 +19,25 @@ import {
    group together, or everything at once, and can move between the three:
    the one-vital sheet offers the rest of its group as the next step. */
 
-type Result = { level: VitalLevel; alerted: boolean; readingId: string; name: string; value: string; cleared?: boolean; followsAlert?: boolean }
+type Result = {
+  level: VitalLevel; alerted: boolean; readingId: string; name: string; value: string; cleared?: boolean; followsAlert?: boolean
+  /** The patient's conditions this vital is tracked for, to say why an out-of-range reading matters. */
+  why?: string[]
+}
+
+/** "High blood pressure", "High blood pressure and Type 2 diabetes", "A, B and C". */
+const joinNames = (names: string[]) => names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+
+/** Why an out-of-range reading matters, in the patient's own conditions. Descriptive only: what to do stays with the doctor. */
+function WhyItMatters({ why, level }: { why?: string[]; level: VitalLevel }) {
+  if (!why?.length || level === 'normal') return null
+  return (
+    <p className="sheet-fade mt-2 flex items-start gap-1.5 rounded-xl bg-white/70 ring-1 ring-gray-100 px-3 py-2 text-[11px] leading-snug text-gray-600 text-left">
+      <span aria-hidden="true">🩺</span>
+      <span>This matters for your <b className="text-gray-800">{joinNames(why)}</b>: your care team watches it closely for {why.length > 1 ? 'these' : 'it'}.</span>
+    </p>
+  )
+}
 
 /** One-tap context for a reading; saved as the reading's note, so History can filter on it. */
 const CONTEXT_TAGS = ['Resting', 'Before meal', 'After meal', 'After exercise', 'After medication']
@@ -85,6 +104,9 @@ function ResultSheet({ result, onClose }: { result: Result; onClose: () => void 
         : <SheetButton onClick={onClose}>OK</SheetButton>}>
       <div className="text-sm text-gray-700 leading-relaxed">
         <p className="font-bold text-gray-900 mb-1 font-mono">{result.name}: {result.value}</p>
+        {!result.cleared && result.level !== 'normal' && !!result.why?.length && (
+          <p className="mb-2 text-xs text-gray-500">You track {result.name.toLowerCase()} for your {joinNames(result.why)}.</p>
+        )}
         {result.cleared
           ? <p>Your re-measurement is back inside your target range, so that alert has been cleared. Your doctor can still see both readings in your history.</p>
           : follows && result.level === 'normal'
@@ -113,7 +135,7 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
   /** Log the whole group together instead. */
   onLogGroup: (groupId: string) => void
 }) {
-  const { currentUser, vitalDefs, logReading, now } = useApp()
+  const { currentUser, vitalDefs, logReading, now, conditionDefs } = useApp()
   const patient = currentUser as PatientUser
   const selfClear = useSelfClear()
   const [value, setValue] = useState('')
@@ -132,6 +154,7 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
   const error = value.trim() ? validateReading(def, canon, u.unit) : null
   const lvl = value.trim() && !error ? evaluate(patient, def, canon) : null
   const range = u.range(targetRange(patient, def))
+  const why = patientConditionsByVital(patient, conditionDefs).get(def.id)
   const last = latestValid(patient, def.id)
   const lastAt = last ? readingTime(last) : null
   // The vitals measured together with this one: the rest of its group that the patient tracks.
@@ -144,7 +167,7 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
     const saved = await saving.run(() => logReading(patient.id, { id: `rd_${Date.now()}`, vitalId, value: canon, loggedAt: '', note: note.trim() || undefined }))
     if (!saved.ok) return   // nothing was saved: the sheet stays open with what was typed and says why
     const res = saved.value
-    if (res.level !== 'normal' || res.cleared || res.followsAlert) setResult({ ...res, name: def.name, value: `${u.value(canon)} ${u.unit}` })
+    if (res.level !== 'normal' || res.cleared || res.followsAlert) setResult({ ...res, name: def.name, value: `${u.value(canon)} ${u.unit}`, why })
     else then()
   }
   /** Moving on keeps what was typed: a reading in the box is saved first. */
@@ -183,6 +206,7 @@ function LogOneSheet({ vitalId, onClose, onSwitch, onLogGroup }: {
             : '⚠ Critical — your doctor will be alerted immediately'}
         </div>
       )}
+      {lvl && <WhyItMatters why={why} level={lvl} />}
       {/* context: one tap for the common cases, or type your own */}
       <div className="flex flex-wrap gap-1.5 mt-3">
         {CONTEXT_TAGS.map(t => (
@@ -232,8 +256,9 @@ export function LogAllSheet({ onClose, onSaved, groupId }: {
   /** Called once the readings are stored, with how many were saved. */
   onSaved?: (count: number) => void
 }) {
-  const { currentUser, vitalDefs, logReading } = useApp()
+  const { currentUser, vitalDefs, logReading, conditionDefs } = useApp()
   const patient = currentUser as PatientUser
+  const whyFor = patientConditionsByVital(patient, conditionDefs)
   const only = VITAL_GROUPS.find(g => g.id === groupId)
   const tracked = vitalDefs.filter(v => v.active && patient.trackedVitalIds.includes(v.id) && (!only || groupOf(v.id) === only.id))
   const [values, setValues] = useState<Record<string, string>>({})
@@ -277,7 +302,7 @@ export function LogAllSheet({ onClose, onSaved, groupId }: {
       savedCount++
       setValues(prev => { const n = { ...prev }; delete n[d.id]; return n })
       const res = saved.value
-      if (res.level === 'critical' || (res.level === 'warning' && !worst)) worst = { ...res, name: d.name, value: `${u.value(value)} ${u.unit}` }
+      if (res.level === 'critical' || (res.level === 'warning' && !worst)) worst = { ...res, name: d.name, value: `${u.value(value)} ${u.unit}`, why: whyFor.get(d.id) }
     }
     setBusy(false)
     if (savedCount) onSaved?.(savedCount)
@@ -381,6 +406,7 @@ export function LogAllSheet({ onClose, onSaved, groupId }: {
                             {lvl === 'critical'
                               ? '⚠ Critical — your doctor is alerted as soon as you save'
                               : '▲ Outside target — you can re-measure to clear it'}
+                            {whyFor.get(v.id) && <span className="block font-normal text-gray-500">Matters for your {joinNames(whyFor.get(v.id)!)}</span>}
                           </p>
                         )}
                       </div>

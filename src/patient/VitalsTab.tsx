@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
-import { Page, HeroCard, VitalChart, InsightNotes, levelStyle, useElementWidth, TREND_ARROW, HERO_GRADIENT } from '@/shared'
+import { Page, HeroCard, VitalChart, InsightNotes, CountUp, levelStyle, useElementWidth, TREND_ARROW, HERO_GRADIENT } from '@/shared'
 import type { PatientUser, VitalDef } from '@/shared/lib/types'
 import {
   evaluate, latestValid, targetRange, vitalTrend, generateInsights, readingTime, unitView, ago, groupOf, VITAL_GROUPS,
   type VitalInsight, type VitalTrend,
 } from '@/shared/lib/vitals'
 import { countdown } from '@/shared/lib/schedule'
+import { patientConditionsByVital } from '@/shared/lib/health'
 import { useDaySchedule } from './useDaySchedule'
 import { usePatient } from './usePatient'
 import { VitalDetail } from './VitalDetail'
@@ -44,7 +45,7 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital, go }: {
   /** Opens another screen (Documents, for a finished report). */
   go?: (tab: string) => void
 }) {
-  const { currentUser, vitalDefs, now } = useApp()
+  const { currentUser, vitalDefs, now, conditionDefs } = useApp()
   const { doctor, status, error, reload } = usePatient()
   const patient = currentUser as PatientUser
   const { vitals: vitalsDue } = useDaySchedule()
@@ -110,8 +111,8 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital, go }: {
   }, [patient.readings, patient.thresholds, trendDays, tracked.length])
 
   const insights = useMemo(
-    () => generateInsights(patient, vitalDefs, trendDays),
-    [patient.readings, patient.thresholds, patient.trackedVitalIds, vitalDefs, trendDays],
+    () => generateInsights(patient, vitalDefs, trendDays, undefined, patientConditionsByVital(patient, conditionDefs)),
+    [patient.readings, patient.thresholds, patient.trackedVitalIds, patient.health, vitalDefs, conditionDefs, trendDays],
   )
 
   /** The trend window in one line, for the snapshot on the Now view. */
@@ -145,7 +146,7 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital, go }: {
             { id: 'trends',   label: 'Trends' },
             { id: 'select',   label: 'My Vitals' },
           ] as const).map(v => (
-            <button key={v.id} onClick={() => setView(v.id)}
+            <button key={v.id} onClick={() => setView(v.id)} aria-pressed={view === v.id}
               className={`text-[11px] px-2.5 py-1.5 rounded-lg font-semibold transition-all ${view === v.id ? 'bg-white text-teal-700 shadow-sm' : 'text-gray-400'}`}>
               {v.label}
             </button>
@@ -158,7 +159,7 @@ export function VitalsTab({ vitalId, onOpenVital, onCloseVital, go }: {
           {/* how today stands: how many are in target, and the same next-check reminder shown on Home */}
           {tracked.length > 0 && (
             <HeroCard eyebrow="Today’s vitals"
-              value={<span className="font-mono">{count('normal')}</span>}
+              value={<CountUp className="font-mono" value={count('normal')} />}
               suffix={`of ${tracked.length} in target`}
               caption={<>
                 {count('alert') > 0

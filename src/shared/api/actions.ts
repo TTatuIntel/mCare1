@@ -454,7 +454,7 @@ export interface RetentionRun { documents: number; audit: number; notifications:
 export const runRetentionNow = async () => ok<RetentionRun>((await db()).rpc('run_retention_now'))
 /** Adds or changes a condition in the catalogue, with the vitals it calls for, in one transaction. */
 export const saveConditionDef = async (c: ConditionDef) => {
-  await ok((await db()).rpc('save_condition_def', { def: { code: c.code, name: c.name.trim(), icon: c.icon, icd10: c.icd10 ?? '', active: c.active, vitals: c.vitals } }))
+  await ok((await db()).rpc('save_condition_def', { def: { code: c.code, name: c.name.trim(), icon: c.icon, icd10: c.icd10 ?? '', active: c.active, vitals: c.vitals, keywords: c.keywords ?? [] } }))
 }
 /** The treating doctor sets how often a patient measures a vital (null: the usual schedule). The patient is told. */
 export const setVitalPlan = async (patientId: string, vitalId: string, frequency: VitalFrequency | null, reason?: string) => {

@@ -622,6 +622,8 @@ export interface ConditionDef {
   icd10?: string
   active: boolean
   vitals: string[]
+  /** Other words patients use for it ("high bp"); a typed condition containing one suggests this condition's vitals. */
+  keywords?: string[]
 }
 
 /* ─── Settings an administrator decides ─────────────────────────────── */

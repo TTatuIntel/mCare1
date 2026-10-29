@@ -464,9 +464,15 @@ export function generateInsights(
   defs: VitalDef[],
   days = 30,
   now = Date.now(),
+  /** The patient's conditions that call for each vital (`patientConditionsByVital`), so a note can say which one a trend matters for. */
+  whyFor?: Map<string, string[]>,
 ): VitalInsight[] {
   const out: VitalInsight[] = []
   const tracked = defs.filter(d => patient.trackedVitalIds.includes(d.id) && d.active)
+  const forWhat = (id: string) => {
+    const names = whyFor?.get(id) ?? []
+    return names.length ? ` This matters for your ${names.length < 2 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`}.` : ''
+  }
 
   tracked.forEach(def => {
     const t = vitalTrend(patient, def, days, now)
@@ -495,11 +501,12 @@ export function generateInsights(
       const towardRange =
         (t.direction === 'rising' && latest.value <= target.max) ||
         (t.direction === 'falling' && latest.value >= target.min)
+      const tone: InsightTone = latest.level === 'normal' ? (towardRange ? 'good' : 'watch') : 'bad'
       out.push({
         id: `${def.id}-dir`,
         vitalId: def.id,
-        tone: latest.level === 'normal' ? (towardRange ? 'good' : 'watch') : 'bad',
-        text: `${def.name} is ${directionWord(t.direction)} — ${change > 0 ? '+' : ''}${change} ${u.unit} across your last ${t.points.length} readings (avg ${average}).`,
+        tone,
+        text: `${def.name} is ${directionWord(t.direction)} — ${change > 0 ? '+' : ''}${change} ${u.unit} across your last ${t.points.length} readings (avg ${average}).${tone === 'good' ? '' : forWhat(def.id)}`,
         next: remeasure,
       })
     } else {
@@ -507,7 +514,7 @@ export function generateInsights(
         id: `${def.id}-dir`,
         vitalId: def.id,
         tone: latest.level === 'normal' ? 'good' : 'watch',
-        text: `${def.name} is holding steady around ${average} ${u.unit} over your last ${t.points.length} readings.`,
+        text: `${def.name} is holding steady around ${average} ${u.unit} over your last ${t.points.length} readings.${latest.level === 'normal' ? '' : forWhat(def.id)}`,
         next: remeasure,
       })
     }
@@ -515,7 +522,7 @@ export function generateInsights(
     if (t.streak >= 3) {
       out.push({ id: `${def.id}-streak`, vitalId: def.id, tone: 'good', text: `${t.streak} ${def.name.toLowerCase()} readings in a row inside your target of ${shownTarget.min}–${shownTarget.max} ${u.unit}.` })
     } else if (pctInRange < 50) {
-      out.push({ id: `${def.id}-range`, vitalId: def.id, tone: 'bad', text: `Only ${pctInRange}% of your ${def.name.toLowerCase()} readings were inside target — your doctor may want to review this.` })
+      out.push({ id: `${def.id}-range`, vitalId: def.id, tone: 'bad', text: `Only ${pctInRange}% of your ${def.name.toLowerCase()} readings were inside target — your doctor may want to review this.${forWhat(def.id)}` })
     }
   })
 
@@ -524,6 +531,16 @@ export function generateInsights(
   if (tracked.length > 0 && logged.length < tracked.length) {
     const missing = tracked.filter(d => !logged.includes(d)).map(d => d.name).join(', ')
     out.push({ id: 'plan-gaps', tone: 'info', text: `Not logged recently: ${missing}. Regular readings give your doctor a clearer picture.`, next: 'Use “Log All Vitals” to catch up in one go.' })
+  }
+  // Vitals the patient's conditions call for that they do not track yet: a suggestion, never a requirement.
+  const untracked = defs.filter(d => d.active && !patient.trackedVitalIds.includes(d.id) && whyFor?.get(d.id)?.length)
+  if (untracked.length) {
+    out.push({
+      id: 'plan-untracked',
+      tone: 'info',
+      text: `Your conditions suggest tracking ${untracked.map(d => `${d.name} (for ${whyFor!.get(d.id)!.join(', ')})`).join(', ')}.`,
+      next: 'Choose it in Vitals → My Vitals, or ask your doctor.',
+    })
   }
   const score = healthScore(patient, defs)
   if (score !== null) {
