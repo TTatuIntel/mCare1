@@ -8,6 +8,12 @@
  * kept on disk in ../.data) and serves it the way a Supabase project does:
  *
  *   /auth/v1     sign-up, sign-in, sessions, password reset      (Supabase Auth)
+<<<<<<< Updated upstream
+=======
+ *                by code or link, two-step sign-in (TOTP factors,
+ *                with a QR code), and in test builds a stand-in
+ *                for Google and Apple sign-in (/authorize)
+>>>>>>> Stashed changes
  *   /rest/v1     tables and functions, as the signed-in person   (PostgREST)
  *   /storage/v1  document files                                  (Supabase Storage)
  *
@@ -26,6 +32,7 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
+import { qrSvg } from './qr.mjs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -184,10 +191,160 @@ export function readLocalKeys(dataDir = process.env.MCARE_DATA_DIR ?? join(HERE,
   }
 }
 
+<<<<<<< Updated upstream
 /* ─── The backend ───────────────────────────────────────────────────── */
 /**
  * @param {{ port?: number, host?: string, dataDir?: string, quiet?: boolean, confirmEmail?: boolean, jobs?: boolean, exposeTestAuth?: boolean }} [options]
  *   dataDir 'memory' keeps nothing on disk (used by the tests).
+=======
+/* ─── The database folder: one backend at a time, and a way back after a crash ─ */
+// PGlite cannot always reopen a folder after its process was killed (terminal closed, two backends on
+// one folder, the folder deleted underneath it). So the backend owns its folder while it runs, keeps a
+// copy each time it stops cleanly, and on start puts a damaged folder aside and brings that copy back.
+const folders = dataDir => ({
+  pg: join(dataDir, 'pg'), backup: join(dataDir, 'pg-backup'), lock: join(dataDir, 'backend.pid'),
+})
+
+/** The process id of a backend that is running on this data folder now, or null. */
+export function runningBackend(dataDir) {
+  let pid
+  try { pid = Number(fs.readFileSync(folders(dataDir).lock, 'utf8')) } catch { return null }
+  if (!pid || pid === process.pid) return null
+  try { process.kill(pid, 0); return pid } catch (e) { return e.code === 'EPERM' ? pid : null }
+}
+
+/**
+ * Takes the data folder for this process, or fails with what to do. The lock file is created exclusively, so of
+ * two backends started at the same moment exactly one gets the folder, and the other stops before opening it.
+ */
+function claimFolder(dataDir) {
+  const { lock } = folders(dataDir)
+  fs.mkdirSync(dataDir, { recursive: true })
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { fs.writeFileSync(lock, String(process.pid), { flag: 'wx' }); return } catch (e) { if (e.code !== 'EEXIST') throw e }
+    let text
+    try { text = fs.readFileSync(lock, 'utf8').trim() } catch { continue }   // released meanwhile: try again
+    const pid = Number(text)
+    let alive = !pid   // empty: another backend is writing it this very moment
+    if (pid) { try { process.kill(pid, 0); alive = true } catch (e) { alive = e.code === 'EPERM' } }
+    if (alive) {
+      throw new Error(`Another mCare backend${pid ? ` (process ${pid})` : ''} is already using ${dataDir}.\n`
+        + `  Use that one, or stop it (Ctrl+C in its terminal, or "npm run backend:stop") and run "npm run backend" again.\n`
+        + `  No backend running at all? Delete ${lock} and start again.`)
+    }
+    try { fs.rmSync(lock) } catch {}   // left by a backend that was killed
+  }
+  throw new Error(`Could not take ${dataDir}: another backend keeps starting there. Use that one.`)
+}
+
+/** Fails, with what to do, when the port is taken: checked before the database is touched. */
+async function portFree(port, host) {
+  if (!port) return
+  await new Promise((done, fail) => {
+    const probe = http.createServer()
+    probe.once('error', e => fail(e.code === 'EADDRINUSE'
+      ? new Error(`Port ${port} is already in use: another mCare backend is probably running in another terminal.\n`
+        + `  Use that one, or stop it there with Ctrl+C and run "npm run backend" again.`)
+      : e))
+    probe.listen(port, host, () => probe.close(done))
+  })
+}
+
+/** Opens the folder in a separate process (a failed open keeps its files locked in this one). */
+function opensCleanly(dir) {
+  return new Promise(done => {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--check', dir], { stdio: 'ignore', timeout: 120_000 })
+    child.on('exit', code => done(code === 0))
+    child.on('error', () => done(false))
+  })
+}
+
+const stamp = () => new Date().toISOString().slice(0, 16).replace(/:/g, '-')
+
+/** Moves a damaged folder aside (keeping the two newest) and returns where it went. */
+function setAside(dataDir, dir) {
+  const aside = join(dataDir, `pg-unreadable-${stamp()}`)
+  fs.rmSync(aside, { recursive: true, force: true })
+  fs.renameSync(dir, aside)
+  const old = fs.readdirSync(dataDir).filter(f => f.startsWith('pg-unreadable-')).sort().slice(0, -2)
+  for (const f of old) fs.rmSync(join(dataDir, f), { recursive: true, force: true })
+  return aside
+}
+
+/** Copies a cleanly closed database folder to pg-backup. The old copy is replaced only once the new one is complete. */
+function keepCopy(dataDir) {
+  const { pg, backup } = folders(dataDir)
+  if (!fs.existsSync(join(pg, 'PG_VERSION')) || fs.existsSync(join(pg, 'postmaster.pid'))) return false
+  const tmp = `${backup}.tmp`
+  fs.rmSync(tmp, { recursive: true, force: true })
+  fs.cpSync(pg, tmp, { recursive: true })
+  fs.rmSync(backup, { recursive: true, force: true })
+  fs.renameSync(tmp, backup)
+  return true
+}
+
+/**
+ * Makes the pg folder safe to open. Returns how: 'existing', 'new', 'recovered' (the last run was killed
+ * but the database came back), or 'restored' (it could not be opened, so the copy kept at the last
+ * clean stop replaced it).
+ */
+async function prepareFolder(dataDir) {
+  const { pg, backup } = folders(dataDir)
+  if (fs.existsSync(pg) && !fs.existsSync(join(pg, 'PG_VERSION'))) fs.rmSync(pg, { recursive: true, force: true })  // half-created
+  if (!fs.existsSync(pg)) return { how: 'new' }
+  if (!fs.existsSync(join(pg, 'postmaster.pid'))) return { how: 'existing' }   // closed cleanly last time
+  if (await opensCleanly(pg)) return { how: 'recovered' }
+  const aside = setAside(dataDir, pg)
+  if (!fs.existsSync(join(backup, 'PG_VERSION'))) return { how: 'new', aside }
+  fs.cpSync(backup, pg, { recursive: true })
+  return { how: 'restored', aside, savedAt: fs.statSync(backup).mtime }
+}
+
+/** Idempotent: the parts of Supabase Auth's schema added to bootstrap.sql since a local database may have been created. */
+const AUTH_UPGRADES = `
+  alter table auth.sessions add column if not exists aal text not null default 'aal1';
+  create table if not exists auth.mfa_factors (
+    id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users (id) on delete cascade,
+    friendly_name text, factor_type text not null default 'totp',
+    status text not null default 'unverified' check (status in ('unverified', 'verified')),
+    secret text not null, created_at timestamptz not null default now(), updated_at timestamptz not null default now());
+  create table if not exists auth.mfa_challenges (
+    id uuid primary key default gen_random_uuid(), factor_id uuid not null references auth.mfa_factors (id) on delete cascade,
+    created_at timestamptz not null default now(), verified_at timestamptz);
+  alter table auth.one_time_tokens add column if not exists link_hash text;
+`
+
+/* ─── The backend ───────────────────────────────────────────────────── */
+/**
+ * Real Google sign-in on the local backend: the OAuth client downloaded from Google Cloud (the "Download JSON"
+ * of a Web application client), saved as supabase/.data/google-oauth.json, or MCARE_GOOGLE_CLIENT_ID and
+ * MCARE_GOOGLE_CLIENT_SECRET. The return address Google sends people to is the client's first redirect URI ending
+ * in /auth/v1/callback, MCARE_GOOGLE_REDIRECT_URI, or http://localhost:8443/auth/v1/callback. Null when not set up.
+ */
+export function readGoogleClient(dataDir) {
+  let clientId = process.env.MCARE_GOOGLE_CLIENT_ID, clientSecret = process.env.MCARE_GOOGLE_CLIENT_SECRET, uris = []
+  const file = dataDir && dataDir !== 'memory' ? join(dataDir, 'google-oauth.json') : null
+  if (!clientId && file && fs.existsSync(file)) {
+    try {
+      const json = JSON.parse(fs.readFileSync(file, 'utf8'))
+      const c = json.web ?? json.installed ?? json
+      ;({ client_id: clientId, client_secret: clientSecret } = c)
+      uris = c.redirect_uris ?? []
+    } catch (e) {
+      console.error(`  ${file} could not be read (${e.message}): Google sign-in uses the local stand-in.`)
+      return null
+    }
+  }
+  if (!clientId || !clientSecret) return null
+  const redirectUri = process.env.MCARE_GOOGLE_REDIRECT_URI ?? uris.find(u => u.endsWith('/auth/v1/callback')) ?? 'http://localhost:8443/auth/v1/callback'
+  return { clientId, clientSecret, redirectUri }
+}
+
+/**
+ * @param {{ port?: number, host?: string, dataDir?: string, quiet?: boolean, confirmEmail?: boolean, jobs?: boolean, exposeTestAuth?: boolean, google?: { clientId: string, clientSecret: string, redirectUri: string, authUrl?: string, tokenUrl?: string } | null, onStop?: () => void }} [options]
+ *   dataDir 'memory' keeps nothing on disk (used by the tests). onStop: called when `npm run backend:stop` asks.
+ *   google: the real Google OAuth client (default: readGoogleClient); authUrl / tokenUrl only for tests.
+>>>>>>> Stashed changes
  */
 export async function startBackend(options = {}) {
   const port = options.port ?? Number(process.env.MCARE_BACKEND_PORT || 54321)
@@ -196,6 +353,7 @@ export async function startBackend(options = {}) {
   const memory = dataDir === 'memory'
   const confirmEmail = options.confirmEmail ?? process.env.MCARE_CONFIRM_EMAIL === '1'
   const exposeTestAuth = options.exposeTestAuth ?? (process.env.NODE_ENV !== 'production')
+  const google = options.google !== undefined ? options.google : readGoogleClient(dataDir)
   const say = options.quiet ? () => {} : (...a) => console.log(...a)
 
   /* keys: made once per data directory, never committed */
@@ -305,14 +463,24 @@ export async function startBackend(options = {}) {
   const userByEmail = async email => (await q(`select * from auth.users where email = $1`, [String(email ?? '').trim().toLowerCase()])).rows[0]
   const userById = async id => (await q(`select * from auth.users where id = $1`, [id])).rows[0]
 
-  async function sendCode(user, kind) {
+  /**
+   * "Emails" a one-time code. With `redirectTo` (a password reset from the app) the email also carries a link:
+   * a separate long random token, which opens /auth/v1/verify and lands back in the app signed in. The code and
+   * the link share one expiry, and using either spends both.
+   */
+  async function sendCode(user, kind, redirectTo = null) {
     const code = String(crypto.randomInt(100000, 1000000))
-    await q(`insert into auth.one_time_tokens (user_id, kind, token_hash, expires_at) values ($1, $2, $3, now() + make_interval(mins => $4))
-             on conflict (user_id, kind) do update set token_hash = excluded.token_hash, attempts = 0, expires_at = excluded.expires_at`,
-      [user.id, kind, sha256(code + user.id), CODE_TTL_MIN[kind]])
-    outbox.unshift({ to: user.email, kind, code, at: Date.now() })
+    const linkToken = redirectTo ? crypto.randomBytes(32).toString('base64url') : null
+    await q(`insert into auth.one_time_tokens (user_id, kind, token_hash, link_hash, expires_at) values ($1, $2, $3, $4, now() + make_interval(mins => $5))
+             on conflict (user_id, kind) do update set token_hash = excluded.token_hash, link_hash = excluded.link_hash, attempts = 0, expires_at = excluded.expires_at`,
+      [user.id, kind, sha256(code + user.id), linkToken && sha256(linkToken), CODE_TTL_MIN[kind]])
+    const link = linkToken
+      ? `${new URL(redirectTo).origin}/auth/v1/verify?${new URLSearchParams({ token: linkToken, type: kind, redirect_to: redirectTo })}`
+      : null
+    outbox.unshift({ to: user.email, kind, code, link, at: Date.now() })
     outbox.length = Math.min(outbox.length, 50)
     say(`  ✉  ${user.email}: your mCare ${kind === 'signup' ? 'confirmation' : 'password reset'} code is ${code}  (local backend: no email is sent)`)
+    if (link) say(`     reset link: ${link}`)
   }
   async function useCode(user, kind, code) {
     const row = (await q(`select * from auth.one_time_tokens where user_id = $1 and kind = $2`, [user.id, kind])).rows[0]
@@ -337,6 +505,166 @@ export async function startBackend(options = {}) {
     } catch (e) {
       throw authError(e.code === '23505' ? 422 : 500, e.code === '23505' ? 'user_already_exists' : 'unexpected_failure', e.code === '23505' ? 'User already registered' : `Database error saving new user: ${e.message}`)
     }
+  }
+
+  /* ─── Links and pages a browser opens itself (no API key), as Supabase Auth serves them ─ */
+
+  /** A return address the local backend will send a browser to: the app on this machine or the local network, nowhere else. */
+  function appRedirect(target) {
+    let u
+    try { u = new URL(String(target ?? '')) } catch { return null }
+    if (!/^https?:$/.test(u.protocol)) return null
+    if (!/^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)$/.test(u.hostname)) return null
+    u.hash = ''
+    return u.href
+  }
+  const redirect = (res, to) => { res.writeHead(303, { Location: to, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }); res.end() }
+  /** Back to the app with a new session in the fragment, the way supabase-js reads it (detectSessionInUrl). */
+  const backWithSession = (res, to, t, extra = {}) => redirect(res, `${to}#${new URLSearchParams({
+    access_token: t.access_token, expires_at: String(t.expires_at), expires_in: String(t.expires_in), refresh_token: t.refresh_token, token_type: 'bearer', ...extra,
+  })}`)
+  const backWithError = (res, to, description) => redirect(res, `${to}#${new URLSearchParams({ error: 'access_denied', error_description: description })}`)
+
+  /** Google and Apple, played by a page of this backend: there is no real provider to go to locally. Test builds only. */
+  const STAND_IN = { google: 'Google', apple: 'Apple' }
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
+  function standInPage(res, provider, to, problem = '', form = null) {
+    const label = STAND_IN[provider]
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY' })
+    res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex"><title>Continue with ${label} (local test)</title>
+<style>body{font-family:system-ui,sans-serif;background:#f3f4f6;margin:0;display:grid;place-items:center;min-height:100vh}
+main{background:#fff;border-radius:16px;box-shadow:0 4px 24px #0001;padding:24px;width:min(360px,calc(100vw - 32px));box-sizing:border-box}
+h1{font-size:20px;margin:0 0 8px}p{color:#4b5563;font-size:13px;line-height:1.5}.note{background:#fffbeb;border:1px solid #fde68a;color:#78350f;border-radius:8px;padding:8px 10px}
+label{display:block;font-size:12px;font-weight:600;color:#374151;margin:12px 0 4px}input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #d1d5db;border-radius:10px;font-size:14px}
+.err{color:#dc2626}button{width:100%;margin-top:16px;padding:11px;border:0;border-radius:999px;font-weight:600;font-size:14px;cursor:pointer;background:#0f766e;color:#fff}
+button.cancel{background:transparent;color:#374151;margin-top:8px}</style></head>
+<body><main><h1>Continue with ${label}</h1>
+<p class="note"><strong>Local testing only.</strong> This page stands in for ${label}'s sign-in on the local backend. Nothing is sent to ${label}: the email you enter is treated as one ${label} has verified.</p>
+<form method="post" action="/auth/v1/authorize/local">
+<input type="hidden" name="provider" value="${esc(provider)}"><input type="hidden" name="redirect_to" value="${esc(to)}">
+<label for="email">${label} account email</label><input id="email" name="email" type="email" autocomplete="email" required autofocus value="${esc(form?.get('email'))}">
+<label for="name">Name (new accounts)</label><input id="name" name="name" type="text" autocomplete="name" value="${esc(form?.get('name'))}">
+${problem ? `<p class="err" role="alert">${esc(problem)}</p>` : ''}
+<button type="submit">Continue</button><button class="cancel" type="submit" name="cancel" value="1" formnovalidate>Cancel</button>
+</form></main></body></html>`)
+  }
+
+  async function browserAuth(req, res, url) {
+    // The link in a password-reset email: spends the token and lands in the app signed in, asked for a new password.
+    if (req.method === 'GET' && url.pathname === '/auth/v1/verify') {
+      const to = appRedirect(url.searchParams.get('redirect_to'))
+      if (!to) return send(res, 400, { message: 'This link points somewhere the local backend does not send people.' })
+      const token = String(url.searchParams.get('token') ?? '')
+      const row = url.searchParams.get('type') === 'recovery' && token && (await q(
+        `delete from auth.one_time_tokens where kind = 'recovery' and link_hash = $1 and expires_at > now() and attempts < $2 returning user_id`,
+        [sha256(token), MAX_CODE_ATTEMPTS])).rows[0]
+      if (!row) return backWithError(res, to, 'This reset link is invalid, already used or expired. Ask for a new one.')
+      return backWithSession(res, to, await newSession(await userById(row.user_id)), { type: 'recovery' })
+    }
+    // Real Google: off to Google, and back through /auth/v1/callback.
+    if (google && req.method === 'GET' && url.pathname === '/auth/v1/authorize' && url.searchParams.get('provider') === 'google') {
+      const to = appRedirect(url.searchParams.get('redirect_to'))
+      if (!to) return send(res, 400, { message: 'Unknown return address' })
+      if (url.searchParams.get('code_challenge')) return send(res, 400, { message: 'The local backend supports the implicit flow only' })
+      for (const [k, v] of googleStates) if (Date.now() - v.at > STATE_TTL) googleStates.delete(k)
+      if (googleStates.size >= 1000) return send(res, 429, { message: 'Too many sign-ins in progress. Try again in a few minutes.' })
+      const state = crypto.randomBytes(24).toString('base64url'), nonce = crypto.randomBytes(24).toString('base64url')
+      googleStates.set(state, { to, nonce, at: Date.now() })
+      return redirect(res, `${google.authUrl ?? 'https://accounts.google.com/o/oauth2/v2/auth'}?${new URLSearchParams({
+        client_id: google.clientId, redirect_uri: google.redirectUri, response_type: 'code', scope: 'openid email profile', state, nonce, prompt: 'select_account',
+      })}`)
+    }
+    if (req.method === 'GET' && url.pathname === '/auth/v1/callback') {
+      const state = String(url.searchParams.get('state') ?? '')
+      const pending = google && googleStates.get(state)
+      if (!pending || Date.now() - pending.at > STATE_TTL) return send(res, 400, { message: 'This sign-in has expired or was not started here. Go back to mCare and try again.' })
+      googleStates.delete(state)
+      if (url.searchParams.get('error')) {
+        return backWithError(res, pending.to, url.searchParams.get('error') === 'access_denied' ? 'Sign-in with Google was cancelled.' : 'Google could not sign you in. Try again.')
+      }
+      let identity
+      try { identity = await googleIdentity(String(url.searchParams.get('code') ?? ''), pending.nonce) } catch (e) {
+        if (!options.quiet) console.error(`  Google sign-in failed: ${e.message}`)
+        return backWithError(res, pending.to, 'Google could not confirm who you are. Try again.')
+      }
+      if (!identity.email || identity.email_verified !== true) return backWithError(res, pending.to, 'This Google account has no verified email address, so mCare cannot use it.')
+      const out = await providerAccount('google', String(identity.email).toLowerCase(), identity.name, { patientsOnly: false })
+      return out.problem ? backWithError(res, pending.to, out.problem) : backWithSession(res, pending.to, await newSession(out.user))
+    }
+    if (!exposeTestAuth) return send(res, 404, { message: 'Sign-in providers are not available on the local backend' })
+    if (req.method === 'GET' && url.pathname === '/auth/v1/authorize') {
+      const provider = url.searchParams.get('provider')
+      const to = appRedirect(url.searchParams.get('redirect_to'))
+      if (!STAND_IN[provider] || !to) return send(res, 400, { message: 'Unknown provider or return address' })
+      if (url.searchParams.get('code_challenge')) return send(res, 400, { message: 'The local backend supports the implicit flow only' })
+      return standInPage(res, provider, to)
+    }
+    if (req.method === 'POST' && url.pathname === '/auth/v1/authorize/local') {
+      const form = new URLSearchParams((await readBody(req)).toString('utf8'))
+      const provider = form.get('provider')
+      const to = appRedirect(form.get('redirect_to'))
+      if (!STAND_IN[provider] || !to) return send(res, 400, { message: 'Unknown provider or return address' })
+      if (form.get('cancel')) return backWithError(res, to, 'Sign-in was cancelled.')
+      const email = String(form.get('email') ?? '').trim().toLowerCase()
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return standInPage(res, provider, to, 'Enter a valid email address.', form)
+      // Anyone who can reach the dev server (the local network, with npm run dev) can type any email here, so the
+      // stand-in proves nothing: it never opens a doctor's or a staff member's account, nor one awaiting confirmation.
+      const out = await providerAccount(provider, email, form.get('name'), { patientsOnly: true })
+      return out.problem ? backWithError(res, to, out.problem) : backWithSession(res, to, await newSession(out.user))
+    }
+    return send(res, 404, { message: 'Not found' })
+  }
+
+  /** Sign-ins sent to Google and not back yet: state → where to return and the nonce the ID token must carry. */
+  const googleStates = new Map()
+  const STATE_TTL = 10 * 60_000
+
+  /** Trades Google's one-time code for the person's ID token and checks it is for this client and this sign-in. */
+  async function googleIdentity(code, nonce) {
+    const r = await fetch(google.tokenUrl ?? 'https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ code, client_id: google.clientId, client_secret: google.clientSecret, redirect_uri: google.redirectUri, grant_type: 'authorization_code' }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    const body = await r.json().catch(() => ({}))
+    if (!r.ok || !body.id_token) throw new Error(`Google's token endpoint answered ${r.status} ${body.error ?? ''} ${body.error_description ?? ''}`.trim())
+    // Received straight from Google over TLS, so its signature need not be checked (OpenID Connect Core 3.1.3.7); its claims are.
+    const claims = JSON.parse(Buffer.from(String(body.id_token).split('.')[1] ?? '', 'base64url').toString('utf8'))
+    if (!['https://accounts.google.com', 'accounts.google.com'].includes(claims.iss)) throw new Error('the ID token is not from Google')
+    if (claims.aud !== google.clientId) throw new Error('the ID token is for another client')
+    if (!(claims.exp * 1000 > Date.now())) throw new Error('the ID token has expired')
+    if (claims.nonce !== nonce) throw new Error('the ID token is not for this sign-in')
+    return claims
+  }
+
+  /**
+   * The account a provider vouches for, linked by email as Supabase does: a confirmed account is signed in, a new
+   * email becomes a patient (handle_new_user). patientsOnly: the stand-in, which proves nothing about the address.
+   */
+  async function providerAccount(provider, email, name, { patientsOnly }) {
+    const label = { google: 'Google', apple: 'Apple' }[provider]
+    let user = await userByEmail(email)
+    if (user && !user.email_confirmed_at) {
+      if (patientsOnly) return { problem: `An mCare account with this email is waiting for its email to be confirmed. Confirm it from the email we sent, then continue with ${label}.` }
+      // The provider has proven the address: it is confirmed, and the password whoever registered it chose is
+      // taken away, so an account opened in someone else's name before they arrived cannot be kept by its maker.
+      await q(`update auth.users set email_confirmed_at = now(), encrypted_password = $2 where id = $1`, [user.id, hashPassword(`Aa1-${crypto.randomBytes(18).toString('base64url')}`)])
+      await q(`delete from auth.one_time_tokens where user_id = $1`, [user.id])
+    }
+    if (user && patientsOnly && (await q(`select role from public.profiles where id = $1`, [user.id])).rows[0]?.role !== 'patient') {
+      return { problem: `On the local backend the ${label} stand-in signs in patients only. Sign in to this account with its password.` }
+    }
+    if (!user) {
+      const full = String(name ?? '').trim().slice(0, 120)
+      // The password is random and never used; the person can set one later with "Forgot password?".
+      user = await createUser({ email, password: `Aa1-${crypto.randomBytes(18).toString('base64url')}`, data: full ? { full_name: full, name: full } : {}, confirmed: true })
+    }
+    const meta = (typeof user.raw_app_meta_data === 'string' ? JSON.parse(user.raw_app_meta_data) : user.raw_app_meta_data) ?? {}
+    const providers = [...new Set([...(meta.providers ?? []), provider])]
+    await q(`update auth.users set raw_app_meta_data = $2 where id = $1`, [user.id, JSON.stringify({ ...meta, provider: meta.provider ?? provider, providers })])
+    return { user: await userById(user.id) }
   }
 
   async function auth(req, res, url, claims, body) {
@@ -393,7 +721,64 @@ export async function startBackend(options = {}) {
       }
       if (body.data && typeof body.data === 'object')
         await q(`update auth.users set raw_user_meta_data = raw_user_meta_data || $2::jsonb, updated_at = now() where id = $1`, [user.id, JSON.stringify(body.data)])
+<<<<<<< Updated upstream
       return send(res, 200, userJson(await userById(user.id)))
+=======
+      return send(res, 200, await userOut(await userById(user.id)))
+    }
+
+    /* two-step sign-in: what supabase.auth.mfa.enroll / challenge / verify / unenroll call */
+    const sessionAal = async () => (await q(`select aal from auth.sessions where id = $1`, [claims.session_id])).rows[0]?.aal ?? 'aal1'
+    if (route === 'POST /factors') {
+      const user = await me()
+      if ((body.factor_type ?? 'totp') !== 'totp') throw authError(422, 'mfa_factor_type_not_supported', 'Only authenticator apps (TOTP) are available on the local backend')
+      const factors = await factorsOf(user.id)
+      // Adding a second factor to an account that already has one needs a session that passed the first.
+      if (factors.some(f => f.status === 'verified') && await sessionAal() !== 'aal2') throw authError(403, 'insufficient_aal', 'AAL2 required to enroll a new factor')
+      const name = String(body.friendly_name ?? '').trim().slice(0, 60) || null
+      if (name && factors.some(f => f.status === 'verified' && f.friendly_name === name)) throw authError(422, 'mfa_factor_name_conflict', `A factor with the friendly name "${name}" for this user already exists`)
+      // An unfinished setup is replaced, not stacked.
+      await q(`delete from auth.mfa_factors where user_id = $1 and status = 'unverified'`, [user.id])
+      const key = toBase32(crypto.randomBytes(20))
+      const id = (await q(`insert into auth.mfa_factors (user_id, friendly_name, factor_type, secret) values ($1, $2, 'totp', $3) returning id`, [user.id, name, key])).rows[0].id
+      const issuer = String(body.issuer ?? 'mCare').replace(/[:?&#]/g, '').slice(0, 40) || 'mCare'
+      const uri = `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(user.email)}?secret=${key}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`
+      // A QR code (SVG), as a hosted project returns, so the app shows one here too.
+      return send(res, 200, { id, type: 'totp', friendly_name: name ?? undefined, totp: { qr_code: qrSvg(uri), secret: key, uri } })
+    }
+    const factorRoute = route.match(/^(POST|DELETE) \/factors\/([0-9a-f-]{36})(\/challenge|\/verify)?$/)
+    if (factorRoute) {
+      const user = await me()
+      const factor = (await q(`select * from auth.mfa_factors where id = $1 and user_id = $2`, [factorRoute[2], user.id])).rows[0]
+      if (!factor) throw authError(404, 'mfa_factor_not_found', 'Factor not found')
+      if (factorRoute[1] === 'DELETE' && !factorRoute[3]) {
+        if (factor.status === 'verified' && await sessionAal() !== 'aal2') throw authError(403, 'insufficient_aal', 'AAL2 required to unenroll verified factor')
+        await q(`delete from auth.mfa_factors where id = $1`, [factor.id])
+        return send(res, 200, { id: factor.id })
+      }
+      if (factorRoute[3] === '/challenge') {
+        const c = (await q(`insert into auth.mfa_challenges (factor_id) values ($1) returning id, created_at`, [factor.id])).rows[0]
+        return send(res, 200, { id: c.id, type: 'totp', expires_at: Math.floor(new Date(c.created_at).getTime() / 1000) + CHALLENGE_TTL_SEC })
+      }
+      if (factorRoute[3] === '/verify') {
+        const recent = (mfaFailures.get(factor.id) ?? []).filter(t => Date.now() - t < 5 * 60_000)
+        if (recent.length >= MAX_MFA_FAILURES) throw authError(429, 'over_request_rate_limit', 'Too many attempts. Wait a few minutes and try again.')
+        const challengeId = /^[0-9a-f-]{36}$/.test(String(body.challenge_id ?? '')) ? String(body.challenge_id) : null
+        const challenge = challengeId && (await q(`select * from auth.mfa_challenges where id = $1 and factor_id = $2`, [challengeId, factor.id])).rows[0]
+        if (!challenge || challenge.verified_at || Date.now() - new Date(challenge.created_at).getTime() > CHALLENGE_TTL_SEC * 1000) {
+          throw authError(422, 'mfa_challenge_expired', 'MFA challenge has expired, verify against another challenge or create a new challenge.')
+        }
+        if (!totpMatches(factor.secret, body.code)) {
+          mfaFailures.set(factor.id, [...recent, Date.now()])
+          throw authError(422, 'mfa_verification_failed', 'Invalid TOTP code entered')
+        }
+        mfaFailures.delete(factor.id)
+        await q(`update auth.mfa_challenges set verified_at = now() where id = $1`, [challenge.id])
+        await q(`update auth.mfa_factors set status = 'verified', updated_at = now() where id = $1`, [factor.id])
+        await q(`update auth.sessions set aal = 'aal2' where id = $1`, [claims.session_id])
+        return send(res, 200, await tokensFor(user, claims.session_id))
+      }
+>>>>>>> Stashed changes
     }
 
     if (route === 'POST /logout') {
@@ -408,8 +793,9 @@ export async function startBackend(options = {}) {
     }
 
     if (route === 'POST /recover') {
+      // Only to an address confirmed at registration. The same answer either way, so emails cannot be looked up.
       const user = await userByEmail(body.email)
-      if (user) await sendCode(user, 'recovery')   // the same answer either way, so emails cannot be looked up
+      if (user?.email_confirmed_at) await sendCode(user, 'recovery', appRedirect(url.searchParams.get('redirect_to')))
       return send(res, 200, {})
     }
 
@@ -679,8 +1065,53 @@ export async function startBackend(options = {}) {
         const kind = url.searchParams.get('kind')
         if (!email || !['signup', 'recovery'].includes(kind)) return send(res, 400, { message: 'Email and a supported code kind are required' })
         const message = outbox.find(item => item.to.toLowerCase() === email && item.kind === kind)
-        return send(res, 200, { code: message?.code ?? null }, { 'Cache-Control': 'no-store' })
+        return send(res, 200, { code: message?.code ?? null, link: message?.link ?? null }, { 'Cache-Control': 'no-store' })
       }
+<<<<<<< Updated upstream
+=======
+      // npm run backend:seed: spreads seeded readings over the past days, which the API never allows (every reading
+      // is stamped with the server's clock). Local backend, service key, test patients (@mcare.test) only.
+      if (url.pathname === '/__dev/backdate-readings' && req.method === 'POST') {
+        if (!exposeTestAuth) return send(res, 404, { message: 'Not found' })
+        if (claimsOf(req).role !== 'service_role') return send(res, 403, { message: 'Only the seed script can do this' })
+        let moves
+        try { moves = JSON.parse((await readBody(req)).toString('utf8')) } catch { moves = null }
+        if (!Array.isArray(moves) || moves.some(m => typeof m?.id !== 'string' || Number.isNaN(Date.parse(m?.at)))) {
+          return send(res, 400, { message: 'Send a list of { id, at }' })
+        }
+        const moved = await exclusive(() => db.transaction(async tx => {
+          await tx.query(`set local session_replication_role = replica`)   // the reading guards refuse any move
+          let n = 0
+          for (const m of moves) {
+            n += (await tx.query(`update public.readings r set taken_at = $2 from public.profiles p
+              where r.id = $1 and p.id = r.patient_id and p.email like '%@mcare.test'`, [m.id, new Date(m.at).toISOString()])).affectedRows ?? 0
+          }
+          return n
+        }))
+        return send(res, 200, { moved })
+      }
+      // The local stand-in for Realtime (see "Change notices"): answers as soon as anything was saved, or after 25 s.
+      if (url.pathname === '/__dev/changes' && req.method === 'GET') {
+        const who = claimsOf(req)
+        if (who.role === 'anon') return send(res, 401, { message: 'Sign in first' })
+        const since = Number(url.searchParams.get('since') ?? -1)
+        if (since !== pulse) return send(res, 200, { pulse }, { 'Cache-Control': 'no-store' })
+        return await new Promise(done => {
+          const wake = () => { clearTimeout(timer); done(send(res, 200, { pulse }, { 'Cache-Control': 'no-store' })) }
+          const timer = setTimeout(() => { waiters.delete(wake); done(send(res, 200, { pulse }, { 'Cache-Control': 'no-store' })) }, 25_000)
+          waiters.add(wake)
+          req.on('close', () => { clearTimeout(timer); waiters.delete(wake) })
+        })
+      }
+      // npm run backend:stop: a clean stop for a backend started where Ctrl+C cannot reach it. Service key only.
+      if (url.pathname === '/__dev/stop' && req.method === 'POST') {
+        if (!options.onStop) return send(res, 404, { message: 'Not found' })
+        if (claimsOf(req).role !== 'service_role') return send(res, 403, { message: 'Only this machine can stop the backend' })
+        send(res, 202, { stopping: true })
+        return setImmediate(options.onStop)
+      }
+      if ((req.method === 'GET' && (url.pathname === '/auth/v1/verify' || url.pathname === '/auth/v1/callback')) || url.pathname.startsWith('/auth/v1/authorize')) return await browserAuth(req, res, url)
+>>>>>>> Stashed changes
       const area = url.pathname.split('/')[1]
       if (!['auth', 'rest', 'storage'].includes(area)) return send(res, 404, { message: 'Not found' })
       const claims = claimsOf(req)
@@ -733,7 +1164,13 @@ export async function startBackend(options = {}) {
   timers.forEach(t => t.unref())
 
   return {
+<<<<<<< Updated upstream
     url: `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${actualPort}`, port: actualPort, anonKey, serviceKey, outbox, db, dataDir,
+=======
+    url: `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${actualPort}`, port: actualPort, anonKey, serviceKey, outbox, db, dataDir, opened,
+    /** Where Google sends people back to, when real Google sign-in is set up; null when the stand-in plays it. */
+    googleRedirect: google?.redirectUri ?? null,
+>>>>>>> Stashed changes
     /** Runs SQL as the database owner. For tests and scripts only. */
     sql: (text, params) => q(text, params),
     /** Sends what is waiting in the email queue now (the job does this every 10 s). Resolves with how many. */
@@ -777,6 +1214,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   console.log(`  listening  ${backend.url}  (reached by the app through the dev server on port ${appPort})`)
   console.log(env === 'other' ? '  .env.local names another backend: left unchanged, so the app is NOT using this one'
     : `  .env.local ${env === 'ok' ? 'already points here' : `${env}: the app now runs in live mode`}`)
+  console.log(backend.googleRedirect
+    ? `  Google     real sign-in; Google returns to ${backend.googleRedirect} (open the app at that address)`
+    : '  Google     local stand-in page (real Google: save the OAuth client as supabase/.data/google-oauth.json; README)')
   console.log(`\n  Open the app   this laptop   http://localhost:${appPort}`)
   for (const ip of lanAddresses()) console.log(`                 phone / LAN   http://${ip}:${appPort}`)
   console.log('\n  First time?    npm run backend:seed   creates the labelled test accounts')

@@ -1,0 +1,52 @@
+{
+	"mcpServers": {
+		"basic-memory": {
+			"type": "stdio",
+			"command": "uvx",
+			"args": [
+				"basic-memory",
+				"mcp"
+			],
+			"tools": [
+				"*"
+			]
+		},
+		"context7": {
+			"type": "http",
+			"url": "https://mcp.context7.com/mcp",
+			"tools": [
+				"*"
+			]
+		},
+		"playwright": {
+			"type": "stdio",
+			"command": "npx",
+			"args": [
+				"-y",
+				"@playwright/mcp@latest"
+			],
+			"tools": [
+				"*"
+			]
+		},
+		"serena": {
+			"type": "stdio",
+			"command": "uvx",
+			"args": [
+				"-p",
+				"3.13",
+				"--from",
+				"serena-agent",
+				"serena",
+				"start-mcp-server",
+				"--context",
+				"ide",
+				"--project",
+				"D:\\tattu\\mCare1"
+			],
+			"tools": [
+				"*"
+			]
+		}
+	}
+}

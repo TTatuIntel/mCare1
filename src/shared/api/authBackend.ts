@@ -20,8 +20,12 @@ const BACKEND_ID: Partial<Record<SocialProvider, 'google' | 'apple' | 'facebook'
   google: 'google', apple: 'apple', facebook: 'facebook', x: 'twitter',
 }
 
-/** Whether a provider button should be offered: all of them in demo mode, the connected ones on a hosted project, none on the local backend. */
-export const providerAvailable = (p: SocialProvider) => !backendConfigured || (!localBackend && !!BACKEND_ID[p])
+/**
+ * Whether a provider button should be offered: all of them in demo mode, the connected ones on a hosted project.
+ * On the local backend only in a dev build, where its stand-in page plays Google and Apple (`/auth/v1/authorize`).
+ */
+export const providerAvailable = (p: SocialProvider) =>
+  !backendConfigured || (!!BACKEND_ID[p] && (!localBackend || import.meta.env.DEV))
 
 const landedOn = typeof window === 'undefined' ? '' : window.location.hash + window.location.search
 /** True when this page load is a provider or an emailed link sending the person back to us. Read once, before the URL is cleaned. */
@@ -234,17 +238,21 @@ export async function verifyEmailCode(email: string, code: string, purpose: 'sig
   }
 }
 
-/** Reads a one-time code from the local test backend only; hosted projects never expose email codes to the browser. */
-export async function getLocalTestAuthCode(email: string, kind: 'signup' | 'recovery'): Promise<string | null> {
-  if (!import.meta.env.DEV || !localBackend || typeof window === 'undefined') return null
+/**
+ * Reads the last code (and, for a password reset, the link) "emailed" by the local test backend only;
+ * hosted projects never expose email codes to the browser.
+ */
+export async function getLocalTestAuthMail(email: string, kind: 'signup' | 'recovery'): Promise<{ code: string | null; link: string | null }> {
+  const none = { code: null, link: null }
+  if (!import.meta.env.DEV || !localBackend || typeof window === 'undefined') return none
   try {
     const query = new URLSearchParams({ email: email.trim(), kind })
     const response = await fetch(`${window.location.origin}/__dev/auth-codes?${query}`)
-    if (!response.ok) return null
-    const result = await response.json() as { code?: unknown }
-    return typeof result.code === 'string' ? result.code : null
+    if (!response.ok) return none
+    const result = await response.json() as { code?: unknown; link?: unknown }
+    return { code: typeof result.code === 'string' ? result.code : null, link: typeof result.link === 'string' ? result.link : null }
   } catch {
-    return null
+    return none
   }
 }
 
@@ -258,7 +266,10 @@ export async function resendSignUpCode(email: string, redirectTo: string): Promi
   }
 }
 
-/** Emails a reset code and link. Succeeds whether or not the email is registered, so it can't be used to look people up. */
+/**
+ * Emails a reset code and a link to an address confirmed at registration. Succeeds whether or not the email is
+ * registered, so it can't be used to look people up.
+ */
 export async function sendPasswordReset(email: string, redirectTo: string): Promise<string | null> {
   try {
     const supabase = await getSupabase()
@@ -269,12 +280,15 @@ export async function sendPasswordReset(email: string, redirectTo: string): Prom
   }
 }
 
-/** Sets a new password for the person signed in by a reset code or link. */
+/** Sets a new password for the person signed in by a reset code or link, and signs out every other device. */
 export async function setNewPassword(password: string): Promise<string | null> {
   try {
     const supabase = await getSupabase()
     const { error } = await supabase.auth.updateUser({ password })
-    return error?.message ?? null
+    if (error) return error.message
+    // Hosted Supabase keeps other sessions after a password change; whoever had the old password loses them here.
+    await supabase.auth.signOut({ scope: 'others' })
+    return null
   } catch (e) {
     return reason(e)
   }

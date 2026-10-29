@@ -39,6 +39,7 @@ create table auth.one_time_tokens (
   user_id    uuid not null references auth.users (id) on delete cascade,
   kind       text not null check (kind in ('signup', 'recovery')),
   token_hash text not null,
+  link_hash  text,                  -- the emailed link's token (password reset), spent together with the code
   attempts   int not null default 0,
   expires_at timestamptz not null,
   primary key (user_id, kind)

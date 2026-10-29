@@ -158,7 +158,26 @@ try {
     await s.nav('Appts'); await page.getByText('No appointments yet').waitFor({ timeout: 10000 })
     await s.nav('Chat'); await page.getByText('No doctor on your care team yet').waitFor({ timeout: 10000 })
   })
+<<<<<<< Updated upstream
   await step(s, 'sign out and local password recovery display the test OTP', async () => {
+=======
+  await step(s, 'a phone that asks for less motion can choose full animations', async () => {
+    // The app follows the device through a change event, which lands a moment after the switch: wait for it.
+    const motionIs = want => page.waitForFunction(w => document.documentElement.dataset.motion === w, want, { timeout: 3000 }).then(() => true, () => false)
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    if (!(await motionIs('reduce'))) throw new Error('the device setting should reduce motion by default')
+    await s.home(); await page.getByRole('button', { name: 'Profile' }).click()
+    await page.getByText('Theme & Font').click()
+    await page.getByText(/This device asks apps to reduce motion/).waitFor({ timeout: 10000 })
+    await page.getByRole('radio', { name: 'Full' }).click()
+    if (!(await motionIs('full'))) throw new Error('choosing Full should turn every animation back on')
+    await page.getByRole('radio', { name: 'Like device' }).click()
+    if (!(await motionIs('reduce'))) throw new Error('Like device should follow the device again')
+    await page.getByRole('button', { name: 'Done', exact: true }).click()
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
+  })
+  await step(s, 'sign out, ask for a reset email, and set a new password through its link', async () => {
+>>>>>>> Stashed changes
     await s.home(); await page.getByRole('button', { name: 'Profile' }).click()
     await page.getByRole('button', { name: 'Sign Out', exact: true }).click()
     await page.getByRole('button', { name: 'Sign in', exact: true }).first().waitFor({ timeout: 15000 })
@@ -168,9 +187,37 @@ try {
     await page.getByRole('button', { name: 'Send reset email' }).click()
     await page.getByRole('heading', { name: 'Check your email' }).waitFor({ timeout: 10000 })
     await page.getByText(/One-time code: \d{6}/).waitFor({ timeout: 10000 })
+    await page.getByRole('link', { name: 'Open test reset link' }).click()
+    await page.getByRole('heading', { name: 'Choose a new password' }).waitFor({ timeout: 20000 })
+    await page.getByPlaceholder('Create a password').fill('Reset-Pass-2027')
+    await page.getByPlaceholder('Repeat your password').fill('Reset-Pass-2027')
+    await page.getByRole('button', { name: 'Save new password' }).click()
+    await page.getByRole('heading', { name: 'Password updated' }).waitFor({ timeout: 15000 })
   })
+  check('…the new password works and the person was told of the change', !!(await api(backend.anonKey).auth.signInWithPassword({ email, password: 'Reset-Pass-2027' })).data.session
+    && (await row(service.from('notifications').select('title').eq('user_id', newId))).some(n => n.title === 'Your password was changed'))
   check('no script errors', s.errors.length === 0, s.errors.join(' | '))
   await s.context.close()
+
+  /* ── Google sign-in, through the local stand-in for Google ── */
+  console.log('\nGoogle sign-in')
+  const g = await session('phone')
+  const gEmail = `test.google${Date.now()}@mcare.test`
+  await step(g, 'Continue with Google signs up a new patient and opens the health setup', async () => {
+    await g.page.goto(APP)
+    await g.page.getByLabel('mCare is starting').waitFor({ state: 'hidden', timeout: 20000 }).catch(() => {})
+    await g.page.getByRole('button', { name: 'Get Started' }).click()
+    await g.page.getByRole('button', { name: 'Continue with Google' }).click()
+    await g.page.getByRole('heading', { name: 'Continue with Google' }).waitFor({ timeout: 15000 })
+    await g.page.getByLabel('Google account email').fill(gEmail)
+    await g.page.getByLabel('Name (new accounts)').fill('Test Google Patient')
+    await g.page.getByRole('button', { name: 'Continue', exact: true }).click()
+    await g.page.getByRole('heading', { name: 'About you' }).waitFor({ timeout: 25000 })
+  })
+  const gRow = await row(service.from('profiles').select('role, status, full_name').eq('email', gEmail).maybeSingle())
+  check('…the database holds them as an active patient, named as Google gave it', gRow?.role === 'patient' && gRow.status === 'active' && gRow.full_name === 'Test Google Patient', JSON.stringify(gRow))
+  check('no script errors', g.errors.length === 0, g.errors.join(' | '))
+  await g.context.close()
 
   /* ── A patient with a doctor ── */
   console.log('\nA day as a patient under a doctor')

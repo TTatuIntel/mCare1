@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useApp } from '@/shared/state/AppContext'
 import type { AppUser } from '@/shared/lib/types'
 import { isEmail, passwordIssue } from '@/shared/state/auth'
-import { getLocalTestAuthCode, resendSignUpCode, sendPasswordReset, setNewPassword, takeConsent, verifyEmailCode } from '@/shared/api/authBackend'
+import { getLocalTestAuthMail, resendSignUpCode, sendPasswordReset, setNewPassword, takeConsent, verifyEmailCode } from '@/shared/api/authBackend'
 import { localBackend } from '@/shared/api/supabase'
 import { appBaseUrl } from '@/shared/email/emailTemplate'
 import {
@@ -173,7 +173,7 @@ export function LiveRecovery({ initialEmail, recovered, onBack }: {
       <form key="find" className="screen-in flex flex-col gap-4" onSubmit={e => { e.preventDefault(); send() }}>
         <AuthBack onClick={onBack}>Back to sign in</AuthBack>
         <StepBar step={1} total={3} label="Find your account" />
-        <AuthHeading title="Forgot your password?" subtitle="Enter your email and we will send a code and a link to reset it." />
+        <AuthHeading title="Forgot your password?" subtitle="Enter the email you confirmed when you registered. We will send a link and a code to reset your password." />
         <AuthField label="Email Address">
           <input type="email" autoComplete="username" autoFocus value={email} onChange={e => { setEmail(e.target.value); setError('') }}
             placeholder="you@example.com" className={authInputCls} />
@@ -190,8 +190,8 @@ export function LiveRecovery({ initialEmail, recovered, onBack }: {
         <AuthBack onClick={() => { setError(''); setStep('find') }} />
         <StepBar step={2} total={3} label="Enter the code" />
         <AuthHeading center icon="mail" title="Check your email" subtitle={<>
-          If an account matches <span className="font-semibold text-teal-700 break-all">{email.trim()}</span>, a reset email is on
-          its way. Tap the link in it, or enter the 6-digit code.
+          If a confirmed account matches <span className="font-semibold text-teal-700 break-all">{email.trim()}</span>, a reset
+          email is on its way. Tap the link in it (it works once, for 10 minutes), or enter the 6-digit code.
         </>} />
         <div>
           <OtpInput value={code} invalid={!!error}
@@ -226,13 +226,14 @@ export function LiveRecovery({ initialEmail, recovered, onBack }: {
 
 function LocalTestAuthDetails({ email, kind }: { email: string; kind: 'signup' | 'recovery' }) {
   const [code, setCode] = useState('')
+  const [resetLink, setResetLink] = useState('')
 
   useEffect(() => {
     if (!import.meta.env.DEV || !localBackend) return
     let current = true
     const load = async () => {
-      const next = await getLocalTestAuthCode(email, kind)
-      if (current) setCode(next ?? '')
+      const next = await getLocalTestAuthMail(email, kind)
+      if (current) { setCode(next.code ?? ''); setResetLink(next.link ?? '') }
     }
     void load()
     const timer = window.setInterval(load, 1500)
@@ -255,6 +256,7 @@ function LocalTestAuthDetails({ email, kind }: { email: string; kind: 'signup' |
       <p className="font-semibold">Local testing only</p>
       <p className="mt-1">One-time code: <span className="font-mono font-bold">{code || 'Waiting for code…'}</span></p>
       {activationHref && <a className="mt-1 inline-block font-semibold text-teal-800 underline" href={activationHref}>Open test activation link</a>}
+      {kind === 'recovery' && resetLink && <a className="mt-1 inline-block font-semibold text-teal-800 underline" href={resetLink}>Open test reset link</a>}
     </aside>
   )
 }

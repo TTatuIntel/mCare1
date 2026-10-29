@@ -10,7 +10,12 @@
  * not theirs. Nothing is kept: the database lives in memory for the run.
  */
 import { createClient } from '@supabase/supabase-js'
+<<<<<<< Updated upstream
 import { startBackend } from '../dev/server.mjs'
+=======
+import http from 'node:http'
+import { startBackend, totpCode } from '../dev/server.mjs'
+>>>>>>> Stashed changes
 
 const backend = await startBackend({ port: 0, dataDir: 'memory', quiet: true, jobs: false, exposeTestAuth: true })
 const client = (key = backend.anonKey) => createClient(backend.url, key, { auth: { persistSession: false, autoRefreshToken: false } })
@@ -481,6 +486,106 @@ check('a new password replaces the old one', !(await rec.auth.updateUser({ passw
   && !!(await client().auth.signInWithPassword({ email: 'test.patient2@mcare.test', password: 'New-Pass-2027' })).data.session)
 check('changing the password signs out the other devices', (await pat2.from('profiles').select('id')).status === 401)
 check('asking to reset an unknown email gives nothing away', !(await client().auth.resetPasswordForEmail('nobody@mcare.test')).error)
+check('a changed password is audited and the person is told (in the app, and queued by email)',
+  (await admin.from('notifications').select('title').eq('user_id', pat2Id)).data?.some(n => n.title === 'Your password was changed')
+  && (await admin.from('audit_log').select('id').eq('action', 'Password changed').eq('resource_id', pat2Id)).data?.length >= 1)
+
+console.log('\nReset links, and Google / Apple through the local stand-in')
+const APP = 'http://localhost:8443/'
+const at = path => new URL(path, backend.url)
+const fragment = r => new URLSearchParams(new URL(r.headers.get('location')).hash.slice(1))
+const subOf = token => JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()).sub
+await client().auth.resetPasswordForEmail('test.patient2@mcare.test', { redirectTo: APP })
+const mail = backend.outbox.find(m => m.to === 'test.patient2@mcare.test' && m.kind === 'recovery')
+check('the reset email carries a link back to the app as well as a code', !!mail?.link && mail.link.startsWith(`${APP}auth/v1/verify?`) && /^\d{6}$/.test(mail.code))
+const resetLink = at(new URL(mail.link).pathname + new URL(mail.link).search)
+const opened = await fetch(resetLink, { redirect: 'manual' })
+const landed = fragment(opened)
+check('the link lands in the app signed in, marked as a reset', opened.status === 303 && opened.headers.get('location').startsWith(APP)
+  && landed.get('type') === 'recovery' && subOf(landed.get('access_token')) === pat2Id)
+check('the link works once', fragment(await fetch(resetLink, { redirect: 'manual' })).has('error_description'))
+check('…and using it spends the code sent with it', !!(await client().auth.verifyOtp({ email: 'test.patient2@mcare.test', token: mail.code, type: 'recovery' })).error)
+check('a reset link never sends the browser off this machine or network',
+  (await fetch(at('/auth/v1/verify?' + new URLSearchParams({ token: 'x', type: 'recovery', redirect_to: 'https://evil.example/' })), { redirect: 'manual' })).status === 400)
+await admin.auth.admin.createUser({ email: 'waiting@mcare.test', password: PW, email_confirm: false })
+await client().auth.resetPasswordForEmail('waiting@mcare.test', { redirectTo: APP })
+check('an email never confirmed at registration gets no reset email (and the answer is the same)', !backend.outbox.some(m => m.to === 'waiting@mcare.test' && m.kind === 'recovery'))
+
+const provider = (fields, name = 'google') => fetch(at('/auth/v1/authorize/local'), {
+  method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  body: new URLSearchParams({ provider: name, redirect_to: APP, ...fields }),
+})
+const standIn = await fetch(at('/auth/v1/authorize?' + new URLSearchParams({ provider: 'google', redirect_to: APP })))
+check('"Continue with Google" opens the local stand-in page', standIn.status === 200 && /Continue with Google/.test(await standIn.text()))
+check('…never for a return address off this machine or network, nor for an unknown provider',
+  (await fetch(at('/auth/v1/authorize?' + new URLSearchParams({ provider: 'google', redirect_to: 'https://evil.example/' })))).status === 400
+  && (await fetch(at('/auth/v1/authorize?' + new URLSearchParams({ provider: 'yahoo', redirect_to: APP })))).status === 400)
+const g1 = fragment(await provider({ email: 'Grace.Google@mcare.test', name: 'Grace Google' }))
+const google = createClient(backend.url, backend.anonKey, { global: { headers: { Authorization: `Bearer ${g1.get('access_token')}` } }, auth: { persistSession: false } })
+const gProfile = (await google.from('profiles').select('id, role, status, full_name').eq('email', 'grace.google@mcare.test').maybeSingle()).data
+check('a first Google sign-in creates an active patient with the name Google gave', gProfile?.role === 'patient' && gProfile.status === 'active' && gProfile.full_name === 'Grace Google', gProfile)
+check('signing in with Google again opens the same account', subOf(fragment(await provider({ email: 'grace.google@mcare.test' })).get('access_token')) === gProfile?.id)
+check('Apple with the email of an existing, confirmed account opens that account (linked by verified email)',
+  subOf(fragment(await provider({ email: 'test.patient2@mcare.test' }, 'apple')).get('access_token')) === pat2Id)
+check('an account still waiting for its email confirmation is not taken over', fragment(await provider({ email: 'waiting@mcare.test' })).has('error_description'))
+check('the stand-in never opens a staff account (anyone on the network could type the email)', (r => r.has('error_description') && !r.has('access_token'))(fragment(await provider({ email: 'test.admin@mcare.test' }))))
+check('cancelling returns to the app with no session', (r => r.has('error_description') && !r.has('access_token'))(fragment(await provider({ cancel: '1' }))))
+
+console.log('\nReal Google sign-in (Google\'s token endpoint played by this test)')
+const GOOGLE_ID = 'test-client.apps.googleusercontent.com', GOOGLE_BACK = 'http://localhost:8443/auth/v1/callback'
+let idClaims = null
+const fakeGoogle = http.createServer(async (req, res) => {
+  let body = ''
+  for await (const c of req) body += c
+  const form = new URLSearchParams(body)
+  const seg = o => Buffer.from(JSON.stringify(o)).toString('base64url')
+  const good = form.get('code') === 'good-code' && form.get('client_id') === GOOGLE_ID && form.get('client_secret') === 'test-secret'
+    && form.get('redirect_uri') === GOOGLE_BACK && form.get('grant_type') === 'authorization_code'
+  res.writeHead(good ? 200 : 400, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify(good ? { id_token: `${seg({ alg: 'RS256' })}.${seg(idClaims)}.signature` } : { error: 'invalid_grant' }))
+})
+await new Promise(done => fakeGoogle.listen(0, '127.0.0.1', done))
+const real = await startBackend({ port: 0, dataDir: 'memory', quiet: true, jobs: false, exposeTestAuth: false,
+  google: { clientId: GOOGLE_ID, clientSecret: 'test-secret', redirectUri: GOOGLE_BACK, tokenUrl: `http://127.0.0.1:${fakeGoogle.address().port}/token` } })
+const realAt = path => new URL(path, real.url)
+const realAdmin = createClient(real.url, real.serviceKey, { auth: { persistSession: false, autoRefreshToken: false } })
+const toGoogle = async () => new URL((await fetch(realAt('/auth/v1/authorize?' + new URLSearchParams({ provider: 'google', redirect_to: APP })), { redirect: 'manual' })).headers.get('location'))
+/** One round trip: to Google, then back to the callback with the identity Google vouches for. */
+const viaGoogle = async (claims = {}, back = {}) => {
+  const out = await toGoogle()
+  idClaims = { iss: 'https://accounts.google.com', aud: GOOGLE_ID, exp: Math.floor(Date.now() / 1000) + 600, nonce: out.searchParams.get('nonce'), email_verified: true, ...claims }
+  const state = out.searchParams.get('state')
+  const r = await fetch(realAt('/auth/v1/callback?' + new URLSearchParams({ state, code: 'good-code', ...back })), { redirect: 'manual' })
+  return { r, state, back: r.status === 303 ? fragment(r) : new URLSearchParams() }
+}
+const toG = await toGoogle()
+check('"Continue with Google" goes to Google with this client, its return address, a state and a nonce',
+  toG.origin === 'https://accounts.google.com' && toG.searchParams.get('client_id') === GOOGLE_ID && toG.searchParams.get('redirect_uri') === GOOGLE_BACK
+  && toG.searchParams.get('response_type') === 'code' && /openid/.test(toG.searchParams.get('scope')) && toG.searchParams.get('state')?.length > 20 && toG.searchParams.get('nonce')?.length > 20)
+const first = await viaGoogle({ email: 'Real.Google@gmail.example', name: 'Real Google' })
+const firstId = first.back.get('access_token') && subOf(first.back.get('access_token'))
+const firstProfile = (await realAdmin.from('profiles').select('role, status, full_name').eq('id', firstId).maybeSingle()).data
+check('back from Google, a new verified email becomes an active patient with Google\'s name, signed in',
+  first.r.headers.get('location')?.startsWith(APP) && firstProfile?.role === 'patient' && firstProfile.status === 'active' && firstProfile.full_name === 'Real Google', firstProfile)
+check('the same Google account opens the same mCare account', subOf((await viaGoogle({ email: 'real.google@gmail.example' })).back.get('access_token')) === firstId)
+check('a state is used once (a replayed callback is refused)', (await fetch(realAt('/auth/v1/callback?' + new URLSearchParams({ state: first.state, code: 'good-code' })), { redirect: 'manual' })).status === 400)
+const doctorUser = (await realAdmin.auth.admin.createUser({ email: 'real.doctor@mcare.test', password: PW, email_confirm: true, user_metadata: { full_name: 'Dr. Real' } })).data.user
+check('real Google opens a confirmed account of any role (Google has proven the address; two-step sign-in still applies)',
+  subOf((await viaGoogle({ email: 'real.doctor@mcare.test' })).back.get('access_token')) === doctorUser.id)
+const squat = (await realAdmin.auth.admin.createUser({ email: 'owner@gmail.example', password: 'Squat-Pass-1', email_confirm: false })).data.user
+const claimed = await viaGoogle({ email: 'owner@gmail.example' })
+check('an account registered with the address but never confirmed is confirmed for its owner, and its unknown password stops working',
+  subOf(claimed.back.get('access_token')) === squat.id
+  && !!(await createClient(real.url, real.anonKey, { auth: { persistSession: false } }).auth.signInWithPassword({ email: 'owner@gmail.example', password: 'Squat-Pass-1' })).error)
+check('a Google account without a verified email is refused', (b => b.has('error_description') && !b.has('access_token'))((await viaGoogle({ email: 'x@gmail.example', email_verified: false })).back))
+check('an ID token carrying another sign-in\'s nonce is refused', (b => b.has('error_description') && !b.has('access_token'))((await viaGoogle({ email: 'y@gmail.example', nonce: 'someone-else' })).back))
+check('an ID token for another client is refused', (b => b.has('error_description') && !b.has('access_token'))((await viaGoogle({ email: 'y@gmail.example', aud: 'other.apps.googleusercontent.com' })).back))
+check('a code Google does not accept is refused', (b => b.has('error_description') && !b.has('access_token'))((await viaGoogle({ email: 'y@gmail.example' }, { code: 'bad-code' })).back))
+check('cancelling at Google returns to the app with no session', (b => b.has('error_description') && !b.has('access_token'))((await viaGoogle({}, { error: 'access_denied' })).back))
+check('no test stand-in on a backend without test sign-in (Apple included)',
+  (await fetch(realAt('/auth/v1/authorize?' + new URLSearchParams({ provider: 'apple', redirect_to: APP })), { redirect: 'manual' })).status === 404)
+await real.close()
+fakeGoogle.close()
 
 const token = (await pat.auth.getSession()).data.session.access_token
 await pat.auth.signOut()
@@ -493,6 +598,81 @@ check('deactivating an account locks it out', await (async () => {
     && (await staff.from('profiles').select('status').eq('id', patId).single()).data?.status === 'deactivated'
 })())
 
+<<<<<<< Updated upstream
+=======
+/* ── Two-step sign-in, the audit's request context, instant change notices, the directory, the patient's copy ── */
+console.log('\nTwo-step sign-in and security upgrades')
+const mfa = client()
+const mup = await mfa.auth.signUp({ email: 'mfa.patient@mcare.test', password: PW, options: { data: { full_name: 'Two Step' } } })
+const mfaId = mup.data.user.id
+await mfa.from('readings').insert({ patient_id: mfaId, vital_id: 'hr', value: '72' })
+let level = (await mfa.auth.mfa.getAuthenticatorAssuranceLevel()).data
+check('a new session is aal1 with no second step owed', level.currentLevel === 'aal1' && level.nextLevel === 'aal1', level)
+const enrolled = await mfa.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Phone' })
+check('turning it on gives a setup key and an otpauth link for the authenticator app', !!enrolled.data?.totp?.secret && enrolled.data.totp.uri.startsWith('otpauth://totp/mCare:'), enrolled.error?.message)
+check('…and a QR code to scan, as an image the app can show', /^data:image\/svg\+xml;utf-8,<svg [^#]+<\/svg>$/.test(enrolled.data?.totp?.qr_code ?? ''))
+const factorId = enrolled.data.id, setupKey = enrolled.data.totp.secret
+const wrongCode = totpCode(setupKey) === '000000' ? '111111' : '000000'
+check('a wrong code is refused', !!(await mfa.auth.mfa.challengeAndVerify({ factorId, code: wrongCode })).error)
+const secondStep = await mfa.auth.mfa.challengeAndVerify({ factorId, code: totpCode(setupKey) })
+check("the authenticator app's code verifies it and raises this session to aal2", !secondStep.error && (await mfa.auth.mfa.getAuthenticatorAssuranceLevel()).data.currentLevel === 'aal2', secondStep.error?.message)
+check('with the second step passed the record is there', (await mfa.from('readings').select('id')).data?.length === 1)
+check('the factor is listed as verified', (await mfa.auth.mfa.listFactors()).data?.totp?.[0]?.status === 'verified')
+
+const elsewhere = client()
+await elsewhere.auth.signInWithPassword({ email: 'mfa.patient@mcare.test', password: PW })
+level = (await elsewhere.auth.mfa.getAuthenticatorAssuranceLevel()).data
+check('signing in on another device with the password alone owes the second step', level.currentLevel === 'aal1' && level.nextLevel === 'aal2', level)
+check('…and until it is passed the database gives that session nothing', (await elsewhere.from('readings').select('id')).data?.length === 0
+  && (await elsewhere.rpc('my_security')).data?.has_factor === true && !!(await elsewhere.rpc('raise_sos', { message: 'x' })).error)
+check('…nor can that session remove the factor or add another', !!(await elsewhere.auth.mfa.unenroll({ factorId })).error && !!(await elsewhere.auth.mfa.enroll({ factorType: 'totp' })).error)
+await elsewhere.auth.mfa.challengeAndVerify({ factorId, code: totpCode(setupKey) })
+check('passing it there opens the record', (await elsewhere.from('readings').select('id')).data?.length === 1)
+const refreshedAal2 = await elsewhere.auth.refreshSession()
+check('refreshing the session keeps the second step', !refreshedAal2.error && (await elsewhere.auth.mfa.getAuthenticatorAssuranceLevel()).data.currentLevel === 'aal2')
+check('the person can turn it off from a session that passed it', !(await mfa.auth.mfa.unenroll({ factorId })).error
+  && (await admin.from('profiles').select('id').eq('id', mfaId)).data?.length === 1 && (await backend.sql(`select count(*)::int n from auth.mfa_factors where user_id = $1`, [mfaId])).rows[0].n === 0)
+
+await staff.rpc('save_settings', { area: 'security', new_value: { mfa_required_roles: ['doctor'] } })
+check('when an admin requires it for doctors, a doctor without it reaches no patient and is told why', (await doc.from('patients').select('id')).data?.length === 0
+  && (await doc.rpc('my_security')).data?.mfa_required === true)
+await staff.rpc('save_settings', { area: 'security', new_value: { mfa_required_roles: [] } })
+check('…and when it is no longer required, works as before', (await doc.rpc('my_security')).data?.mfa_required === false)
+
+// The audit trail records the phoneClient and the session a change came from.
+const phoneClient = createClient(backend.url, backend.anonKey, { global: { headers: { 'User-Agent': 'mCare-Test-Phone/2.0' } }, auth: { persistSession: false, autoRefreshToken: false } })
+await phoneClient.auth.signInWithPassword({ email: 'mfa.patient@mcare.test', password: PW })
+await phoneClient.from('profiles').update({ phone: '+254 700 999 000' }).eq('id', mfaId)
+const stamped = (await backend.sql(`select user_agent, session_id, aal, client_ip from audit_log where action = 'Updated own details' and actor_id = $1 order by id desc limit 1`, [mfaId])).rows[0]
+check('an audited change says which phoneClient, session and address it came from', stamped?.user_agent === 'mCare-Test-Phone/2.0' && !!stamped.session_id && stamped.aal === 'aal1' && !!stamped.client_ip, stamped)
+
+// Instant change notices (the local stand-in for Realtime).
+const accessToken = (await mfa.auth.getSession()).data.session.access_token
+const waitFor = since => fetch(`${backend.url}/__dev/changes?since=${since}`, { headers: { apikey: backend.anonKey, Authorization: `Bearer ${accessToken}` } }).then(r => r.json())
+const firstPulse = await waitFor(-1)
+const startedWaiting = Date.now()
+const waiting = waitFor(firstPulse.pulse)
+await new Promise(r => setTimeout(r, 200))
+await mfa.from('readings').insert({ patient_id: mfaId, vital_id: 'hr', value: '74' })
+const woken = await waiting
+check('an open app waiting for changes is woken the moment something is saved', woken.pulse > firstPulse.pulse && Date.now() - startedWaiting < 5000, { woken, ms: Date.now() - startedWaiting })
+check('a signed-out visitor is not told anything', (await fetch(`${backend.url}/__dev/changes?since=0`, { headers: { apikey: backend.anonKey } })).status === 401)
+
+// The doctor directory and private signatures.
+const directory = (await mfa.rpc('doctor_directory')).data ?? []
+check('a patient finds doctors through the directory, with public details only', directory.some(d => d.id === docId && d.specialty === 'Cardiology') && directory.every(d => !('email' in d) && !('phone' in d)))
+check("…and does not see a doctor's email or phone otherwise", (await mfa.from('profiles').select('id').eq('role', 'doctor')).data?.length === 0)
+check('a doctor saves their signature in their own private row', !(await doc.from('doctor_signatures').upsert({ doctor_id: docId, image: 'data:image/png;base64,SIGN' })).error
+  && (await doc.from('doctor_signatures').select('image').eq('doctor_id', docId).single()).data?.image === 'data:image/png;base64,SIGN'
+  && (await mfa.from('doctor_signatures').select('doctor_id')).data?.length === 0 && (await doc2.from('doctor_signatures').select('doctor_id').eq('doctor_id', docId)).data?.length === 0)
+
+// The patient's own copy, and what the app learns before opening a portal.
+const myCopy = (await mfa.rpc('export_my_record')).data
+check('a patient downloads their own record as one document', myCopy?.profile?.email === 'mfa.patient@mcare.test' && myCopy.readings?.length === 2, myCopy && Object.keys(myCopy))
+check('…which nobody else can', !!(await doc.rpc('export_my_record')).error)
+check('the app learns the idle sign-out time and whether a second step is owed', (await mfa.rpc('my_security')).data?.idle_minutes === 0 && (await staff.rpc('my_security')).data?.idle_minutes === 15)
+
+>>>>>>> Stashed changes
 console.log('\nSeeded accounts')
 Object.assign(process.env, {
   SUPABASE_URL: backend.url,
